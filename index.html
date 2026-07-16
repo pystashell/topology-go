@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101715" />
+    <meta
+      name="description"
+      content="一个左右首尾相接、支持平面、弧面与完整竹筒视图的3D围棋。"
+    />
+    <title>竹筒围棋</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="竹筒围棋首页">
+          <span class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </span>
+          <span>
+            <strong>竹筒围棋</strong>
+            <small>Bamboo Cylinder Baduk</small>
+          </span>
+        </a>
+        <div class="topology-badge">
+          <span aria-hidden="true">↔</span>
+          左右首尾相接
+        </div>
+      </header>
+
+      <main class="game-layout">
+        <section class="board-stage" data-view-mode="arc" aria-label="竹筒围棋棋盘区域">
+          <div id="flat-scene" class="view-surface" aria-label="可横向滑动的竹筒表面平面展开棋盘" hidden></div>
+          <div id="arc-scene" class="view-surface" aria-label="可横向循环滑动的3D弧面棋盘"></div>
+          <div id="scene" class="view-surface" aria-label="可旋转的3D桶状围棋棋盘" hidden></div>
+
+          <div class="view-switch" role="group" aria-label="棋盘视图">
+            <button type="button" data-view-mode="flat" aria-pressed="false">
+              <span aria-hidden="true">▦</span>
+              平面展开
+            </button>
+            <button type="button" data-view-mode="arc" class="active" aria-pressed="true">
+              <span aria-hidden="true">◒</span>
+              弧面模式
+            </button>
+            <button type="button" data-view-mode="3d" aria-pressed="false">
+              <span aria-hidden="true">◉</span>
+              立体竹筒
+            </button>
+          </div>
+
+          <div class="scene-toolbar" aria-label="视角控制">
+            <button id="reset-view" class="icon-button" type="button" aria-label="重置弧面">
+              <span id="reset-view-icon" aria-hidden="true">↤</span>
+              <span id="reset-view-label" class="toolbar-label">重置弧面</span>
+            </button>
+            <button id="toggle-rotation" class="icon-button" type="button" aria-label="自动旋转" aria-pressed="false">
+              <span aria-hidden="true">↻</span>
+              <span class="toolbar-label">自动旋转</span>
+            </button>
+          </div>
+          <div class="gesture-hint" aria-hidden="true">
+            <span id="gesture-primary">横向拖动</span>
+            <i></i>
+            <span id="gesture-secondary">弧面循环 · 滚轮缩放</span>
+            <i></i>
+            <span>点击落子</span>
+          </div>
+          <div id="coordinate-hint" class="coordinate-hint" aria-live="polite"></div>
+        </section>
+
+        <aside class="control-panel" aria-label="对局控制面板">
+          <section id="room-panel" class="room-panel" aria-label="联机房间">
+            <div class="room-summary">
+              <div class="room-heading">
+                <span id="room-status-dot" class="room-status-dot offline" aria-hidden="true"></span>
+                <span>
+                  <span id="room-mode" class="eyebrow">单机模式</span>
+                  <strong id="room-title">和朋友一起下棋</strong>
+                </span>
+              </div>
+              <button id="open-online-dialog" class="secondary-button room-main-action" type="button">
+                联机
+              </button>
+            </div>
+
+            <div id="room-connected" class="room-connected" hidden>
+              <div class="room-code-row">
+                <span>房间</span>
+                <strong id="room-code">------</strong>
+                <span id="local-role" class="role-badge">旁观</span>
+              </div>
+              <div class="room-actions">
+                <button id="copy-room-link" class="secondary-button" type="button">复制邀请链接</button>
+                <button id="leave-room" class="text-button" type="button">退出</button>
+              </div>
+              <div class="seat-list" aria-label="房间座位">
+                <div>
+                  <span class="stone black small" aria-hidden="true"></span>
+                  <span id="black-seat">等待黑方</span>
+                </div>
+                <div>
+                  <span class="stone white small" aria-hidden="true"></span>
+                  <span id="white-seat">等待白方</span>
+                </div>
+              </div>
+              <p id="room-hint" class="room-hint">正在连接房间…</p>
+            </div>
+          </section>
+
+          <section class="turn-card" aria-labelledby="turn-label">
+            <div>
+              <span id="phase-label" class="eyebrow">对局中</span>
+              <h1 id="turn-label">
+                <span id="turn-stone" class="stone black" aria-hidden="true"></span>
+                <span id="turn-text">黑方落子</span>
+              </h1>
+            </div>
+            <span id="move-number" class="move-number">第 1 手</span>
+          </section>
+
+          <div id="message" class="message" role="status" aria-live="polite">
+            点击棋盘交叉点落子
+          </div>
+
+          <section class="score-strip" aria-label="提子数">
+            <div>
+              <span class="stone black small" aria-hidden="true"></span>
+              <span>黑方提子</span>
+              <strong id="black-captures">0</strong>
+            </div>
+            <div>
+              <span class="stone white small" aria-hidden="true"></span>
+              <span>白方提子</span>
+              <strong id="white-captures">0</strong>
+            </div>
+          </section>
+
+          <section id="play-controls" class="primary-actions" aria-label="对局操作">
+            <button id="pass-button" class="primary-button" type="button">停一手</button>
+            <button id="new-game-button" class="secondary-button" type="button">新棋盘</button>
+          </section>
+
+          <section id="scoring-panel" class="scoring-panel" hidden>
+            <p>点击棋子可将整块棋标为死子；再次点击可恢复。</p>
+            <div class="live-score" aria-label="当前点目结果">
+              <div><span>黑</span><strong id="black-score">0</strong></div>
+              <div><span>白</span><strong id="white-score">0</strong></div>
+            </div>
+            <div id="score-breakdown" class="score-breakdown"></div>
+            <div class="primary-actions">
+              <button id="confirm-score" class="primary-button" type="button">确认结果</button>
+              <button id="resume-game" class="secondary-button" type="button">继续对局</button>
+            </div>
+          </section>
+
+          <section class="settings" aria-labelledby="settings-title">
+            <div class="section-heading">
+              <h2 id="settings-title">棋盘设置</h2>
+              <span id="board-topology">19 路 · 筒面</span>
+            </div>
+
+            <div class="field-group">
+              <span class="field-label">快捷尺寸</span>
+              <div class="size-buttons" role="group" aria-label="棋盘尺寸快捷选择">
+                <button type="button" data-board-size="9">9 × 9</button>
+                <button type="button" data-board-size="13">13 × 13</button>
+                <button type="button" data-board-size="19" class="active" aria-pressed="true">19 × 19</button>
+              </div>
+            </div>
+
+            <label class="input-row" for="custom-size">
+              <span>
+                <strong>自定义尺寸</strong>
+                <small>5–25路</small>
+              </span>
+              <input id="custom-size" type="number" min="5" max="25" step="1" value="19" inputmode="numeric" />
+            </label>
+
+            <label class="input-row" for="scoring-rule">
+              <span>
+                <strong>点目规则</strong>
+                <small>新棋盘时生效</small>
+              </span>
+              <select id="scoring-rule">
+                <option value="chinese">中国规则 · 面积</option>
+                <option value="japanese">日本规则 · 数目</option>
+              </select>
+            </label>
+
+            <label class="input-row" for="komi">
+              <span>
+                <strong>贴目</strong>
+                <small>白方补偿</small>
+              </span>
+              <input id="komi" type="number" min="0" max="20" step="0.5" value="7.5" />
+            </label>
+          </section>
+
+          <details class="rules-note">
+            <summary>竹筒表面规则说明</summary>
+            <ul>
+              <li>同一行最左与最右的棋点相邻。</li>
+              <li>平面与弧面视图横向拖动只会改变展开起点，不会改变棋子在局面中的位置。</li>
+              <li>弧面视图把完整一圈弯向玩家，左右边缘仍然相邻。</li>
+              <li>上下两圈仍是棋盘边界，没有传统棋盘的四个角。</li>
+              <li>禁自杀并采用位置超级劫，禁止重复任何旧局面。</li>
+              <li>双方连续停一手后进入点目，可先标记死子。</li>
+            </ul>
+          </details>
+        </aside>
+      </main>
+    </div>
+
+    <dialog id="online-dialog" class="game-dialog online-dialog">
+      <form id="online-form">
+        <span class="eyebrow">在线对局</span>
+        <h2>邀请朋友加入竹筒棋局</h2>
+        <p>创建房间后分享链接；第三位及之后加入的玩家会成为旁观者。</p>
+
+        <label class="dialog-field" for="player-name">
+          <span>你的名字</span>
+          <input id="player-name" type="text" maxlength="20" autocomplete="nickname" placeholder="例如：竹友" required />
+        </label>
+
+        <button id="create-room" class="primary-button dialog-wide-button" type="button">
+          创建房间
+        </button>
+
+        <div class="dialog-divider"><span>或者加入朋友的房间</span></div>
+
+        <label class="dialog-field" for="room-code-input">
+          <span>六位房间号</span>
+          <input id="room-code-input" class="room-code-input" type="text" maxlength="6" autocomplete="off" autocapitalize="characters" placeholder="ABC123" />
+        </label>
+
+        <button id="join-room" class="secondary-button dialog-wide-button" type="button">
+          加入房间
+        </button>
+
+        <p id="online-error" class="dialog-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button id="cancel-online" class="text-button" type="button">暂不联机</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="new-game-dialog" class="game-dialog">
+      <form method="dialog">
+        <span class="eyebrow">重新开始</span>
+        <h2>建立一张新棋盘？</h2>
+        <p>当前对局进度将被清除，并使用面板中的尺寸和规则。</p>
+        <div class="dialog-actions">
+          <button value="cancel" class="secondary-button">取消</button>
+          <button id="confirm-new-game" value="confirm" class="primary-button">开始新局</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

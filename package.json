@@ -1,0 +1,26 @@
+{
+  "name": "bamboo-baduk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "npm run dev:online",
+    "dev:ui": "vite",
+    "dev:online": "npm run build && wrangler dev --port 8787",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test",
+    "test:live": "node scripts/live-room-smoke.mjs",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "vite": "^8.1.4",
+    "wrangler": "^4.110.0"
+  }
+}
