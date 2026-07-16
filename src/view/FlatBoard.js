@@ -36,6 +36,7 @@ export class FlatBoard {
     this.offsetColumns = 0;
     this.pointerState = null;
     this.snapFrame = null;
+    this.movePreviewEnabled = true;
     this.active = true;
     this.destroyed = false;
 
@@ -102,6 +103,13 @@ export class FlatBoard {
       this.setHoveredPoint(null);
       this.cancelSnap();
     }
+  }
+
+  setMovePreviewEnabled(enabled) {
+    const next = Boolean(enabled);
+    if (this.movePreviewEnabled === next) return;
+    this.movePreviewEnabled = next;
+    this.draw();
   }
 
   resetView() {
@@ -513,6 +521,7 @@ export class FlatBoard {
   drawHover(context) {
     const point = this.hoveredPoint;
     if (
+      !this.movePreviewEnabled ||
       this.phase !== "play" ||
       !point ||
       this.board?.[point.row]?.[point.col]

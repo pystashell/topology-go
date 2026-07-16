@@ -977,7 +977,7 @@ function finishSearch(search) {
 
 /**
  * Synchronous MCTS search. Use shouldCancel for cooperative cancellation.
- * Browser UI code should normally call the async version through mctsWorker.
+ * Browser UI code calls the async version through the KataGo hybrid worker.
  */
 export function chooseMonteCarloMove(gameOrState, options = {}) {
   const search = createSearch(gameOrState, options);

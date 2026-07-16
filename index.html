@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101715" />
     <meta
       name="description"
-      content="一个左右首尾相接、支持战术搜索与实验性 KataGo 神经 AI、在线对局以及平面、弧面与完整竹筒视图的3D围棋。"
+      content="一个左右首尾相接、支持 KataGo 竹筒神经 AI、在线对局以及平面、弧面与完整竹筒视图的3D围棋。"
     />
     <title>竹筒围棋</title>
   </head>
@@ -115,8 +115,8 @@
             <div id="ai-connected" class="room-connected" hidden>
               <div class="room-code-row">
                 <span>对手</span>
-                <strong class="ai-opponent-name">战术搜索 AI</strong>
-                <span id="ai-level-badge" class="role-badge">普通</span>
+                <strong class="ai-opponent-name">KataGo 竹筒混合 AI</strong>
+                <span id="ai-level-badge" class="role-badge">KataGo b10</span>
               </div>
               <div class="seat-list" aria-label="人机对局座位">
                 <div>
@@ -129,7 +129,7 @@
                 </div>
               </div>
               <div class="room-actions">
-                <button id="change-ai-settings" class="secondary-button" type="button">调整设置</button>
+                <button id="change-ai-settings" class="secondary-button" type="button">更换执子</button>
                 <button id="leave-ai" class="text-button" type="button">退出 AI</button>
               </div>
               <p id="ai-hint" class="room-hint">轮到你落子。</p>
@@ -276,8 +276,8 @@
     <dialog id="ai-dialog" class="game-dialog ai-dialog">
       <form id="ai-form">
         <span class="eyebrow">本机 AI 对手</span>
-        <h2>和本机 AI 下一盘</h2>
-        <p>可选轻量战术搜索，或试用约 11 MB 的 KataGo 神经混合 AI。全部计算都在浏览器后台完成，不需要账号或第三方 API。</p>
+        <h2>和 KataGo 下一盘</h2>
+        <p>KataGo b10 会在浏览器后台观察全盘，再按竹筒规则搜索落点。无需账号或第三方 API。</p>
 
         <label class="dialog-field" for="ai-human-color">
           <span>你执哪一方</span>
@@ -287,17 +287,7 @@
           </select>
         </label>
 
-        <label class="dialog-field" for="ai-difficulty">
-          <span>思考强度</span>
-          <select id="ai-difficulty">
-            <option value="easy">轻松 · 很快落子</option>
-            <option value="normal" selected>普通 · 推荐</option>
-            <option value="hard">认真 · 多想一会</option>
-            <option value="neural">神经实验 · KataGo b10</option>
-          </select>
-        </label>
-
-        <p id="ai-level-note" class="ai-level-note">普通强度会在速度和搜索量之间取得平衡。</p>
+        <p class="ai-level-note">首次使用会下载约 11 MB 模型；同一盘棋会持续复用，不会每手重新下载。</p>
         <div class="dialog-actions">
           <button id="cancel-ai" class="secondary-button" type="button">取消</button>
           <button id="start-ai" class="primary-button" type="submit">开始对局</button>

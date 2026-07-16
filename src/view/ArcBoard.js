@@ -109,6 +109,7 @@ export class ArcBoard {
     this.autoSlide = false;
     this.lastAnimationTime = null;
     this.hoveredPoint = null;
+    this.movePreviewEnabled = true;
     this.active = true;
     this.destroyed = false;
     this.animationFrame = null;
@@ -748,7 +749,7 @@ export class ArcBoard {
     if (!this.hoverStone) return;
     const point = this.hoveredPoint;
     const empty = point && !this.board?.[point.row]?.[point.col];
-    if (this.phase !== "play" || !empty) {
+    if (!this.movePreviewEnabled || this.phase !== "play" || !empty) {
       this.hoverStone.visible = false;
       return;
     }
@@ -756,6 +757,13 @@ export class ArcBoard {
       this.currentPlayer === "black" ? this.hoverBlackMaterial : this.hoverWhiteMaterial;
     this.positionStone(this.hoverStone, point.row, point.col);
     this.hoverStone.visible = true;
+  }
+
+  setMovePreviewEnabled(enabled) {
+    const next = Boolean(enabled);
+    if (this.movePreviewEnabled === next) return;
+    this.movePreviewEnabled = next;
+    this.refreshHover();
   }
 
   setActive(active) {

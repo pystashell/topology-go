@@ -14,6 +14,8 @@ import { FlatBoard } from "./view/FlatBoard.js";
 import { ArcBoard } from "./view/ArcBoard.js";
 import { RoomClient, CONNECTION_STATUS } from "./multiplayer/roomClient.js";
 import { sanitizeRoomCode } from "./multiplayer/protocol.js";
+import { roomRevisionHasCaughtUp } from "./multiplayer/commandSync.js";
+import { shouldEnableMovePreview } from "./ui/movePreviewPolicy.js";
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
@@ -77,8 +79,6 @@ const elements = {
   aiDialog: $("#ai-dialog"),
   aiForm: $("#ai-form"),
   aiHumanColor: $("#ai-human-color"),
-  aiDifficulty: $("#ai-difficulty"),
-  aiLevelNote: $("#ai-level-note"),
   cancelAi: $("#cancel-ai"),
   startAi: $("#start-ai"),
   onlineDialog: $("#online-dialog"),
@@ -114,48 +114,23 @@ let lastPlayedPoint = null;
 let onlineRoom = null;
 let onlineBusy = false;
 let onlineCommandPending = false;
+let onlineCommandRevision = null;
 let lastAnnouncedRoomRevision = null;
 let offlineGameState = null;
 let aiActive = false;
 let aiHumanColor = BLACK;
-let aiDifficulty = "normal";
 let aiThinking = false;
 let aiWorker = null;
-let aiWorkerMode = null;
 let aiRequestId = 0;
 
 const PLAYER_NAME_KEY = "bamboo-baduk-player-name";
 const roomClient = new RoomClient();
 
-const AI_LEVELS = Object.freeze({
-  easy: {
-    label: "轻松",
-    timeMs: 180,
-    maxIterations: 90,
-    rolloutLimit: 8,
-    note: "轻松强度会做基本攻防判断并很快落子，适合快速体验。",
-  },
-  normal: {
-    label: "普通",
-    timeMs: 650,
-    maxIterations: 320,
-    rolloutLimit: 12,
-    note: "普通强度会兼顾基本攻防与搜索深度，适合作为默认对手。",
-  },
-  hard: {
-    label: "认真",
-    timeMs: 1_600,
-    maxIterations: 900,
-    rolloutLimit: 16,
-    note: "认真强度会在重点候选上搜索更多变化；较大棋盘仍是轻量级对手。",
-  },
-  neural: {
-    label: "神经实验",
-    timeMs: 1_400,
-    maxIterations: 800,
-    rolloutLimit: 16,
-    note: "加载约 11 MB 的 KataGo b10 网络，用横向循环卷积理解接缝，再由竹筒规则搜索；首次启动会稍慢。",
-  },
+const KATAGO_AI = Object.freeze({
+  label: "KataGo b10",
+  timeMs: 1_400,
+  maxIterations: 800,
+  rolloutLimit: 16,
 });
 
 function colorName(color) {
@@ -188,14 +163,8 @@ function isAIMode() {
   return aiActive && !hasOnlineSession();
 }
 
-function currentAILevel() {
-  return AI_LEVELS[aiDifficulty] ?? AI_LEVELS.normal;
-}
-
 function currentAIName() {
-  return aiDifficulty === "neural"
-    ? "KataGo 竹筒混合 AI（实验）"
-    : "战术搜索 AI";
+  return "KataGo 竹筒混合 AI";
 }
 
 function aiColor() {
@@ -210,7 +179,6 @@ function cancelAIThinking() {
   aiRequestId += 1;
   aiWorker?.terminate();
   aiWorker = null;
-  aiWorkerMode = null;
   aiThinking = false;
   elements.boardStage?.removeAttribute("aria-busy");
 }
@@ -220,20 +188,13 @@ function closeAIDialog() {
   else elements.aiDialog.removeAttribute("open");
 }
 
-function updateAILevelNote() {
-  const level = AI_LEVELS[elements.aiDifficulty.value] ?? AI_LEVELS.normal;
-  elements.aiLevelNote.textContent = level.note;
-}
-
 function showAIDialog() {
   if (hasOnlineSession()) {
     setMessage("请先退出联机房间，再开始 AI 对局。", true);
     return;
   }
   elements.aiHumanColor.value = aiHumanColor;
-  elements.aiDifficulty.value = aiDifficulty;
   elements.startAi.textContent = isAIMode() ? "按新设置重开" : "开始对局";
-  updateAILevelNote();
   if (typeof elements.aiDialog.showModal === "function") {
     if (!elements.aiDialog.open) elements.aiDialog.showModal();
   } else {
@@ -246,13 +207,9 @@ function applyAIMove(move, stats = {}) {
 
   let result = null;
   if (move?.type === "play") result = game.play(move.row, move.col);
+  if (move?.type === "pass") result = game.pass();
   if (!result?.ok) {
-    move = { type: "pass" };
-    result = game.pass();
-  }
-  if (!result?.ok) {
-    setMessage("AI 暂时没有找到可执行的落子。", true);
-    updateUI();
+    recoverFromAIError("KataGo 返回了无效落点。");
     return;
   }
 
@@ -262,22 +219,19 @@ function applyAIMove(move, stats = {}) {
     const captureMessage = result.captured?.length
       ? `，提掉 ${result.captured.length} 子`
       : "";
-    const searched = Number.isFinite(stats.iterations)
-      ? `（搜索 ${stats.iterations} 次）`
-      : "";
     const neuralDetail =
       stats.engine === "katago-hybrid" && Number.isFinite(stats.inferenceMs)
         ? `（神经判断 ${Math.round(stats.inferenceMs)} ms${Number.isFinite(stats.iterations) ? ` + 搜索 ${stats.iterations} 次` : ""}）`
-        : stats.neuralFallback
-          ? `${searched}（神经模型未启用，已自动回退）`
-          : searched;
-    setMessage(`${currentAIName()}落子${captureMessage}${neuralDetail}。`);
+        : Number.isFinite(stats.iterations)
+          ? `（搜索 ${stats.iterations} 次）`
+          : "";
+    setMessage(`${currentAIName()} 落子${captureMessage}${neuralDetail}。`);
   } else {
     lastPlayedPoint = null;
     if (result.phase === PHASE_SCORING) {
       setMessage("AI 也停一手，已进入点目。请标记死子后确认结果。");
     } else {
-      setMessage(`${currentAIName()}停一手，轮到你落子。`);
+      setMessage(`${currentAIName()} 停一手，轮到你落子。`);
     }
   }
   updateUI();
@@ -285,12 +239,12 @@ function applyAIMove(move, stats = {}) {
 
 function recoverFromAIError(message) {
   if (!isAITurn()) return;
-  const result = game.pass();
-  if (result.ok) {
-    moveCount += 1;
-    lastPlayedPoint = null;
-  }
-  setMessage(`${message} AI 本手自动停一手，你可以继续对局或调整 AI 设置。`, true);
+  cancelAIThinking();
+  aiActive = false;
+  setMessage(
+    `${message} 已退出 AI 对战并保留当前棋局；现在可以本地轮流落子，或开始一盘新的 KataGo 对局。`,
+    true,
+  );
   updateUI();
 }
 
@@ -302,24 +256,16 @@ function handleAIWorkerMessage(event) {
       setMessage("正在首次载入 KataGo b10 神经网络 · 约 11 MB…");
     } else if (message.stage === "neural_inference") {
       setMessage(`KataGo 正在观察整盘棋 · ${message.backend ?? "浏览器"} 推理…`);
-    } else if (message.stage === "tactical_fallback") {
-      setMessage("神经网络未能启动，正在自动改用战术搜索…", true);
     } else if (message.stage === "searching") {
-      setMessage(
-        message.fallback
-          ? "神经模型未启用，战术搜索正在接管…"
-          : "神经判断完成，正在按竹筒规则验证与搜索…",
-        Boolean(message.fallback),
-      );
+      setMessage("神经判断完成，正在按竹筒规则验证与搜索…");
     }
     return;
   }
 
-  const keepWorker = aiWorkerMode === "neural" && message.type === "result";
+  const keepWorker = message.type === "result";
   if (!keepWorker) {
     aiWorker?.terminate();
     aiWorker = null;
-    aiWorkerMode = null;
   }
   aiThinking = false;
   elements.boardStage.removeAttribute("aria-busy");
@@ -334,25 +280,17 @@ function handleAIWorkerError(event) {
   if (!aiThinking) return;
   aiWorker?.terminate();
   aiWorker = null;
-  aiWorkerMode = null;
   aiThinking = false;
   elements.boardStage.removeAttribute("aria-busy");
   recoverFromAIError(event.message || "AI 思考线程没有正常启动。");
 }
 
-function ensureAIWorker(mode) {
-  if (aiWorker && aiWorkerMode === mode) return aiWorker;
-  aiWorker?.terminate();
-  const worker =
-    mode === "neural"
-      ? new Worker(new URL("./ai/katagoWorker.js", import.meta.url), {
-          type: "module",
-        })
-      : new Worker(new URL("./ai/mctsWorker.js", import.meta.url), {
-          type: "module",
-        });
+function ensureAIWorker() {
+  if (aiWorker) return aiWorker;
+  const worker = new Worker(new URL("./ai/katagoWorker.js", import.meta.url), {
+    type: "module",
+  });
   aiWorker = worker;
-  aiWorkerMode = mode;
   worker.addEventListener("message", handleAIWorkerMessage);
   worker.addEventListener("error", handleAIWorkerError);
   return worker;
@@ -363,7 +301,7 @@ function maybeStartAITurn() {
 
   aiThinking = true;
   elements.boardStage.setAttribute("aria-busy", "true");
-  setMessage(`${currentAIName()}正在思考 · ${currentAILevel().label}强度…`);
+  setMessage(`${currentAIName()} 正在思考…`);
   updateUI();
   const requestId = ++aiRequestId;
 
@@ -378,20 +316,20 @@ function maybeStartAITurn() {
 
     let worker;
     try {
-      worker = ensureAIWorker(aiDifficulty === "neural" ? "neural" : "tactical");
+      worker = ensureAIWorker();
     } catch (error) {
       aiThinking = false;
       elements.boardStage.removeAttribute("aria-busy");
       recoverFromAIError(error.message || "AI 思考线程没有正常启动。");
       return;
     }
-    const level = currentAILevel();
+    const level = KATAGO_AI;
     worker.postMessage({
       type: "think",
       id: requestId,
       state: game.exportState(),
       options: {
-        difficulty: aiDifficulty,
+        difficulty: "hard",
         timeLimitMs: level.timeMs,
         maxIterations: level.maxIterations,
         rolloutLimit: Math.min(level.rolloutLimit, game.size * game.size * 2),
@@ -409,16 +347,13 @@ async function startAIGame(event) {
   }
   cancelAIThinking();
   aiHumanColor = elements.aiHumanColor.value === WHITE ? WHITE : BLACK;
-  aiDifficulty = Object.hasOwn(AI_LEVELS, elements.aiDifficulty.value)
-    ? elements.aiDifficulty.value
-    : "normal";
   aiActive = true;
   closeAIDialog();
   await startNewGame();
   setMessage(
     aiHumanColor === BLACK
-      ? `AI 对局已开始：你执黑，${currentAIName()}执白。`
-      : `AI 对局已开始：${currentAIName()}执黑，正在思考第一手。`,
+      ? `AI 对局已开始：你执黑，${currentAIName()} 执白。`
+      : `AI 对局已开始：${currentAIName()} 执黑，正在思考第一手。`,
   );
   updateUI();
   maybeStartAITurn();
@@ -458,6 +393,44 @@ function isOnlineHost() {
 
 function isOnlineTurn() {
   return isOnlinePlayer() && currentIdentity().color === game.currentPlayer;
+}
+
+function canShowMovePreview() {
+  if (hasOnlineSession()) {
+    return shouldEnableMovePreview({
+      phase: game?.phase,
+      mode: "online",
+      currentPlayer: game?.currentPlayer,
+      localColor: isOnlinePlayer() ? currentIdentity().color : null,
+      connected: roomClient.isConnected,
+      roomReady:
+        onlineRoom?.code === roomClient.roomCode && Boolean(onlineRoom?.game),
+      bothPlayers: Boolean(roomSeat(BLACK) && roomSeat(WHITE)),
+      onlineBusy,
+      commandPending: onlineCommandPending,
+    });
+  }
+  if (isAIMode()) {
+    return shouldEnableMovePreview({
+      phase: game?.phase,
+      mode: "ai",
+      currentPlayer: game?.currentPlayer,
+      localColor: aiHumanColor,
+      aiThinking,
+    });
+  }
+  return shouldEnableMovePreview({
+    phase: game?.phase,
+    mode: "local",
+    currentPlayer: game?.currentPlayer,
+  });
+}
+
+function syncMovePreviewAvailability() {
+  const enabled = canShowMovePreview();
+  cylinderView?.setMovePreviewEnabled(enabled);
+  flatView?.setMovePreviewEnabled(enabled);
+  arcView?.setMovePreviewEnabled(enabled);
 }
 
 function hydratePublicGame(state) {
@@ -583,11 +556,11 @@ function updateRoomUI() {
 
   if (aiMode) {
     elements.aiOpponentName.textContent = currentAIName();
-    elements.aiLevelBadge.textContent = currentAILevel().label;
+    elements.aiLevelBadge.textContent = KATAGO_AI.label;
     elements.aiBlackSeat.textContent = aiHumanColor === BLACK ? "你 · 黑方" : "AI · 黑方";
     elements.aiWhiteSeat.textContent = aiHumanColor === WHITE ? "你 · 白方" : "AI · 白方";
     if (aiThinking) {
-      elements.aiHint.textContent = `${currentAIName()}正在思考 · ${currentAILevel().label}强度。你仍可旋转或切换视图。`;
+      elements.aiHint.textContent = `${currentAIName()} 正在思考。你仍可旋转或切换视图。`;
     } else if (game.phase === PHASE_SCORING) {
       elements.aiHint.textContent = "点目中：请标记死子并确认结果，或恢复对局。";
     } else if (game.phase === PHASE_FINISHED) {
@@ -693,6 +666,7 @@ function updateRoomUI() {
   elements.scoringRule.disabled = !canChangeOnlineSettings;
   elements.komi.disabled = !canChangeOnlineSettings;
   for (const button of elements.sizeButtons) button.disabled = !canChangeOnlineSettings;
+  syncMovePreviewAvailability();
 }
 
 function rememberOfflineGame() {
@@ -704,7 +678,6 @@ function rememberOfflineGame() {
     ai: {
       active: isAIMode(),
       humanColor: aiHumanColor,
-      difficulty: aiDifficulty,
     },
   };
 }
@@ -718,9 +691,6 @@ function restoreOfflineGame() {
   lastPlayedPoint = offlineGameState.lastPlayedPoint;
   aiActive = Boolean(offlineGameState.ai?.active);
   aiHumanColor = offlineGameState.ai?.humanColor === WHITE ? WHITE : BLACK;
-  aiDifficulty = Object.hasOwn(AI_LEVELS, offlineGameState.ai?.difficulty)
-    ? offlineGameState.ai.difficulty
-    : "normal";
   if (previousSize !== game.size) {
     cylinderView?.rebuild(game.size);
     flatView?.rebuild(game.size);
@@ -804,6 +774,14 @@ function applyOnlineRoom(room) {
   const previousRoom = onlineRoom;
   const previousSize = game?.size;
   onlineRoom = room;
+  if (
+    onlineCommandPending &&
+    Number.isFinite(onlineCommandRevision) &&
+    roomRevisionHasCaughtUp(room.revision, onlineCommandRevision)
+  ) {
+    onlineCommandPending = false;
+    onlineCommandRevision = null;
+  }
   game = hydratePublicGame(room.game);
   moveCount = Number.isSafeInteger(room.moveCount) ? room.moveCount : 0;
   lastPlayedPoint = game.lastMove?.type === "play"
@@ -837,16 +815,25 @@ async function sendOnlineCommand(action, payload = {}) {
   }
   if (onlineCommandPending) return false;
   onlineCommandPending = true;
+  onlineCommandRevision = null;
   updateRoomUI();
   try {
-    await roomClient.command(action, payload);
+    const acknowledgement = await roomClient.command(action, payload);
+    const acknowledgedRevision = Number(acknowledgement?.revision);
+    if (!roomRevisionHasCaughtUp(onlineRoom?.revision, acknowledgedRevision)) {
+      onlineCommandRevision = acknowledgedRevision;
+    } else {
+      onlineCommandPending = false;
+      onlineCommandRevision = null;
+    }
+    updateRoomUI();
     return true;
   } catch (error) {
-    setMessage(error.message || "房间拒绝了这个操作。", true);
-    return false;
-  } finally {
     onlineCommandPending = false;
+    onlineCommandRevision = null;
+    setMessage(error.message || "房间拒绝了这个操作。", true);
     updateRoomUI();
+    return false;
   }
 }
 
@@ -1019,7 +1006,7 @@ function handleBoardPoint({ row, col }) {
     game.phase === PHASE_PLAY &&
     (aiThinking || game.currentPlayer !== aiHumanColor)
   ) {
-    setMessage(`现在轮到${currentAIName()}思考；你仍然可以旋转和切换棋盘视图。`, true);
+    setMessage(`现在轮到 ${currentAIName()} 思考；你仍然可以旋转和切换棋盘视图。`, true);
     return;
   }
 
@@ -1074,7 +1061,7 @@ elements.passButton.addEventListener("click", () => {
     return;
   }
   if (isAIMode() && (aiThinking || game.currentPlayer !== aiHumanColor)) {
-    setMessage(`现在轮到${currentAIName()}，不能替它停一手。`, true);
+    setMessage(`现在轮到 ${currentAIName()}，不能替它停一手。`, true);
     return;
   }
   const result = game.pass();
@@ -1310,6 +1297,7 @@ async function copyInvitationLink() {
 function returnToOffline(message) {
   onlineRoom = null;
   onlineCommandPending = false;
+  onlineCommandRevision = null;
   lastAnnouncedRoomRevision = null;
   updateRoomUrl();
   restoreOfflineGame();
@@ -1359,7 +1347,6 @@ elements.openAiDialog.addEventListener("click", showAIDialog);
 elements.changeAiSettings.addEventListener("click", showAIDialog);
 elements.cancelAi.addEventListener("click", closeAIDialog);
 elements.leaveAi.addEventListener("click", leaveAIGame);
-elements.aiDifficulty.addEventListener("change", updateAILevelNote);
 elements.aiForm.addEventListener("submit", (event) => void startAIGame(event));
 elements.openOnlineDialog.addEventListener("click", () => showOnlineDialog());
 elements.cancelOnline.addEventListener("click", closeOnlineDialog);
