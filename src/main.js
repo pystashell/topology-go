@@ -67,6 +67,7 @@ const elements = {
   whiteSeat: $("#white-seat"),
   roomHint: $("#room-hint"),
   aiConnected: $("#ai-connected"),
+  aiOpponentName: $(".ai-opponent-name"),
   aiLevelBadge: $("#ai-level-badge"),
   aiBlackSeat: $("#ai-black-seat"),
   aiWhiteSeat: $("#ai-white-seat"),
@@ -120,6 +121,7 @@ let aiHumanColor = BLACK;
 let aiDifficulty = "normal";
 let aiThinking = false;
 let aiWorker = null;
+let aiWorkerMode = null;
 let aiRequestId = 0;
 
 const PLAYER_NAME_KEY = "bamboo-baduk-player-name";
@@ -146,6 +148,13 @@ const AI_LEVELS = Object.freeze({
     maxIterations: 900,
     rolloutLimit: 16,
     note: "认真强度会在重点候选上搜索更多变化；较大棋盘仍是轻量级对手。",
+  },
+  neural: {
+    label: "神经实验",
+    timeMs: 1_400,
+    maxIterations: 800,
+    rolloutLimit: 16,
+    note: "加载约 11 MB 的 KataGo b10 网络，用横向循环卷积理解接缝，再由竹筒规则搜索；首次启动会稍慢。",
   },
 });
 
@@ -183,6 +192,12 @@ function currentAILevel() {
   return AI_LEVELS[aiDifficulty] ?? AI_LEVELS.normal;
 }
 
+function currentAIName() {
+  return aiDifficulty === "neural"
+    ? "KataGo 竹筒混合 AI（实验）"
+    : "战术搜索 AI";
+}
+
 function aiColor() {
   return aiHumanColor === BLACK ? WHITE : BLACK;
 }
@@ -195,6 +210,7 @@ function cancelAIThinking() {
   aiRequestId += 1;
   aiWorker?.terminate();
   aiWorker = null;
+  aiWorkerMode = null;
   aiThinking = false;
   elements.boardStage?.removeAttribute("aria-busy");
 }
@@ -249,13 +265,19 @@ function applyAIMove(move, stats = {}) {
     const searched = Number.isFinite(stats.iterations)
       ? `（搜索 ${stats.iterations} 次）`
       : "";
-    setMessage(`战术搜索 AI 落子${captureMessage}${searched}。`);
+    const neuralDetail =
+      stats.engine === "katago-hybrid" && Number.isFinite(stats.inferenceMs)
+        ? `（神经判断 ${Math.round(stats.inferenceMs)} ms${Number.isFinite(stats.iterations) ? ` + 搜索 ${stats.iterations} 次` : ""}）`
+        : stats.neuralFallback
+          ? `${searched}（神经模型未启用，已自动回退）`
+          : searched;
+    setMessage(`${currentAIName()}落子${captureMessage}${neuralDetail}。`);
   } else {
     lastPlayedPoint = null;
     if (result.phase === PHASE_SCORING) {
       setMessage("AI 也停一手，已进入点目。请标记死子后确认结果。");
     } else {
-      setMessage("战术搜索 AI 停一手，轮到你落子。");
+      setMessage(`${currentAIName()}停一手，轮到你落子。`);
     }
   }
   updateUI();
@@ -272,12 +294,76 @@ function recoverFromAIError(message) {
   updateUI();
 }
 
+function handleAIWorkerMessage(event) {
+  const message = event.data ?? {};
+  if (message.id !== aiRequestId) return;
+  if (message.type === "status") {
+    if (message.stage === "loading_model") {
+      setMessage("正在首次载入 KataGo b10 神经网络 · 约 11 MB…");
+    } else if (message.stage === "neural_inference") {
+      setMessage(`KataGo 正在观察整盘棋 · ${message.backend ?? "浏览器"} 推理…`);
+    } else if (message.stage === "tactical_fallback") {
+      setMessage("神经网络未能启动，正在自动改用战术搜索…", true);
+    } else if (message.stage === "searching") {
+      setMessage(
+        message.fallback
+          ? "神经模型未启用，战术搜索正在接管…"
+          : "神经判断完成，正在按竹筒规则验证与搜索…",
+        Boolean(message.fallback),
+      );
+    }
+    return;
+  }
+
+  const keepWorker = aiWorkerMode === "neural" && message.type === "result";
+  if (!keepWorker) {
+    aiWorker?.terminate();
+    aiWorker = null;
+    aiWorkerMode = null;
+  }
+  aiThinking = false;
+  elements.boardStage.removeAttribute("aria-busy");
+  if (message.type === "result") {
+    applyAIMove(message.move, message.stats);
+  } else if (message.code !== "AI_SEARCH_CANCELLED") {
+    recoverFromAIError(message.message || "AI 思考时发生错误。");
+  }
+}
+
+function handleAIWorkerError(event) {
+  if (!aiThinking) return;
+  aiWorker?.terminate();
+  aiWorker = null;
+  aiWorkerMode = null;
+  aiThinking = false;
+  elements.boardStage.removeAttribute("aria-busy");
+  recoverFromAIError(event.message || "AI 思考线程没有正常启动。");
+}
+
+function ensureAIWorker(mode) {
+  if (aiWorker && aiWorkerMode === mode) return aiWorker;
+  aiWorker?.terminate();
+  const worker =
+    mode === "neural"
+      ? new Worker(new URL("./ai/katagoWorker.js", import.meta.url), {
+          type: "module",
+        })
+      : new Worker(new URL("./ai/mctsWorker.js", import.meta.url), {
+          type: "module",
+        });
+  aiWorker = worker;
+  aiWorkerMode = mode;
+  worker.addEventListener("message", handleAIWorkerMessage);
+  worker.addEventListener("error", handleAIWorkerError);
+  return worker;
+}
+
 function maybeStartAITurn() {
   if (!isAITurn() || aiThinking) return;
 
   aiThinking = true;
   elements.boardStage.setAttribute("aria-busy", "true");
-  setMessage(`战术搜索 AI 正在思考 · ${currentAILevel().label}强度…`);
+  setMessage(`${currentAIName()}正在思考 · ${currentAILevel().label}强度…`);
   updateUI();
   const requestId = ++aiRequestId;
 
@@ -292,37 +378,13 @@ function maybeStartAITurn() {
 
     let worker;
     try {
-      worker = new Worker(new URL("./ai/mctsWorker.js", import.meta.url), {
-        type: "module",
-      });
+      worker = ensureAIWorker(aiDifficulty === "neural" ? "neural" : "tactical");
     } catch (error) {
       aiThinking = false;
       elements.boardStage.removeAttribute("aria-busy");
       recoverFromAIError(error.message || "AI 思考线程没有正常启动。");
       return;
     }
-    aiWorker = worker;
-    worker.addEventListener("message", (event) => {
-      const message = event.data ?? {};
-      if (message.id !== requestId || requestId !== aiRequestId) return;
-      worker.terminate();
-      aiWorker = null;
-      aiThinking = false;
-      elements.boardStage.removeAttribute("aria-busy");
-      if (message.type === "result") {
-        applyAIMove(message.move, message.stats);
-      } else if (message.code !== "AI_SEARCH_CANCELLED") {
-        recoverFromAIError(message.message || "AI 思考时发生错误。");
-      }
-    });
-    worker.addEventListener("error", (event) => {
-      if (requestId !== aiRequestId) return;
-      worker.terminate();
-      aiWorker = null;
-      aiThinking = false;
-      elements.boardStage.removeAttribute("aria-busy");
-      recoverFromAIError(event.message || "AI 思考线程没有正常启动。");
-    });
     const level = currentAILevel();
     worker.postMessage({
       type: "think",
@@ -355,8 +417,8 @@ async function startAIGame(event) {
   await startNewGame();
   setMessage(
     aiHumanColor === BLACK
-      ? `AI 对局已开始：你执黑，战术搜索 AI 执白。`
-      : `AI 对局已开始：战术搜索 AI 执黑，正在思考第一手。`,
+      ? `AI 对局已开始：你执黑，${currentAIName()}执白。`
+      : `AI 对局已开始：${currentAIName()}执黑，正在思考第一手。`,
   );
   updateUI();
   maybeStartAITurn();
@@ -520,11 +582,12 @@ function updateRoomUI() {
   elements.aiConnected.hidden = !aiMode;
 
   if (aiMode) {
+    elements.aiOpponentName.textContent = currentAIName();
     elements.aiLevelBadge.textContent = currentAILevel().label;
     elements.aiBlackSeat.textContent = aiHumanColor === BLACK ? "你 · 黑方" : "AI · 黑方";
     elements.aiWhiteSeat.textContent = aiHumanColor === WHITE ? "你 · 白方" : "AI · 白方";
     if (aiThinking) {
-      elements.aiHint.textContent = `AI 正在思考 · ${currentAILevel().label}强度。你仍可旋转或切换视图。`;
+      elements.aiHint.textContent = `${currentAIName()}正在思考 · ${currentAILevel().label}强度。你仍可旋转或切换视图。`;
     } else if (game.phase === PHASE_SCORING) {
       elements.aiHint.textContent = "点目中：请标记死子并确认结果，或恢复对局。";
     } else if (game.phase === PHASE_FINISHED) {
@@ -956,7 +1019,7 @@ function handleBoardPoint({ row, col }) {
     game.phase === PHASE_PLAY &&
     (aiThinking || game.currentPlayer !== aiHumanColor)
   ) {
-    setMessage("现在轮到战术搜索 AI 思考；你仍然可以旋转和切换棋盘视图。", true);
+    setMessage(`现在轮到${currentAIName()}思考；你仍然可以旋转和切换棋盘视图。`, true);
     return;
   }
 
@@ -1011,7 +1074,7 @@ elements.passButton.addEventListener("click", () => {
     return;
   }
   if (isAIMode() && (aiThinking || game.currentPlayer !== aiHumanColor)) {
-    setMessage("现在轮到战术搜索 AI，不能替它停一手。", true);
+    setMessage(`现在轮到${currentAIName()}，不能替它停一手。`, true);
     return;
   }
   const result = game.pass();

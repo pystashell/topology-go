@@ -17,6 +17,9 @@
     "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-backend-webgpu": "^4.22.0",
+    "pako": "^2.2.0",
     "three": "^0.185.1"
   },
   "devDependencies": {

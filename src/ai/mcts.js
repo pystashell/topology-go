@@ -28,6 +28,13 @@ const DEFAULT_EXPLORATION = Math.SQRT2;
 const TACTICAL_CAPTURE = 5;
 const TACTICAL_RESCUE = 4;
 const TACTICAL_ATARI = 3;
+const NEURAL_POLICY_BASE = 12_000;
+const NEURAL_POLICY_LOG_SCALE = 1_800;
+// The standard-Go policy is useful strategic guidance, but it is not trained
+// on our cylindrical topology. Keep its root exploration term deliberately
+// smaller than ordinary UCB so search evidence and exact tactical reading stay
+// authoritative.
+const ROOT_PUCT_COEFFICIENT = 0.75;
 
 const SEARCH_SHAPE = Object.freeze({
   easy: Object.freeze({ candidateLimit: 10, rolloutCandidates: 6, epsilon: 0.3 }),
@@ -92,6 +99,36 @@ function positiveInteger(value, label) {
     throw new RangeError(`${label} must be a positive integer`);
   }
   return value;
+}
+
+function normalizeRootPolicy(value, size) {
+  if (value == null) return null;
+  if (!Array.isArray(value) && !ArrayBuffer.isView(value)) {
+    throw new TypeError("rootPolicy must be an array of probabilities");
+  }
+  const expectedLength = size * size + 1;
+  if (value.length !== expectedLength) {
+    throw new RangeError(`rootPolicy must contain ${expectedLength} values`);
+  }
+  const policy = new Float32Array(expectedLength);
+  let total = 0;
+  for (let index = 0; index < expectedLength; index += 1) {
+    const probability = Number(value[index]);
+    if (!Number.isFinite(probability) || probability < 0) {
+      throw new RangeError("rootPolicy values must be finite and non-negative");
+    }
+    policy[index] = probability;
+    total += probability;
+  }
+  if (!(total > 0)) throw new RangeError("rootPolicy must have positive mass");
+  // Callers normally supply a softmax distribution, but accepting arbitrary
+  // positive weights is convenient for tests and future policy providers.
+  // Normalizing here makes PUCT scale-invariant and keeps reported priors
+  // meaningful probabilities.
+  for (let index = 0; index < expectedLength; index += 1) {
+    policy[index] /= total;
+  }
+  return policy;
 }
 
 function normalizeOptions(options, size) {
@@ -163,6 +200,7 @@ function normalizeOptions(options, size) {
     signal: options.signal,
     shouldCancel: options.shouldCancel,
     onProgress: options.onProgress,
+    rootPolicy: normalizeRootPolicy(options.rootPolicy, size),
   };
 }
 
@@ -326,6 +364,7 @@ function rawMoveAnalysis(game, groups, row, col, random) {
   return {
     move: { type: "play", row, col },
     score,
+    tacticalScore: score,
     tacticalPriority,
     capturedStones,
     rescuedStones,
@@ -366,10 +405,37 @@ function refineFragileTactic(game, analysis) {
   analysis.snapbackLoss = response.captured.length;
   const netLoss = response.captured.length - analysis.capturedStones;
   if (netLoss > 0) {
-    analysis.score -=
+    const penalty =
       70_000 + netLoss * 5_000 + analysis.rescuedStones * 2_000;
+    analysis.score -= penalty;
+    analysis.tacticalScore -= penalty;
   }
   return analysis;
+}
+
+function applyRootPolicy(entries, rootPolicy, size) {
+  if (!rootPolicy || entries.length === 0) return;
+  let maximum = 0;
+  for (const probability of rootPolicy) maximum = Math.max(maximum, probability);
+  maximum = Math.max(maximum, 1e-8);
+
+  for (const entry of entries) {
+    const index =
+      entry.move.type === "pass"
+        ? size * size
+        : entry.move.row * size + entry.move.col;
+    const probability = Math.max(1e-8, rootPolicy[index]);
+    const rawBonus =
+      NEURAL_POLICY_BASE +
+      NEURAL_POLICY_LOG_SCALE * Math.log(probability / maximum);
+    const bonus = Math.max(-NEURAL_POLICY_BASE, Math.min(NEURAL_POLICY_BASE, rawBonus));
+    // Captures, rescues and ataris remain hard tactical priorities. A standard
+    // Go model may misunderstand a cylinder-specific fight, so it can promote
+    // a forcing move but cannot demote it below a quiet strategic suggestion.
+    entry.score +=
+      entry.tacticalPriority > 0 ? Math.max(0, bonus) : bonus;
+    entry.neuralPrior = probability;
+  }
 }
 
 function rankedMoveEntries(
@@ -378,6 +444,7 @@ function rankedMoveEntries(
   limit,
   includePass = true,
   refineTactics = true,
+  rootPolicy = null,
 ) {
   const game =
     gameOrState instanceof GoEngine
@@ -397,6 +464,7 @@ function rankedMoveEntries(
     cancellationCheck(settings);
   }
 
+  applyRootPolicy(entries, rootPolicy, game.size);
   entries.sort((left, right) => right.score - left.score);
   if (refineTactics) {
     // Exact one-ply reading clones the superko history, so reserve it for the
@@ -429,7 +497,7 @@ function rankedMoveEntries(
 
   if (includePass) {
     const filledRatio = 1 - emptyCount / (game.size * game.size);
-    selected.push({
+    const passEntry = {
       move: PASS_MOVE,
       score:
         game.consecutivePasses === 1
@@ -442,7 +510,9 @@ function rankedMoveEntries(
       snapbackLoss: 0,
       selfAtari: false,
       ownEye: false,
-    });
+    };
+    applyRootPolicy([passEntry], rootPolicy, game.size);
+    selected.push(passEntry);
     // Passing must compete on merit with ordinary plays. Keeping it at the end
     // would make progressive widening hide pass until every placement had been
     // expanded, causing the AI to fill its own eyes in settled positions.
@@ -451,8 +521,15 @@ function rankedMoveEntries(
   return selected;
 }
 
-function candidateMoves(state, settings) {
-  return rankedMoveEntries(state, settings, settings.candidateLimit);
+function candidateMoves(state, settings, rootPolicy = null) {
+  return rankedMoveEntries(
+    state,
+    settings,
+    settings.candidateLimit,
+    true,
+    true,
+    rootPolicy,
+  );
 }
 
 function applyMove(game, move) {
@@ -486,12 +563,16 @@ function createNode(state, move = null, analysis = null) {
   return {
     state,
     move,
-    heuristic: analysis?.score ?? 0,
+    // Neural bonuses help decide which candidates enter the root, while this
+    // heuristic remains purely tactical. The model gets its own explicit PUCT
+    // term below instead of being counted twice through this field.
+    heuristic: analysis?.tacticalScore ?? analysis?.score ?? 0,
     tacticalPriority: analysis?.tacticalPriority ?? 0,
     capturedStones: analysis?.capturedStones ?? 0,
     rescuedStones: analysis?.rescuedStones ?? 0,
     resultingLiberties: analysis?.resultingLiberties ?? Infinity,
     snapbackLoss: analysis?.snapbackLoss ?? 0,
+    neuralPrior: analysis?.neuralPrior ?? 0,
     visits: 0,
     value: 0,
     children: [],
@@ -499,8 +580,29 @@ function createNode(state, move = null, analysis = null) {
   };
 }
 
+function rootPriorMass(node) {
+  let total = 0;
+  for (const child of node.children) total += child.neuralPrior;
+  return total;
+}
+
+function rootPuctBonus(node, child, priorMass) {
+  if (!(priorMass > 0) || !(child.neuralPrior > 0)) return 0;
+  const priorShare = child.neuralPrior / priorMass;
+  return (
+    ROOT_PUCT_COEFFICIENT *
+    priorShare *
+    Math.sqrt(node.visits + 1) /
+    (child.visits + 1)
+  );
+}
+
 function expand(node, settings) {
-  node.untriedMoves ??= candidateMoves(node.state, settings);
+  node.untriedMoves ??= candidateMoves(
+    node.state,
+    settings,
+    node.move === null ? settings.rootPolicy : null,
+  );
   if (node.untriedMoves.length === 0) return null;
 
   // Progressive widening is essential on 19x19. With 80 simulations the old
@@ -530,9 +632,16 @@ function expand(node, settings) {
   return null;
 }
 
-function selectChild(node, rootPlayer, exploration, random) {
+function selectChild(
+  node,
+  rootPlayer,
+  exploration,
+  random,
+  useRootPolicy = false,
+) {
   const actorIsRoot = node.state.currentPlayer === rootPlayer;
   const logVisits = Math.log(Math.max(1, node.visits));
+  const priorMass = useRootPolicy && node.move === null ? rootPriorMass(node) : 0;
   let bestScore = -Infinity;
   let best = [];
 
@@ -549,7 +658,8 @@ function selectChild(node, rootPlayer, exploration, random) {
       (Math.max(-1, Math.min(1, child.heuristic / 50_000)) *
         Math.sqrt(node.visits + 1)) /
       (12 * (child.visits + 1));
-    const score = exploitation + bonus + prior;
+    const neuralExploration = rootPuctBonus(node, child, priorMass);
+    const score = exploitation + bonus + prior + neuralExploration;
     if (score > bestScore) {
       bestScore = score;
       best = [child];
@@ -722,6 +832,7 @@ function runIteration(root, rootPlayer, settings) {
       rootPlayer,
       settings.exploration,
       settings.random,
+      settings.rootPolicy !== null,
     );
     path.push(node);
   }
@@ -739,6 +850,9 @@ function fallbackMove(state, settings) {
     game,
     settings,
     Math.max(settings.candidateLimit, emptyPointMoves(state).length),
+    true,
+    true,
+    settings.rootPolicy,
   );
   for (const entry of ranked) {
     cancellationCheck(settings);
@@ -825,6 +939,9 @@ function finishSearch(search) {
   cancellationCheck(search.settings);
   const selected = chooseMostVisited(search.root, search.fallback);
   const elapsedMs = Math.max(0, search.settings.clock() - search.startedAt);
+  const priorMass = search.settings.rootPolicy
+    ? rootPriorMass(search.root)
+    : 0;
   const candidates = [...search.root.children]
     .sort((left, right) => right.visits - left.visits)
     .map((child) => ({
@@ -833,6 +950,10 @@ function finishSearch(search) {
       winRate: child.visits === 0 ? 0.5 : child.value / child.visits,
       resultingLiberties: child.resultingLiberties,
       snapbackLoss: child.snapbackLoss,
+      neuralPrior: child.neuralPrior,
+      rootPriorShare:
+        priorMass > 0 ? child.neuralPrior / priorMass : 0,
+      rootPuctBonus: rootPuctBonus(search.root, child, priorMass),
     }));
 
   return {
@@ -847,6 +968,8 @@ function finishSearch(search) {
         selected.child && selected.child.visits > 0
           ? selected.child.value / selected.child.visits
           : 0.5,
+      rootPolicyUsed: search.settings.rootPolicy !== null,
+      selectedNeuralPrior: selected.child?.neuralPrior ?? 0,
       candidates,
     },
   };

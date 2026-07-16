@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101715" />
     <meta
       name="description"
-      content="一个左右首尾相接、支持战术搜索 AI、在线对局以及平面、弧面与完整竹筒视图的3D围棋。"
+      content="一个左右首尾相接、支持战术搜索与实验性 KataGo 神经 AI、在线对局以及平面、弧面与完整竹筒视图的3D围棋。"
     />
     <title>竹筒围棋</title>
   </head>
@@ -276,8 +276,8 @@
     <dialog id="ai-dialog" class="game-dialog ai-dialog">
       <form id="ai-form">
         <span class="eyebrow">本机 AI 对手</span>
-        <h2>和战术搜索 AI 下一盘</h2>
-        <p>AI 会结合基本攻防判断与局面搜索，并在浏览器后台思考；不需要账号、下载或第三方 API。</p>
+        <h2>和本机 AI 下一盘</h2>
+        <p>可选轻量战术搜索，或试用约 11 MB 的 KataGo 神经混合 AI。全部计算都在浏览器后台完成，不需要账号或第三方 API。</p>
 
         <label class="dialog-field" for="ai-human-color">
           <span>你执哪一方</span>
@@ -293,6 +293,7 @@
             <option value="easy">轻松 · 很快落子</option>
             <option value="normal" selected>普通 · 推荐</option>
             <option value="hard">认真 · 多想一会</option>
+            <option value="neural">神经实验 · KataGo b10</option>
           </select>
         </label>
 
