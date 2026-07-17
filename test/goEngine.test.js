@@ -12,6 +12,7 @@ import {
   SCORING_JAPANESE,
   TOPOLOGY_CYLINDER,
   TOPOLOGY_TORUS,
+  UNDO_HISTORY_LIMIT,
   WHITE,
 } from "../src/game/goEngine.js";
 
@@ -21,6 +22,19 @@ function boardFromRows(rows) {
       point === "B" ? BLACK : point === "W" ? WHITE : EMPTY,
     ),
   );
+}
+
+function playSparseMoves(game, count, startIndex = 0) {
+  const pointsPerAxis = Math.ceil(game.size / 2);
+  for (let index = startIndex; index < startIndex + count; index += 1) {
+    const row = Math.floor(index / pointsPerAxis) * 2;
+    const col = (index % pointsPerAxis) * 2;
+    assert.equal(
+      game.play(row, col).ok,
+      true,
+      `sparse move ${index} should be legal`,
+    );
+  }
 }
 
 test("9x9, 13x13 and 19x19 boards wrap columns but retain row boundaries", () => {
@@ -229,6 +243,246 @@ test("positional superko prevents recreating any earlier stone arrangement", () 
   assert.equal(game.get(1, 1), EMPTY);
   assert.equal(game.get(1, 2), BLACK);
   assert.equal(game.currentPlayer, WHITE);
+});
+
+test("a new game and failed moves have nothing to undo", () => {
+  const game = new GoEngine({
+    size: 5,
+    initialBoard: boardFromRows([
+      "B....",
+      ".....",
+      ".....",
+      ".....",
+      ".....",
+    ]),
+  });
+
+  assert.equal(game.canUndo(), false);
+  assert.deepEqual(game.undo(), {
+    ok: false,
+    reason: MOVE_ERRORS.NOTHING_TO_UNDO,
+  });
+  assert.deepEqual(game.play(0, 0), {
+    ok: false,
+    reason: MOVE_ERRORS.OCCUPIED,
+  });
+  assert.equal(game.canUndo(), false);
+});
+
+test("undo restores a captured position and removes its superko entry", () => {
+  const game = new GoEngine({
+    size: 5,
+    currentPlayer: BLACK,
+    initialBoard: boardFromRows([
+      ".....",
+      "B....",
+      "WB...",
+      "B....",
+      ".....",
+    ]),
+  });
+  const before = game.exportState();
+
+  assert.equal(game.play(2, 4).ok, true);
+  assert.equal(game.canUndo(), true);
+  assert.equal(game.captures[BLACK], 1);
+
+  const undone = game.undo();
+  assert.deepEqual(undone, {
+    ok: true,
+    type: "undo",
+    move: {
+      type: "play",
+      color: BLACK,
+      row: 2,
+      col: 4,
+      captured: [{ row: 2, col: 0 }],
+    },
+    currentPlayer: BLACK,
+    phase: "play",
+  });
+  assert.deepEqual(game.exportState(), before);
+  assert.equal(game.canUndo(), false);
+
+  // The position created by the undone move must no longer trip superko.
+  assert.equal(game.play(2, 4).ok, true);
+});
+
+test("undoing the second pass discards scoring decisions and the result", () => {
+  const game = new GoEngine({
+    size: 5,
+    komi: 0,
+    initialBoard: boardFromRows([
+      "BBBBB",
+      "BBBBB",
+      "BBWWB",
+      "BBBBB",
+      "BBBBB",
+    ]),
+  });
+
+  assert.equal(game.pass().ok, true);
+  const afterFirstPass = game.exportState();
+  assert.equal(game.pass().phase, PHASE_SCORING);
+  assert.equal(game.toggleDead(2, 2).ok, true);
+  assert.equal(game.finishScoring(SCORING_CHINESE).ok, true);
+  assert.equal(game.phase, PHASE_FINISHED);
+  assert.notEqual(game.result, null);
+  assert.equal(game.deadStones.size, 2);
+
+  const undone = game.undo();
+  assert.deepEqual(undone.move, { type: "pass", color: WHITE });
+  assert.deepEqual(game.exportState(), afterFirstPass);
+  assert.equal(game.phase, "play");
+  assert.equal(game.consecutivePasses, 1);
+  assert.equal(game.currentPlayer, WHITE);
+  assert.equal(game.result, null);
+  assert.equal(game.deadStones.size, 0);
+});
+
+test("undo history round-trips through persistence and is defensively copied", () => {
+  const game = new GoEngine({ size: 5 });
+  const initial = game.exportState();
+  assert.equal(game.play(0, 0).ok, true);
+  const afterFirstMove = game.exportState();
+  assert.equal(game.pass().ok, true);
+
+  const suppliedState = game.exportState();
+  const restored = GoEngine.fromState(suppliedState);
+  assert.equal(restored.canUndo(), true);
+  assert.deepEqual(restored.exportState(), game.exportState());
+
+  suppliedState.undoHistory[0].before.board[0][0] = WHITE;
+  suppliedState.undoHistory[0].move.row = 4;
+  suppliedState.undoHistory[1].before.captures[BLACK] = 999;
+  assert.deepEqual(restored.undo().move, { type: "pass", color: WHITE });
+  assert.deepEqual(restored.exportState(), afterFirstMove);
+  assert.deepEqual(restored.undo().move, {
+    type: "play",
+    color: BLACK,
+    row: 0,
+    col: 0,
+    captured: [],
+  });
+  assert.deepEqual(restored.exportState(), initial);
+  assert.equal(restored.canUndo(), false);
+
+  const serialized = game.serialize();
+  const fromJson = GoEngine.deserialize(serialized);
+  assert.equal(fromJson.canUndo(), true);
+  assert.deepEqual(fromJson.exportState(), game.exportState());
+});
+
+test("legacy persisted states without undo history remain compatible", () => {
+  const original = new GoEngine({ size: 5 });
+  assert.equal(original.play(0, 0).ok, true);
+  const legacyState = original.exportState();
+  delete legacyState.undoHistory;
+
+  const restored = GoEngine.fromState(legacyState);
+  assert.equal(restored.canUndo(), false);
+  assert.deepEqual(restored.undo(), {
+    ok: false,
+    reason: MOVE_ERRORS.NOTHING_TO_UNDO,
+  });
+
+  const legacyBaseline = restored.exportState();
+  assert.equal(restored.play(0, 1).ok, true);
+  assert.equal(restored.canUndo(), true);
+  assert.deepEqual(restored.undo().move, {
+    type: "play",
+    color: WHITE,
+    row: 0,
+    col: 1,
+    captured: [],
+  });
+  assert.deepEqual(restored.exportState(), legacyBaseline);
+});
+
+test("only the most recent bounded undo window remains reversible", () => {
+  const game = new GoEngine({ size: 25 });
+  const discardedMoves = 7;
+
+  playSparseMoves(game, discardedMoves);
+  const boundary = game.exportState();
+  playSparseMoves(game, UNDO_HISTORY_LIMIT, discardedMoves);
+
+  const persisted = game.exportState();
+  assert.equal(persisted.undoHistory.length, UNDO_HISTORY_LIMIT);
+  const restored = GoEngine.fromState(persisted);
+  assert.equal(restored.canUndo(), true);
+
+  for (let index = 0; index < UNDO_HISTORY_LIMIT; index += 1) {
+    assert.equal(restored.undo().ok, true);
+  }
+  assert.equal(restored.canUndo(), false);
+  assert.deepEqual(restored.undo(), {
+    ok: false,
+    reason: MOVE_ERRORS.NOTHING_TO_UNDO,
+  });
+
+  const afterWindow = restored.exportState();
+  assert.deepEqual(restored.getState(), GoEngine.fromState(boundary).getState());
+  assert.deepEqual(afterWindow.positionHistory, boundary.positionHistory);
+  assert.deepEqual(afterWindow.undoHistory, []);
+});
+
+test("25x25 undo persistence stays bounded and restores at the window limit", () => {
+  const game = new GoEngine({ size: 25 });
+  playSparseMoves(game, UNDO_HISTORY_LIMIT);
+  const sizeAtWindow = game.serialize().length;
+
+  playSparseMoves(game, 120 - UNDO_HISTORY_LIMIT, UNDO_HISTORY_LIMIT);
+  const serialized = game.serialize();
+  const persisted = JSON.parse(serialized);
+
+  assert.equal(persisted.undoHistory.length, UNDO_HISTORY_LIMIT);
+  assert.ok(
+    serialized.length < sizeAtWindow + 150_000,
+    `bounded history unexpectedly serialized to ${serialized.length} bytes`,
+  );
+  assert.ok(
+    serialized.length < 400_000,
+    `25x25 persistence unexpectedly serialized to ${serialized.length} bytes`,
+  );
+
+  const restored = GoEngine.fromState(serialized);
+  assert.equal(restored.exportState().undoHistory.length, UNDO_HISTORY_LIMIT);
+  assert.equal(restored.undo().ok, true);
+  assert.equal(restored.exportState().undoHistory.length, UNDO_HISTORY_LIMIT - 1);
+});
+
+test("restoring rejects undo history beyond the persistence limit", () => {
+  const game = new GoEngine({ size: 25 });
+  playSparseMoves(game, UNDO_HISTORY_LIMIT);
+  const oversized = game.exportState();
+  oversized.undoHistory.push(
+    JSON.parse(JSON.stringify(oversized.undoHistory.at(-1))),
+  );
+
+  assert.throws(
+    () => GoEngine.fromState(oversized),
+    new RegExp(`undoHistory must contain at most ${UNDO_HISTORY_LIMIT} entries`),
+  );
+});
+
+test("restoring rejects internally inconsistent undo history", () => {
+  const game = new GoEngine({ size: 5 });
+  assert.equal(game.play(0, 0).ok, true);
+
+  const wrongColor = game.exportState();
+  wrongColor.undoHistory[0].move.color = WHITE;
+  assert.throws(
+    () => GoEngine.fromState(wrongColor),
+    /move color must match the player to move/,
+  );
+
+  const wrongBoard = game.exportState();
+  wrongBoard.undoHistory[0].before.board[0][0] = WHITE;
+  assert.throws(
+    () => GoEngine.fromState(wrongBoard),
+    /move point must be empty before the move/,
+  );
 });
 
 test("two passes enter scoring; a whole connected group is marked dead", () => {

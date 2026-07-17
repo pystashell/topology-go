@@ -279,6 +279,35 @@ function validateSerializedState(state) {
       );
     }
   }
+  if (state.undoRequest !== undefined && state.undoRequest !== null) {
+    const request = state.undoRequest;
+    const requester = state.members.find(
+      (member) => member.playerId === request.requesterId,
+    );
+    if (
+      !request ||
+      typeof request !== "object" ||
+      request.requesterRole !== "player" ||
+      !VALID_COLORS.has(request.requesterColor) ||
+      !Number.isSafeInteger(request.targetMoveCount) ||
+      request.targetMoveCount < 1 ||
+      request.targetMoveCount !== state.moveCount ||
+      (request.requestRevision !== undefined &&
+        (!Number.isSafeInteger(request.requestRevision) ||
+          request.requestRevision < 1 ||
+          request.requestRevision > state.revision)) ||
+      !Number.isFinite(request.requestedAt) ||
+      !requester ||
+      requester.role !== "player" ||
+      requester.color !== request.requesterColor
+    ) {
+      throw new RoomEngineError(
+        "持久化的悔棋申请状态无效。",
+        500,
+        "BAD_ROOM_STATE",
+      );
+    }
+  }
 }
 
 export class RoomEngine {
@@ -318,6 +347,7 @@ export class RoomEngine {
       revision: 1,
       moveCount: 0,
       scoreConfirmations: [],
+      undoRequest: null,
       game: serializeGame(game),
       members: [
         {
@@ -354,6 +384,17 @@ export class RoomEngine {
     validateSerializedState(state);
     state.moveCount ??= 0;
     state.scoreConfirmations ??= [];
+    state.undoRequest ??= null;
+    if (
+      state.undoRequest &&
+      !Object.prototype.hasOwnProperty.call(state.undoRequest, "requestRevision")
+    ) {
+      // A pending request persisted by the first undo-capable release did not
+      // have its own identity token.  The current room revision is stable for
+      // the lifetime of that legacy request and cannot collide with the next
+      // request, whose token is assigned from the following commit revision.
+      state.undoRequest.requestRevision = state.revision;
+    }
     state.receipts = state.receipts.slice(-MAX_COMMAND_RECEIPTS);
     for (const member of state.members) member.lastSequence ??= 0;
     return new RoomEngine(state, restoreGame(state.game));
@@ -401,7 +442,10 @@ export class RoomEngine {
       revision: this.state.revision,
       version: this.state.revision,
       moveCount: this.state.moveCount,
+      undoAvailable:
+        typeof this.game.canUndo === "function" && this.game.canUndo(),
       scoreConfirmations: clone(this.state.scoreConfirmations),
+      undoRequest: clone(this.state.undoRequest),
       game,
       players,
       spectators,
@@ -574,6 +618,7 @@ export class RoomEngine {
       this.state.scoreConfirmations = this.state.scoreConfirmations.filter(
         (color) => color !== member.color,
       );
+      this.state.undoRequest = null;
     }
     this.state.members = this.state.members.filter(
       (candidate) => candidate.playerId !== member.playerId,
@@ -613,12 +658,14 @@ export class RoomEngine {
     let move;
 
     if (action === "play") {
+      this.assertNoUndoRequest();
       this.requireBothPlayers();
       this.assertTurn(member);
       const row = validateCoordinate(payload.row, "行");
       const col = validateCoordinate(payload.col, "列");
       move = this.game.play(row, col);
     } else if (action === "pass") {
+      this.assertNoUndoRequest();
       this.requireBothPlayers();
       this.assertTurn(member);
       move = this.game.pass();
@@ -655,6 +702,140 @@ export class RoomEngine {
       }
     } else if (action === "resume_play") {
       move = this.game.resumePlay(this.game.currentPlayer);
+    } else if (action === "request_undo") {
+      this.requireBothPlayers();
+      if (
+        !Number.isSafeInteger(payload.expectedMoveCount) ||
+        payload.expectedMoveCount !== this.state.moveCount
+      ) {
+        throw new RoomEngineError(
+          "棋局已发生变化，请同步后重新申请悔棋。",
+          409,
+          "STALE_GAME_STATE",
+        );
+      }
+      if (this.game.phase !== PHASE_PLAY) {
+        throw new RoomEngineError(
+          "只有对弈阶段才能申请悔棋。",
+          409,
+          "UNDO_UNAVAILABLE",
+        );
+      }
+      if (this.state.undoRequest) {
+        throw new RoomEngineError(
+          "当前已有一份悔棋申请等待处理。",
+          409,
+          "UNDO_PENDING",
+        );
+      }
+      if (
+        this.state.moveCount < 1 ||
+        typeof this.game.canUndo !== "function" ||
+        !this.game.canUndo()
+      ) {
+        throw new RoomEngineError(
+          "当前没有可以撤回的棋步。",
+          409,
+          "UNDO_UNAVAILABLE",
+        );
+      }
+      this.state.undoRequest = {
+        requesterId: member.playerId,
+        requesterRole: member.role,
+        requesterColor: member.color,
+        targetMoveCount: this.state.moveCount,
+        requestRevision: this.state.revision + 1,
+        requestedAt: now,
+      };
+      move = {
+        ok: true,
+        type: "undo_requested",
+        undoRequest: clone(this.state.undoRequest),
+      };
+    } else if (action === "respond_undo") {
+      const request = this.requireCurrentUndoRequest(
+        payload.targetMoveCount,
+        payload.requestRevision,
+      );
+      if (member.playerId === request.requesterId) {
+        throw new RoomEngineError(
+          "只有另一位棋手可以回应这份悔棋申请。",
+          403,
+          "FORBIDDEN",
+        );
+      }
+      if (typeof payload.accept !== "boolean") {
+        throw new RoomEngineError(
+          "请选择同意或拒绝这份悔棋申请。",
+          400,
+          "BAD_REQUEST",
+        );
+      }
+      if (payload.accept) {
+        if (
+          this.state.moveCount !== request.targetMoveCount ||
+          typeof this.game.canUndo !== "function" ||
+          !this.game.canUndo()
+        ) {
+          throw new RoomEngineError(
+            "这份悔棋申请已经过期。",
+            409,
+            "STALE_UNDO_REQUEST",
+          );
+        }
+        const undoResult = this.game.undo();
+        if (!undoResult?.ok) {
+          throw new RoomEngineError(
+            "当前无法撤回最后一手。",
+            409,
+            "UNDO_UNAVAILABLE",
+          );
+        }
+        this.state.moveCount -= 1;
+        this.state.undoRequest = null;
+        move = {
+          ...clone(undoResult),
+          ok: true,
+          type: "undo_accepted",
+          requesterId: request.requesterId,
+          requesterColor: request.requesterColor,
+          responderId: member.playerId,
+          targetMoveCount: request.targetMoveCount,
+          requestRevision: request.requestRevision,
+        };
+      } else {
+        this.state.undoRequest = null;
+        move = {
+          ok: true,
+          type: "undo_declined",
+          requesterId: request.requesterId,
+          requesterColor: request.requesterColor,
+          responderId: member.playerId,
+          targetMoveCount: request.targetMoveCount,
+          requestRevision: request.requestRevision,
+        };
+      }
+    } else if (action === "cancel_undo") {
+      const request = this.requireCurrentUndoRequest(
+        payload.targetMoveCount,
+        payload.requestRevision,
+      );
+      if (member.playerId !== request.requesterId) {
+        throw new RoomEngineError(
+          "只有申请者可以取消这份悔棋申请。",
+          403,
+          "FORBIDDEN",
+        );
+      }
+      this.state.undoRequest = null;
+      move = {
+        ok: true,
+        type: "undo_cancelled",
+        requesterId: request.requesterId,
+        requesterColor: request.requesterColor,
+        targetMoveCount: request.targetMoveCount,
+        requestRevision: request.requestRevision,
+      };
     } else if (action === "new_game") {
       if (member.color !== BLACK) {
         throw new RoomEngineError(
@@ -674,6 +855,7 @@ export class RoomEngine {
         ),
       });
       this.state.moveCount = 0;
+      this.state.undoRequest = null;
       move = { ok: true, type: "new_game", phase: PHASE_PLAY };
     } else {
       throw new RoomEngineError("无法识别这条命令。", 400, "BAD_REQUEST");
@@ -696,6 +878,10 @@ export class RoomEngine {
       action === "new_game"
     ) {
       this.state.scoreConfirmations = [];
+    }
+
+    if (action === "resume_play" || action === "new_game") {
+      this.state.undoRequest = null;
     }
 
     if (action === "play" || action === "pass") {
@@ -843,6 +1029,41 @@ export class RoomEngine {
         "NOT_YOUR_TURN",
       );
     }
+  }
+
+  assertNoUndoRequest() {
+    if (this.state.undoRequest) {
+      throw new RoomEngineError(
+        "请先处理当前的悔棋申请，再继续下棋。",
+        409,
+        "UNDO_PENDING",
+      );
+    }
+  }
+
+  requireCurrentUndoRequest(targetMoveCount, requestRevision) {
+    const request = this.state.undoRequest;
+    if (!request) {
+      throw new RoomEngineError(
+        "这份悔棋申请已经过期。",
+        409,
+        "STALE_UNDO_REQUEST",
+      );
+    }
+    if (
+      !Number.isSafeInteger(targetMoveCount) ||
+      targetMoveCount !== request.targetMoveCount ||
+      !Number.isSafeInteger(requestRevision) ||
+      requestRevision !== request.requestRevision ||
+      this.state.moveCount !== request.targetMoveCount
+    ) {
+      throw new RoomEngineError(
+        "这份悔棋申请已经过期。",
+        409,
+        "STALE_UNDO_REQUEST",
+      );
+    }
+    return clone(request);
   }
 
   nextOpenColor() {

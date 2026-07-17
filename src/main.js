@@ -19,6 +19,7 @@ import { RoomClient, CONNECTION_STATUS } from "./multiplayer/roomClient.js";
 import { sanitizeRoomCode } from "./multiplayer/protocol.js";
 import { roomRevisionHasCaughtUp } from "./multiplayer/commandSync.js";
 import { shouldEnableMovePreview } from "./ui/movePreviewPolicy.js";
+import { createGameSounds } from "./audio/gameSounds.js";
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
@@ -27,10 +28,9 @@ const elements = {
   torusScene: $("#torus-scene"),
   flatScene: $("#flat-scene"),
   arcScene: $("#arc-scene"),
-  topologyQuickToggle: $("#topology-quick-toggle"),
-  topologyBadgeIcon: $("#topology-badge-icon"),
-  topologyBadgeText: $("#topology-badge-text"),
-  topologyBadgeAction: $("#topology-badge-action"),
+  toggleSound: $("#toggle-sound"),
+  soundIcon: $("#sound-icon"),
+  soundLabel: $("#sound-label"),
   phaseLabel: $("#phase-label"),
   turnStone: $("#turn-stone"),
   turnText: $("#turn-text"),
@@ -40,7 +40,14 @@ const elements = {
   whiteCaptures: $("#white-captures"),
   playControls: $("#play-controls"),
   passButton: $("#pass-button"),
+  undoButton: $("#undo-button"),
   newGameButton: $("#new-game-button"),
+  undoRequestPanel: $("#undo-request-panel"),
+  undoRequestText: $("#undo-request-text"),
+  undoResponseActions: $("#undo-response-actions"),
+  approveUndo: $("#approve-undo"),
+  declineUndo: $("#decline-undo"),
+  cancelUndoRequest: $("#cancel-undo-request"),
   scoringPanel: $("#scoring-panel"),
   blackScore: $("#black-score"),
   whiteScore: $("#white-score"),
@@ -114,6 +121,7 @@ const ERROR_MESSAGES = {
   [MOVE_ERRORS.SUPERKO]: "全局同形禁着：不能重复之前出现过的局面。",
   [MOVE_ERRORS.GAME_NOT_SCORING]: "现在还没有进入点目阶段。",
   [MOVE_ERRORS.EMPTY_POINT]: "点目时请点击棋子来标记死活。",
+  [MOVE_ERRORS.NOTHING_TO_UNDO]: "现在没有可以撤回的棋步。",
 };
 
 const COORDINATE_LETTERS = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
@@ -141,7 +149,19 @@ let aiWorker = null;
 let aiRequestId = 0;
 
 const PLAYER_NAME_KEY = "bamboo-baduk-player-name";
+const SOUND_ENABLED_KEY = "3d-baduk-sound-enabled";
 const roomClient = new RoomClient();
+
+function savedSoundEnabled() {
+  try {
+    return window.localStorage.getItem(SOUND_ENABLED_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+let soundEnabled = savedSoundEnabled();
+const gameSounds = createGameSounds({ enabled: soundEnabled });
 
 const KATAGO_AI = Object.freeze({
   label: "KataGo b10",
@@ -159,11 +179,11 @@ function isTorusTopology(topology = game?.topology) {
 }
 
 function topologyName(topology = game?.topology) {
-  return isTorusTopology(topology) ? "环面" : "竹筒";
+  return isTorusTopology(topology) ? "甜甜圈" : "竹筒";
 }
 
 function topologySurfaceName(topology = game?.topology) {
-  return isTorusTopology(topology) ? "环面" : "筒面";
+  return isTorusTopology(topology) ? "甜甜圈" : "竹筒";
 }
 
 function formatScore(value) {
@@ -178,6 +198,28 @@ function formatResult(result) {
 function setMessage(text, isError = false) {
   elements.message.textContent = text;
   elements.message.classList.toggle("error", isError);
+}
+
+function syncSoundControl() {
+  elements.toggleSound.setAttribute("aria-pressed", String(soundEnabled));
+  elements.toggleSound.setAttribute("aria-label", soundEnabled ? "关闭音效" : "开启音效");
+  elements.soundIcon.textContent = soundEnabled ? "♪" : "×";
+  elements.soundLabel.textContent = soundEnabled ? "音效开" : "音效关";
+}
+
+function rememberSoundEnabled() {
+  try {
+    window.localStorage.setItem(SOUND_ENABLED_KEY, String(soundEnabled));
+  } catch {
+    // Sound remains usable for this tab when storage is unavailable.
+  }
+}
+
+function playMoveSounds(capturedCount = 0) {
+  void gameSounds.playStone();
+  if (capturedCount > 0) {
+    window.setTimeout(() => void gameSounds.playCapture(capturedCount), 58);
+  }
 }
 
 function cloneSerializable(value) {
@@ -202,6 +244,18 @@ function aiColor() {
 
 function isAITurn() {
   return isAIMode() && game?.phase === PHASE_PLAY && game.currentPlayer === aiColor();
+}
+
+function syncLastPlayedPoint() {
+  lastPlayedPoint = game?.lastMove?.type === "play"
+    ? { row: game.lastMove.row, col: game.lastMove.col }
+    : null;
+}
+
+function canUndoAIChoice() {
+  if (!isAIMode() || !game?.canUndo()) return false;
+  const firstHumanMoveNumber = aiHumanColor === WHITE ? 2 : 1;
+  return moveCount >= firstHumanMoveNumber;
 }
 
 function cancelAIThinking() {
@@ -245,6 +299,7 @@ function applyAIMove(move, stats = {}) {
   moveCount += 1;
   if (move.type === "play") {
     lastPlayedPoint = { row: move.row, col: move.col };
+    playMoveSounds(result.captured?.length ?? 0);
     const captureMessage = result.captured?.length
       ? `，提掉 ${result.captured.length} 子`
       : "";
@@ -424,6 +479,16 @@ function isOnlineTurn() {
   return isOnlinePlayer() && currentIdentity().color === game.currentPlayer;
 }
 
+function currentUndoRequest() {
+  return onlineRoom?.undoRequest ?? null;
+}
+
+function isOwnUndoRequest(request = currentUndoRequest()) {
+  if (!request) return false;
+  const identity = currentIdentity();
+  return request.requesterId === (identity.playerId ?? identity.id);
+}
+
 function canShowMovePreview() {
   if (hasOnlineSession()) {
     return shouldEnableMovePreview({
@@ -436,7 +501,7 @@ function canShowMovePreview() {
         onlineRoom?.code === roomClient.roomCode && Boolean(onlineRoom?.game),
       bothPlayers: Boolean(roomSeat(BLACK) && roomSeat(WHITE)),
       onlineBusy,
-      commandPending: onlineCommandPending,
+      commandPending: onlineCommandPending || Boolean(currentUndoRequest()),
     });
   }
   if (isAIMode()) {
@@ -555,6 +620,8 @@ function updateRoomUI() {
   const scoreConfirmations = onlineRoom?.scoreConfirmations ?? [];
   const ownScoreConfirmed = scoreConfirmations.includes(identity.color);
   const hasBothPlayers = Boolean(roomSeat(BLACK) && roomSeat(WHITE));
+  const undoRequest = currentUndoRequest();
+  const ownUndoRequest = isOwnUndoRequest(undoRequest);
   const connecting = [
     CONNECTION_STATUS.CREATING,
     CONNECTION_STATUS.JOINING,
@@ -641,6 +708,10 @@ function updateRoomUI() {
       elements.roomHint.textContent = "你正在旁观，可以旋转和切换棋盘视图。";
     } else if (!black || !white) {
       elements.roomHint.textContent = "把邀请链接发给朋友，白方加入后即可对弈。";
+    } else if (undoRequest) {
+      elements.roomHint.textContent = ownUndoRequest
+        ? "悔棋申请已发送，等待对方回应。"
+        : `${colorName(undoRequest.requesterColor)}申请撤回上一手，请选择同意或拒绝。`;
     } else if (game.phase === PHASE_SCORING) {
       if (ownScoreConfirmed) {
         elements.roomHint.textContent = "你已确认当前点目，正在等待对方确认。";
@@ -674,12 +745,37 @@ function updateRoomUI() {
       : "退出";
   elements.passButton.disabled = active
     ? !(
-        onlineControlsAvailable && hasBothPlayers && isOnlineTurn() && game.phase === PHASE_PLAY
+        onlineControlsAvailable && !undoRequest && hasBothPlayers && isOnlineTurn() &&
+        game.phase === PHASE_PLAY
       )
     : aiMode && (
         aiThinking || game.phase !== PHASE_PLAY || game.currentPlayer !== aiHumanColor
       );
-  elements.newGameButton.disabled = active && !(onlineControlsAvailable && isOnlineHost());
+  elements.newGameButton.disabled = active && !(
+    onlineControlsAvailable && !undoRequest && isOnlineHost()
+  );
+  elements.undoButton.textContent = active ? "申请悔棋" : "悔棋";
+  elements.undoButton.disabled = active
+    ? !(
+        onlineControlsAvailable && !undoRequest && hasBothPlayers && isOnlinePlayer() &&
+        game.phase === PHASE_PLAY && onlineRoom?.undoAvailable === true
+      )
+    : aiMode
+      ? !canUndoAIChoice()
+      : !game?.canUndo();
+  elements.undoRequestPanel.hidden = !(
+    active && onlineReady && undoRequest && isOnlinePlayer()
+  );
+  if (undoRequest) {
+    elements.undoRequestText.textContent = ownUndoRequest
+      ? "已申请撤回上一手，正在等待对方回应"
+      : `${colorName(undoRequest.requesterColor)}申请撤回上一手`;
+  }
+  elements.undoResponseActions.hidden = !undoRequest || ownUndoRequest;
+  elements.cancelUndoRequest.hidden = !undoRequest || !ownUndoRequest;
+  elements.approveUndo.disabled = !onlineControlsAvailable || ownUndoRequest;
+  elements.declineUndo.disabled = !onlineControlsAvailable || ownUndoRequest;
+  elements.cancelUndoRequest.disabled = !onlineControlsAvailable || !ownUndoRequest;
   elements.confirmScore.disabled = active && !(
     onlineControlsAvailable && isOnlinePlayer() && !ownScoreConfirmed
   );
@@ -691,7 +787,7 @@ function updateRoomUI() {
       : "确认结果";
 
   const canChangeOnlineSettings = active
-    ? onlineControlsAvailable && isOnlineHost()
+    ? onlineControlsAvailable && !undoRequest && isOnlineHost()
     : !aiThinking;
   elements.customSize.disabled = !canChangeOnlineSettings;
   elements.scoringRule.disabled = !canChangeOnlineSettings;
@@ -700,7 +796,6 @@ function updateRoomUI() {
   for (const button of elements.topologyButtons) {
     button.disabled = !canChangeOnlineSettings;
   }
-  elements.topologyQuickToggle.disabled = !canChangeOnlineSettings;
   syncMovePreviewAvailability();
 }
 
@@ -722,25 +817,18 @@ function syncTopologyPresentation() {
   elements.boardStage.dataset.topology = game.topology;
   elements.boardStage.setAttribute(
     "aria-label",
-    torus ? "四边相连的环面围棋棋盘区域" : "左右相连的竹筒围棋棋盘区域",
+    torus ? "上下左右相连的甜甜圈围棋棋盘区域" : "左右相连的竹筒围棋棋盘区域",
   );
   elements.flatScene.setAttribute(
     "aria-label",
     torus
-      ? "可向任意方向循环滑动的环面平面展开棋盘"
+      ? "可向任意方向循环滑动的甜甜圈平面展开棋盘"
       : "可横向滑动的竹筒表面平面展开棋盘",
   );
-  elements.topologyBadgeIcon.textContent = torus ? "↔↕" : "↔";
-  elements.topologyBadgeText.textContent = torus ? "四边连接" : "竹筒";
-  elements.topologyBadgeAction.textContent = torus ? "换回竹筒" : "选四边连接";
-  elements.topologyQuickToggle.setAttribute(
-    "aria-label",
-    torus ? "当前为四边连接棋盘，切换回竹筒棋盘" : "当前为竹筒棋盘，切换为四边连接棋盘",
-  );
   elements.arcViewButton.hidden = torus;
-  elements.threeDViewLabel.textContent = torus ? "立体环面" : "立体竹筒";
+  elements.threeDViewLabel.textContent = torus ? "立体甜甜圈" : "立体竹筒";
   elements.rulesSummary.textContent = torus
-    ? "四边相连的环面规则说明"
+    ? "甜甜圈棋盘规则说明"
     : "竹筒表面规则说明";
   elements.cylinderRules.hidden = torus;
   elements.torusRules.hidden = !torus;
@@ -785,6 +873,10 @@ function announceRoomState(room, previousRoom) {
   const confirmationsChanged = Boolean(previousRoom) &&
     JSON.stringify(previousRoom.scoreConfirmations ?? []) !==
       JSON.stringify(room.scoreConfirmations ?? []);
+  const previousUndoRequest = previousRoom?.undoRequest ?? null;
+  const undoRequest = room.undoRequest ?? null;
+  const undoRequestChanged = Boolean(previousRoom) &&
+    JSON.stringify(previousUndoRequest) !== JSON.stringify(undoRequest);
   const gameChanged = !previousRoom || [
     previousRoom.moveCount !== room.moveCount,
     previousRoom.game.size !== room.game.size,
@@ -797,10 +889,22 @@ function announceRoomState(room, previousRoom) {
     deadStonesChanged,
     JSON.stringify(previousRoom.game.result) !== JSON.stringify(room.game.result),
     confirmationsChanged,
+    undoRequestChanged,
   ].some(Boolean);
   if (!gameChanged) return;
+  if (previousRoom && room.moveCount > previousRoom.moveCount && lastMove?.type === "play") {
+    playMoveSounds(lastMove.captured?.length ?? 0);
+  }
   if (!previousRoom) {
     setMessage(`已进入房间 ${room.code}。`);
+  } else if (!previousUndoRequest && undoRequest) {
+    setMessage(isOwnUndoRequest(undoRequest)
+      ? "悔棋申请已发送，等待对方回应。"
+      : `${colorName(undoRequest.requesterColor)}申请撤回上一手。`);
+  } else if (previousUndoRequest && !undoRequest) {
+    setMessage(room.moveCount < previousRoom.moveCount
+      ? "悔棋已同意，上一手已撤回。"
+      : "悔棋申请已结束，棋局继续。");
   } else if (previousPhase === PHASE_SCORING && room.game.phase === PHASE_FINISHED) {
     setMessage(`点目完成：${formatResult(room.game.result)}。`);
   } else if (previousPhase === PHASE_SCORING && room.game.phase === PHASE_PLAY) {
@@ -983,12 +1087,17 @@ function requestNewGame() {
     return;
   }
   elements.newGameSummary.textContent = pendingTopology === TOPOLOGY_TORUS
-    ? `将建立：四边连接（上下左右首尾相接） · ${pendingSize} 路。当前对局进度将被清除。`
+    ? `将建立：甜甜圈（上下左右首尾相接） · ${pendingSize} 路。当前对局进度将被清除。`
     : `将建立：竹筒（左右首尾相接） · ${pendingSize} 路。当前对局进度将被清除。`;
   if (typeof elements.newGameDialog.showModal === "function") {
     elements.newGameDialog.showModal();
-  } else if (window.confirm("建立新棋盘并清除当前对局？")) {
-    void startNewGame();
+  } else {
+    if (window.confirm("建立新棋盘并清除当前对局？")) {
+      void startNewGame();
+    } else {
+      setPendingSize(game.size);
+      setPendingTopology(game.topology);
+    }
   }
 }
 
@@ -1027,7 +1136,7 @@ function updateUI() {
   const playing = state.phase === PHASE_PLAY;
   elements.passButton.hidden = !playing;
   elements.playControls.hidden = false;
-  elements.playControls.classList.toggle("single", !playing);
+  elements.playControls.classList.toggle("scoring-actions", !playing);
   elements.scoringPanel.hidden = playing;
   elements.confirmScore.hidden = state.phase === PHASE_FINISHED;
   elements.resumeGame.hidden = state.phase === PHASE_FINISHED;
@@ -1076,6 +1185,10 @@ function handleBoardPoint({ row, col }) {
       return;
     }
     if (onlineCommandPending) return;
+    if (currentUndoRequest()) {
+      setMessage("请先处理当前的悔棋申请，再继续下棋。", true);
+      return;
+    }
     if (game.phase === PHASE_PLAY) {
       if (!roomSeat(BLACK) || !roomSeat(WHITE)) {
         setMessage("请等待朋友加入白方座位后再开始对局。", true);
@@ -1111,6 +1224,7 @@ function handleBoardPoint({ row, col }) {
     }
     moveCount += 1;
     lastPlayedPoint = { row, col };
+    playMoveSounds(result.captured?.length ?? 0);
     const captureMessage = result.captured.length
       ? `，提掉 ${result.captured.length} 子`
       : "";
@@ -1131,6 +1245,51 @@ function handleBoardPoint({ row, col }) {
     );
     updateUI();
   }
+}
+
+function undoOfflineGame() {
+  if (isAIMode()) {
+    if (!canUndoAIChoice()) {
+      setMessage("你还没有可以撤回的棋步。", true);
+      return;
+    }
+
+    if (aiThinking) cancelAIThinking();
+    let undoneCount = 0;
+    let humanMoveUndone = false;
+    while (game.canUndo()) {
+      const result = game.undo();
+      if (!result.ok) break;
+      moveCount = Math.max(0, moveCount - 1);
+      undoneCount += 1;
+      if (result.move.color === aiHumanColor) {
+        humanMoveUndone = true;
+        break;
+      }
+    }
+
+    if (!humanMoveUndone) {
+      setMessage("没有找到可以撤回的玩家棋步。", true);
+      updateUI();
+      return;
+    }
+    syncLastPlayedPoint();
+    setMessage(undoneCount > 1
+      ? "已撤回你和 AI 的上一轮落子，轮到你重新选择。"
+      : "已撤回你刚才的一手，轮到你重新选择。");
+    updateUI();
+    return;
+  }
+
+  const result = game.undo();
+  if (!result.ok) {
+    setMessage(ERROR_MESSAGES[result.reason] || "现在不能悔棋。", true);
+    return;
+  }
+  moveCount = Math.max(0, moveCount - 1);
+  syncLastPlayedPoint();
+  setMessage(`已撤回${colorName(result.move.color)}的上一手。`);
+  updateUI();
 }
 
 function handleHover(point) {
@@ -1156,6 +1315,10 @@ function handleHover(point) {
 
 elements.passButton.addEventListener("click", () => {
   if (hasOnlineSession()) {
+    if (currentUndoRequest()) {
+      setMessage("请先处理当前的悔棋申请，再继续下棋。", true);
+      return;
+    }
     if (!isOnlineTurn()) {
       setMessage("还没有轮到你停一手。", true);
       return;
@@ -1177,6 +1340,48 @@ elements.passButton.addEventListener("click", () => {
   }
   updateUI();
   maybeStartAITurn();
+});
+
+elements.undoButton.addEventListener("click", () => {
+  if (hasOnlineSession()) {
+    if (currentUndoRequest()) {
+      setMessage("当前已有一份悔棋申请。", true);
+      return;
+    }
+    setMessage("正在发送悔棋申请…");
+    void sendOnlineCommand("request_undo", { expectedMoveCount: moveCount });
+    return;
+  }
+  undoOfflineGame();
+});
+
+elements.approveUndo.addEventListener("click", () => {
+  const request = currentUndoRequest();
+  if (!request || isOwnUndoRequest(request)) return;
+  void sendOnlineCommand("respond_undo", {
+    accept: true,
+    targetMoveCount: request.targetMoveCount,
+    requestRevision: request.requestRevision,
+  });
+});
+
+elements.declineUndo.addEventListener("click", () => {
+  const request = currentUndoRequest();
+  if (!request || isOwnUndoRequest(request)) return;
+  void sendOnlineCommand("respond_undo", {
+    accept: false,
+    targetMoveCount: request.targetMoveCount,
+    requestRevision: request.requestRevision,
+  });
+});
+
+elements.cancelUndoRequest.addEventListener("click", () => {
+  const request = currentUndoRequest();
+  if (!request || !isOwnUndoRequest(request)) return;
+  void sendOnlineCommand("cancel_undo", {
+    targetMoveCount: request.targetMoveCount,
+    requestRevision: request.requestRevision,
+  });
 });
 
 elements.confirmScore.addEventListener("click", () => {
@@ -1214,17 +1419,17 @@ for (const button of elements.sizeButtons) {
 
 for (const button of elements.topologyButtons) {
   button.addEventListener("click", () => {
-    setPendingTopology(button.dataset.boardTopology);
+    const nextTopology = button.dataset.boardTopology === TOPOLOGY_TORUS
+      ? TOPOLOGY_TORUS
+      : TOPOLOGY_CYLINDER;
+    if (nextTopology === game.topology) {
+      setPendingTopology(game.topology);
+      return;
+    }
+    setPendingTopology(nextTopology);
     requestNewGame();
   });
 }
-
-elements.topologyQuickToggle.addEventListener("click", () => {
-  setPendingTopology(
-    game.topology === TOPOLOGY_TORUS ? TOPOLOGY_CYLINDER : TOPOLOGY_TORUS,
-  );
-  requestNewGame();
-});
 
 elements.customSize.addEventListener("change", () => {
   const raw = Number(elements.customSize.value);
@@ -1304,7 +1509,7 @@ function setViewMode(mode) {
         }
       : {
           resetIcon: "◎",
-          resetLabel: torus ? "回正环面" : "回正视角",
+          resetLabel: torus ? "回正甜甜圈" : "回正视角",
           primaryGesture: "拖动旋转",
           secondaryGesture: torus
             ? "观察内圈与背面 · 滚轮缩放"
@@ -1500,6 +1705,13 @@ elements.createRoom.addEventListener("click", () => void createOnlineRoom());
 elements.joinRoom.addEventListener("click", () => void joinOnlineRoom());
 elements.copyRoomLink.addEventListener("click", () => void copyInvitationLink());
 elements.leaveRoom.addEventListener("click", () => void leaveOnlineRoom());
+elements.toggleSound.addEventListener("click", () => {
+  soundEnabled = !soundEnabled;
+  gameSounds.setEnabled(soundEnabled);
+  rememberSoundEnabled();
+  syncSoundControl();
+  if (soundEnabled) void gameSounds.unlock();
+});
 elements.roomCodeInput.addEventListener("input", () => {
   elements.roomCodeInput.value = sanitizeRoomCode(elements.roomCodeInput.value);
   showOnlineError();
@@ -1571,6 +1783,7 @@ arcView = new ArcBoard(elements.arcScene, {
   onHover: handleHover,
 });
 syncTopologyPresentation();
+syncSoundControl();
 setViewMode("arc");
 updateUI();
 rememberOfflineGame();
@@ -1589,6 +1802,10 @@ if (sharedRoomCode.length === 6) {
   }
 }
 
+const unlockGameSounds = () => void gameSounds.unlock();
+window.addEventListener("pointerdown", unlockGameSounds, { capture: true, once: true });
+window.addEventListener("keydown", unlockGameSounds, { capture: true, once: true });
+
 window.addEventListener(
   "beforeunload",
   () => {
@@ -1598,6 +1815,7 @@ window.addEventListener(
     flatView.destroy();
     arcView.destroy();
     roomClient.destroy();
+    void gameSounds.destroy();
   },
   { once: true },
 );

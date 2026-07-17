@@ -438,6 +438,534 @@ test("resume, new game, continued play and leaving clear confirmations", () => {
   assert.deepEqual(fresh.room.scoreConfirmations, []);
 });
 
+test("publishes an undo request and pauses play and pass until it is resolved", () => {
+  const room = createRoom();
+  joinWhite(room);
+  room.applyAction({
+    playerId: "black-player",
+    action: "play",
+    payload: { row: 2, col: 3 },
+    now: 3_000,
+  });
+  const revisionBeforeRequest = room.snapshot(3_001).revision;
+
+  const requested = room.applyAction({
+    playerId: "black-player",
+    action: "request_undo",
+    payload: { expectedMoveCount: 1 },
+    now: 3_100,
+  });
+  assert.equal(requested.revision, revisionBeforeRequest + 1);
+  assert.equal(requested.move.type, "undo_requested");
+  assert.deepEqual(requested.room.undoRequest, {
+    requesterId: "black-player",
+    requesterRole: "player",
+    requesterColor: "black",
+    targetMoveCount: 1,
+    requestRevision: requested.revision,
+    requestedAt: 3_100,
+  });
+
+  for (const action of ["play", "pass"]) {
+    assert.throws(
+      () =>
+        room.applyAction({
+          playerId: "white-player",
+          action,
+          payload: { row: 4, col: 4 },
+          now: 3_200,
+        }),
+      (error) =>
+        error instanceof RoomEngineError && error.code === "UNDO_PENDING",
+    );
+  }
+  assert.equal(room.snapshot(3_201).revision, requested.revision);
+  assert.equal(room.snapshot(3_201).game.board[2][3], "black");
+});
+
+test("a stale client cannot request undo for a newer authoritative position", () => {
+  const room = createRoom();
+  joinWhite(room);
+  room.applyAction({
+    playerId: "black-player",
+    action: "play",
+    payload: { row: 2, col: 3 },
+    now: 3_000,
+  });
+  const revisionBeforeRequests = room.snapshot(3_001).revision;
+
+  for (const expectedMoveCount of [undefined, 0, 1.5]) {
+    assert.throws(
+      () =>
+        room.applyAction({
+          playerId: "white-player",
+          action: "request_undo",
+          payload:
+            expectedMoveCount === undefined
+              ? {}
+              : { expectedMoveCount },
+          now: 3_100,
+        }),
+      (error) =>
+        error instanceof RoomEngineError && error.code === "STALE_GAME_STATE",
+    );
+  }
+  const unchanged = room.snapshot(3_101);
+  assert.equal(unchanged.revision, revisionBeforeRequests);
+  assert.equal(unchanged.moveCount, 1);
+  assert.equal(unchanged.undoRequest, null);
+
+  const current = room.applyAction({
+    playerId: "white-player",
+    action: "request_undo",
+    payload: { expectedMoveCount: 1 },
+    now: 3_200,
+  });
+  assert.equal(current.room.undoRequest.targetMoveCount, 1);
+});
+
+test("the opponent can accept an undo and exactly the requested latest move is restored", () => {
+  const room = createRoom();
+  joinWhite(room);
+  room.applyAction({
+    playerId: "black-player",
+    action: "play",
+    payload: { row: 2, col: 3 },
+    now: 3_000,
+  });
+  const requested = room.applyAction({
+    playerId: "black-player",
+    action: "request_undo",
+    payload: { expectedMoveCount: 1 },
+    now: 3_100,
+  });
+
+  const accepted = room.applyAction({
+    playerId: "white-player",
+    action: "respond_undo",
+    payload: {
+      accept: true,
+      targetMoveCount: 1,
+      requestRevision: requested.room.undoRequest.requestRevision,
+    },
+    now: 3_200,
+  });
+  assert.equal(accepted.revision, requested.revision + 1);
+  assert.equal(accepted.move.type, "undo_accepted");
+  assert.equal(accepted.move.requesterId, "black-player");
+  assert.equal(accepted.move.responderId, "white-player");
+  assert.equal(accepted.room.undoRequest, null);
+  assert.equal(accepted.room.moveCount, 0);
+  assert.equal(accepted.room.game.moveCount, 0);
+  assert.equal(accepted.room.game.board[2][3], null);
+  assert.equal(accepted.room.game.currentPlayer, "black");
+
+  assert.throws(
+    () =>
+      room.applyAction({
+        playerId: "white-player",
+        action: "respond_undo",
+        payload: {
+          accept: true,
+          targetMoveCount: 1,
+          requestRevision: requested.room.undoRequest.requestRevision,
+        },
+        now: 3_300,
+      }),
+    (error) =>
+      error instanceof RoomEngineError && error.code === "STALE_UNDO_REQUEST",
+  );
+});
+
+test("the opponent may decline and the requester may cancel an undo", () => {
+  const room = createRoom();
+  joinWhite(room);
+  room.applyAction({
+    playerId: "black-player",
+    action: "play",
+    payload: { row: 0, col: 0 },
+    now: 3_000,
+  });
+  const firstRequest = room.applyAction({
+    playerId: "black-player",
+    action: "request_undo",
+    payload: { expectedMoveCount: 1 },
+    now: 3_100,
+  });
+
+  assert.throws(
+    () =>
+      room.applyAction({
+        playerId: "black-player",
+        action: "respond_undo",
+        payload: {
+          accept: false,
+          targetMoveCount: 1,
+          requestRevision: firstRequest.room.undoRequest.requestRevision,
+        },
+        now: 3_200,
+      }),
+    (error) => error instanceof RoomEngineError && error.code === "FORBIDDEN",
+  );
+  assert.throws(
+    () =>
+      room.applyAction({
+        playerId: "white-player",
+        action: "cancel_undo",
+        payload: {
+          targetMoveCount: 1,
+          requestRevision: firstRequest.room.undoRequest.requestRevision,
+        },
+        now: 3_201,
+      }),
+    (error) => error instanceof RoomEngineError && error.code === "FORBIDDEN",
+  );
+
+  const declined = room.applyAction({
+    playerId: "white-player",
+    action: "respond_undo",
+    payload: {
+      accept: false,
+      targetMoveCount: 1,
+      requestRevision: firstRequest.room.undoRequest.requestRevision,
+    },
+    now: 3_300,
+  });
+  assert.equal(declined.move.type, "undo_declined");
+  assert.equal(declined.room.moveCount, 1);
+  assert.equal(declined.room.game.board[0][0], "black");
+  assert.equal(declined.room.undoRequest, null);
+
+  const secondRequest = room.applyAction({
+    playerId: "black-player",
+    action: "request_undo",
+    payload: { expectedMoveCount: 1 },
+    now: 3_400,
+  });
+  const cancelled = room.applyAction({
+    playerId: "black-player",
+    action: "cancel_undo",
+    payload: {
+      targetMoveCount: 1,
+      requestRevision: secondRequest.room.undoRequest.requestRevision,
+    },
+    now: 3_500,
+  });
+  assert.equal(cancelled.move.type, "undo_cancelled");
+  assert.equal(cancelled.room.undoRequest, null);
+  assert.equal(cancelled.room.moveCount, 1);
+});
+
+test("a delayed response cannot resolve a newer request at the same move count", () => {
+  const room = createRoom();
+  joinWhite(room);
+  room.applyAction({
+    playerId: "black-player",
+    action: "play",
+    payload: { row: 0, col: 0 },
+    now: 3_000,
+  });
+  const first = room.applyAction({
+    playerId: "black-player",
+    action: "request_undo",
+    payload: { expectedMoveCount: 1 },
+    now: 3_100,
+  });
+  room.applyAction({
+    playerId: "black-player",
+    action: "cancel_undo",
+    payload: {
+      targetMoveCount: 1,
+      requestRevision: first.room.undoRequest.requestRevision,
+    },
+    now: 3_200,
+  });
+  const second = room.applyAction({
+    playerId: "black-player",
+    action: "request_undo",
+    payload: { expectedMoveCount: 1 },
+    now: 3_300,
+  });
+
+  assert.equal(second.room.undoRequest.targetMoveCount, 1);
+  assert.notEqual(
+    second.room.undoRequest.requestRevision,
+    first.room.undoRequest.requestRevision,
+  );
+  assert.throws(
+    () =>
+      room.applyAction({
+        playerId: "white-player",
+        action: "respond_undo",
+        payload: {
+          accept: true,
+          targetMoveCount: 1,
+          requestRevision: first.room.undoRequest.requestRevision,
+        },
+        now: 3_400,
+      }),
+    (error) =>
+      error instanceof RoomEngineError && error.code === "STALE_UNDO_REQUEST",
+  );
+  assert.deepEqual(room.snapshot(3_401).undoRequest, second.room.undoRequest);
+  assert.equal(room.snapshot(3_401).game.board[0][0], "black");
+
+  const accepted = room.applyAction({
+    playerId: "white-player",
+    action: "respond_undo",
+    payload: {
+      accept: true,
+      targetMoveCount: 1,
+      requestRevision: second.room.undoRequest.requestRevision,
+    },
+    now: 3_500,
+  });
+  assert.equal(accepted.room.undoRequest, null);
+  assert.equal(accepted.room.game.board[0][0], null);
+});
+
+test("undo requests reject spectators, empty games, scoring and stale targets", () => {
+  const room = createRoom();
+  joinWhite(room);
+  room.join({
+    name: "Viewer",
+    role: "spectator",
+    playerId: "viewer",
+    tokenHash: VIEWER_HASH,
+    now: 2_100,
+  });
+
+  assert.throws(
+    () =>
+      room.applyAction({
+        playerId: "black-player",
+        action: "request_undo",
+        payload: { expectedMoveCount: 0 },
+        now: 2_200,
+      }),
+    (error) =>
+      error instanceof RoomEngineError && error.code === "UNDO_UNAVAILABLE",
+  );
+  assert.throws(
+    () =>
+      room.applyAction({
+        playerId: "viewer",
+        action: "request_undo",
+        payload: { expectedMoveCount: 0 },
+        now: 2_201,
+      }),
+    (error) => error instanceof RoomEngineError && error.code === "FORBIDDEN",
+  );
+
+  room.applyAction({
+    playerId: "black-player",
+    action: "play",
+    payload: { row: 0, col: 0 },
+    now: 3_000,
+  });
+  const request = room.applyAction({
+    playerId: "white-player",
+    action: "request_undo",
+    payload: { expectedMoveCount: 1 },
+    now: 3_100,
+  });
+  assert.throws(
+    () =>
+      room.applyAction({
+        playerId: "black-player",
+        action: "respond_undo",
+        payload: {
+          accept: true,
+          targetMoveCount: 2,
+          requestRevision: request.room.undoRequest.requestRevision,
+        },
+        now: 3_200,
+      }),
+    (error) =>
+      error instanceof RoomEngineError && error.code === "STALE_UNDO_REQUEST",
+  );
+  assert.equal(room.snapshot(3_201).undoRequest.targetMoveCount, 1);
+
+  room.applyAction({
+    playerId: "white-player",
+    action: "cancel_undo",
+    payload: {
+      targetMoveCount: 1,
+      requestRevision: request.room.undoRequest.requestRevision,
+    },
+    now: 3_300,
+  });
+  room.applyAction({ playerId: "white-player", action: "pass", now: 3_400 });
+  room.applyAction({ playerId: "black-player", action: "pass", now: 3_500 });
+  assert.equal(room.snapshot(3_501).game.phase, "scoring");
+  assert.throws(
+    () =>
+      room.applyAction({
+        playerId: "white-player",
+        action: "request_undo",
+        payload: { expectedMoveCount: 3 },
+        now: 3_600,
+      }),
+    (error) =>
+      error instanceof RoomEngineError && error.code === "UNDO_UNAVAILABLE",
+  );
+});
+
+test("undo requests persist, restore, remain receipt-compatible and default to null", () => {
+  const room = createRoom();
+  joinWhite(room);
+  room.applyAction({
+    playerId: "black-player",
+    action: "play",
+    payload: { row: 6, col: 6 },
+    now: 3_000,
+  });
+  const requested = room.applyAction({
+    playerId: "black-player",
+    action: "request_undo",
+    payload: { expectedMoveCount: 1 },
+    now: 3_100,
+  });
+  const receipt = room.recordCommand({
+    playerId: "black-player",
+    id: "undo-request-1",
+    sequence: 1,
+    now: 3_101,
+  });
+  assert.equal(receipt.revision, requested.revision);
+  assert.equal(receipt.ok, true);
+
+  const serialized = room.serialize();
+  assert.deepEqual(serialized.undoRequest, requested.room.undoRequest);
+  const legacyPendingState = structuredClone(serialized);
+  delete legacyPendingState.undoRequest.requestRevision;
+  const restoredLegacyPending = RoomEngine.restore(legacyPendingState);
+  assert.equal(
+    restoredLegacyPending.snapshot(3_150).undoRequest.requestRevision,
+    legacyPendingState.revision,
+  );
+  const legacyAccepted = restoredLegacyPending.applyAction({
+    playerId: "white-player",
+    action: "respond_undo",
+    payload: {
+      accept: true,
+      targetMoveCount: 1,
+      requestRevision: legacyPendingState.revision,
+    },
+    now: 3_151,
+  });
+  assert.equal(legacyAccepted.room.game.board[6][6], null);
+
+  const restored = RoomEngine.restore(serialized);
+  assert.deepEqual(restored.snapshot(3_200).undoRequest, requested.room.undoRequest);
+  assert.equal(
+    restored.inspectCommand("black-player", "undo-request-1", 1).kind,
+    "duplicate",
+  );
+  const accepted = restored.applyAction({
+    playerId: "white-player",
+    action: "respond_undo",
+    payload: {
+      accept: true,
+      targetMoveCount: 1,
+      requestRevision: requested.room.undoRequest.requestRevision,
+    },
+    now: 3_300,
+  });
+  assert.equal(accepted.room.game.board[6][6], null);
+
+  const legacyState = createRoom().serialize();
+  delete legacyState.undoRequest;
+  assert.equal(RoomEngine.restore(legacyState).snapshot(3_400).undoRequest, null);
+});
+
+test("undoAvailable respects a legacy history boundary after new play", () => {
+  const room = createRoom();
+  joinWhite(room);
+  assert.equal(room.snapshot(2_001).undoAvailable, false);
+  room.applyAction({
+    playerId: "black-player",
+    action: "play",
+    payload: { row: 4, col: 4 },
+    now: 3_000,
+  });
+  assert.equal(room.snapshot(3_001).undoAvailable, true);
+
+  const legacyState = room.serialize();
+  delete legacyState.game.undoHistory;
+  const restored = RoomEngine.restore(legacyState);
+  assert.equal(restored.snapshot(3_100).moveCount, 1);
+  assert.equal(restored.snapshot(3_100).undoAvailable, false);
+
+  const whiteMove = restored.applyAction({
+    playerId: "white-player",
+    action: "play",
+    payload: { row: 4, col: 5 },
+    now: 3_200,
+  });
+  assert.equal(whiteMove.room.moveCount, 2);
+  assert.equal(whiteMove.room.undoAvailable, true);
+  const requested = restored.applyAction({
+    playerId: "white-player",
+    action: "request_undo",
+    payload: { expectedMoveCount: 2 },
+    now: 3_300,
+  });
+  const accepted = restored.applyAction({
+    playerId: "black-player",
+    action: "respond_undo",
+    payload: {
+      accept: true,
+      targetMoveCount: 2,
+      requestRevision: requested.room.undoRequest.requestRevision,
+    },
+    now: 3_400,
+  });
+  assert.equal(accepted.room.moveCount, 1);
+  assert.equal(accepted.room.undoAvailable, false);
+  assert.equal(accepted.room.game.board[4][4], "black");
+  assert.equal(accepted.room.game.board[4][5], null);
+});
+
+test("new games and player departures clear pending undo requests", () => {
+  const room = createRoom();
+  joinWhite(room);
+  room.applyAction({
+    playerId: "black-player",
+    action: "play",
+    payload: { row: 1, col: 1 },
+    now: 3_000,
+  });
+  room.applyAction({
+    playerId: "black-player",
+    action: "request_undo",
+    payload: { expectedMoveCount: 1 },
+    now: 3_100,
+  });
+  const fresh = room.applyAction({
+    playerId: "black-player",
+    action: "new_game",
+    now: 3_200,
+  });
+  assert.equal(fresh.room.undoRequest, null);
+  assert.equal(fresh.room.moveCount, 0);
+
+  room.applyAction({
+    playerId: "black-player",
+    action: "play",
+    payload: { row: 1, col: 1 },
+    now: 3_300,
+  });
+  room.applyAction({
+    playerId: "white-player",
+    action: "request_undo",
+    payload: { expectedMoveCount: 1 },
+    now: 3_400,
+  });
+  const left = room.leave({ playerId: "white-player", now: 3_500 });
+  assert.equal(left.room.undoRequest, null);
+});
+
 test("expires exactly 24 hours after the last meaningful room touch", () => {
   const room = createRoom(10_000);
   const before = room.advance(10_000 + ROOM_TTL_MS - 1);

@@ -85,7 +85,7 @@ export class FlatBoard {
     this.canvas.setAttribute(
       "aria-label",
       this.wrapRows
-        ? "环面围棋的平面展开视图。上下、左右分别首尾相接，可向任意方向拖动改变展开起点。"
+        ? "甜甜圈围棋的平面展开视图。上下、左右分别首尾相接，可向任意方向拖动改变展开起点。"
         : "竹筒围棋的平面展开视图。左右两侧首尾相接，可横向拖动改变展开起点。",
     );
     this.board = Array.from({ length: size }, () => Array(size).fill(null));

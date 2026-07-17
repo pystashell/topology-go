@@ -20,6 +20,11 @@ export const SCORING_CHINESE = "chinese";
 export const TOPOLOGY_CYLINDER = "cylinder";
 export const TOPOLOGY_TORUS = "torus";
 
+// Undo snapshots contain a complete board so that captures, scoring transitions
+// and persistence restore exactly. Keeping only the latest 32 moves bounds the
+// Durable Object value size even on a dense 25x25 board.
+export const UNDO_HISTORY_LIMIT = 32;
+
 export const MOVE_ERRORS = Object.freeze({
   GAME_NOT_PLAYING: "game_not_playing",
   OUT_OF_BOUNDS: "out_of_bounds",
@@ -28,6 +33,7 @@ export const MOVE_ERRORS = Object.freeze({
   SUPERKO: "superko",
   GAME_NOT_SCORING: "game_not_scoring",
   EMPTY_POINT: "empty_point",
+  NOTHING_TO_UNDO: "nothing_to_undo",
 });
 
 const VALID_COLORS = new Set([BLACK, WHITE]);
@@ -264,6 +270,7 @@ export class GoEngine {
     this.deadStones = new Set();
     this.lastMove = null;
     this.result = null;
+    this.undoHistory = [];
 
     // Positional superko compares stone arrangements only (not the player to
     // move). Passing is explicitly allowed and does not add a duplicate entry.
@@ -302,6 +309,19 @@ export class GoEngine {
       "positionHistory",
     ];
     for (const field of requiredFields) requireOwnProperty(snapshot, field);
+
+    // Check the bounded snapshot list before validating or copying any of its
+    // nested boards. This makes oversized persisted input fail fast.
+    if (Object.prototype.hasOwnProperty.call(snapshot, "undoHistory")) {
+      if (!Array.isArray(snapshot.undoHistory)) {
+        throw new TypeError("undoHistory must be an array");
+      }
+      if (snapshot.undoHistory.length > UNDO_HISTORY_LIMIT) {
+        throw new RangeError(
+          `undoHistory must contain at most ${UNDO_HISTORY_LIMIT} entries`,
+        );
+      }
+    }
 
     const game = new GoEngine({
       size: snapshot.size,
@@ -405,6 +425,12 @@ export class GoEngine {
       game.result = null;
     }
 
+    game.undoHistory = game.#copyUndoHistory(
+      Object.prototype.hasOwnProperty.call(snapshot, "undoHistory")
+        ? snapshot.undoHistory
+        : [],
+    );
+
     return game;
   }
 
@@ -439,6 +465,268 @@ export class GoEngine {
         row.map((value) => (value === BLACK ? "B" : value === WHITE ? "W" : ".")).join(""),
       )
       .join("/");
+  }
+
+  #undoSnapshot() {
+    return {
+      board: this.getBoard(),
+      currentPlayer: this.currentPlayer,
+      phase: this.phase,
+      consecutivePasses: this.consecutivePasses,
+      captures: { ...this.captures },
+      deadStones: [...this.deadStones].map(parsePointKey),
+      lastMove: copyLastMove(this.lastMove, this.size),
+      result:
+        this.result === null
+          ? null
+          : cloneSerializable(this.result, "result"),
+    };
+  }
+
+  #restoreUndoSnapshot(snapshot) {
+    this.board = copyBoard(snapshot.board);
+    this.currentPlayer = snapshot.currentPlayer;
+    this.phase = snapshot.phase;
+    this.consecutivePasses = snapshot.consecutivePasses;
+    this.captures = { ...snapshot.captures };
+    this.deadStones = new Set(
+      snapshot.deadStones.map(({ row, col }) => pointKey(row, col)),
+    );
+    this.lastMove = copyLastMove(snapshot.lastMove, this.size);
+    this.result =
+      snapshot.result === null
+        ? null
+        : cloneSerializable(snapshot.result, "result");
+  }
+
+  #boardAfterUndoEntry(entry) {
+    const board = copyBoard(entry.before.board);
+    if (entry.move.type === "play") {
+      board[entry.move.row][entry.move.col] = entry.move.color;
+      for (const stone of entry.move.captured) {
+        board[stone.row][stone.col] = EMPTY;
+      }
+    }
+    return board;
+  }
+
+  #copyUndoHistory(history) {
+    if (!Array.isArray(history)) {
+      throw new TypeError("undoHistory must be an array");
+    }
+    if (history.length > UNDO_HISTORY_LIMIT) {
+      throw new RangeError(
+        `undoHistory must contain at most ${UNDO_HISTORY_LIMIT} entries`,
+      );
+    }
+
+    const copied = [];
+    const movePositionHashes = new Set();
+    let previousMove = null;
+    let previousBoardAfterMove = null;
+    let previousCapturesAfterMove = null;
+
+    history.forEach((entry, index) => {
+      requirePlainObject(entry, `undoHistory[${index}]`);
+      requireOwnProperty(entry, "move", `undoHistory[${index}]`);
+      requireOwnProperty(entry, "before", `undoHistory[${index}]`);
+
+      const move = copyLastMove(entry.move, this.size);
+      if (move === null) {
+        throw new TypeError(`undoHistory[${index}].move must not be null`);
+      }
+
+      const before = requirePlainObject(
+        entry.before,
+        `undoHistory[${index}].before`,
+      );
+      for (const field of [
+        "board",
+        "currentPlayer",
+        "phase",
+        "consecutivePasses",
+        "captures",
+        "deadStones",
+        "lastMove",
+        "result",
+      ]) {
+        requireOwnProperty(before, field, `undoHistory[${index}].before`);
+      }
+
+      const board = this.#validateAndCopyBoard(before.board);
+      if (!VALID_COLORS.has(before.currentPlayer)) {
+        throw new TypeError(
+          `Unknown undo-history player color: ${before.currentPlayer}`,
+        );
+      }
+      if (before.phase !== PHASE_PLAY) {
+        throw new TypeError(
+          `undoHistory[${index}].before.phase must be play`,
+        );
+      }
+      if (
+        !Number.isInteger(before.consecutivePasses) ||
+        before.consecutivePasses < 0 ||
+        before.consecutivePasses > 1
+      ) {
+        throw new RangeError(
+          `undoHistory[${index}].before.consecutivePasses must be 0 or 1`,
+        );
+      }
+
+      requirePlainObject(
+        before.captures,
+        `undoHistory[${index}].before.captures`,
+      );
+      const captures = {};
+      for (const color of [BLACK, WHITE]) {
+        requireOwnProperty(
+          before.captures,
+          color,
+          `undoHistory[${index}].before.captures`,
+        );
+        const count = before.captures[color];
+        if (!Number.isInteger(count) || count < 0) {
+          throw new RangeError(
+            `undoHistory[${index}].before.captures.${color} must be a non-negative integer`,
+          );
+        }
+        captures[color] = count;
+      }
+
+      if (!Array.isArray(before.deadStones)) {
+        throw new TypeError(
+          `undoHistory[${index}].before.deadStones must be an array`,
+        );
+      }
+      if (before.deadStones.length > 0) {
+        throw new TypeError(
+          `undoHistory[${index}].before.deadStones must be empty while play is active`,
+        );
+      }
+      if (before.result !== null) {
+        throw new TypeError(
+          `undoHistory[${index}].before.result must be null while play is active`,
+        );
+      }
+
+      const lastMove = copyLastMove(before.lastMove, this.size);
+      if (move.color !== before.currentPlayer) {
+        throw new TypeError(
+          `undoHistory[${index}].move color must match the player to move`,
+        );
+      }
+      if (move.type === "play") {
+        if (board[move.row][move.col] !== EMPTY) {
+          throw new TypeError(
+            `undoHistory[${index}].move point must be empty before the move`,
+          );
+        }
+        const opponent = oppositeColor(move.color);
+        for (const stone of move.captured) {
+          if (board[stone.row][stone.col] !== opponent) {
+            throw new TypeError(
+              `undoHistory[${index}].move captured point does not contain an opponent stone`,
+            );
+          }
+        }
+      }
+
+      if (
+        previousMove !== null &&
+        !sameSerializableValue(lastMove, previousMove)
+      ) {
+        throw new TypeError(
+          `undoHistory[${index}].before.lastMove is inconsistent with the preceding move`,
+        );
+      }
+      if (
+        previousBoardAfterMove !== null &&
+        !sameSerializableValue(board, previousBoardAfterMove)
+      ) {
+        throw new TypeError(
+          `undoHistory[${index}].before.board is inconsistent with the preceding move`,
+        );
+      }
+      if (
+        previousCapturesAfterMove !== null &&
+        !sameSerializableValue(captures, previousCapturesAfterMove)
+      ) {
+        throw new TypeError(
+          `undoHistory[${index}].before.captures is inconsistent with the preceding move`,
+        );
+      }
+
+      const copy = {
+        move,
+        before: {
+          board,
+          currentPlayer: before.currentPlayer,
+          phase: before.phase,
+          consecutivePasses: before.consecutivePasses,
+          captures,
+          deadStones: [],
+          lastMove,
+          result: null,
+        },
+      };
+      const boardAfterMove = this.#boardAfterUndoEntry(copy);
+      const capturesAfterMove = { ...captures };
+      if (move.type === "play") {
+        capturesAfterMove[move.color] += move.captured.length;
+        const hash = this.#positionHash(boardAfterMove);
+        if (!this.positionHistory.has(hash)) {
+          throw new TypeError(
+            `undoHistory[${index}] move position is absent from positionHistory`,
+          );
+        }
+        if (movePositionHashes.has(hash)) {
+          throw new TypeError(
+            `undoHistory[${index}] recreates an earlier move position`,
+          );
+        }
+        movePositionHashes.add(hash);
+      }
+
+      copied.push(copy);
+      previousMove = move;
+      previousBoardAfterMove = boardAfterMove;
+      previousCapturesAfterMove = capturesAfterMove;
+    });
+
+    if (copied.length > 0) {
+      const latest = copied[copied.length - 1];
+      if (!sameSerializableValue(this.lastMove, latest.move)) {
+        throw new TypeError("lastMove is inconsistent with undoHistory");
+      }
+      if (
+        !sameSerializableValue(this.board, this.#boardAfterUndoEntry(latest))
+      ) {
+        throw new TypeError("board is inconsistent with undoHistory");
+      }
+      const expectedCaptures = { ...latest.before.captures };
+      if (latest.move.type === "play") {
+        expectedCaptures[latest.move.color] += latest.move.captured.length;
+      }
+      if (!sameSerializableValue(this.captures, expectedCaptures)) {
+        throw new TypeError("captures are inconsistent with undoHistory");
+      }
+    }
+
+    return copied;
+  }
+
+  #recordUndo(move, before) {
+    this.undoHistory.push({
+      move: copyLastMove(move, this.size),
+      before,
+    });
+    if (this.undoHistory.length > UNDO_HISTORY_LIMIT) {
+      this.undoHistory.splice(
+        0,
+        this.undoHistory.length - UNDO_HISTORY_LIMIT,
+      );
+    }
   }
 
   #validPoint(row, col) {
@@ -556,6 +844,7 @@ export class GoEngine {
       return this.#failure(MOVE_ERRORS.OCCUPIED);
     }
 
+    const undoSnapshot = this.#undoSnapshot();
     const color = this.currentPlayer;
     const opponent = oppositeColor(color);
     const before = copyBoard(this.board);
@@ -596,7 +885,14 @@ export class GoEngine {
     this.captures[color] += captured.length;
     this.consecutivePasses = 0;
     this.currentPlayer = opponent;
-    this.lastMove = { type: "play", color, row, col, captured };
+    this.lastMove = {
+      type: "play",
+      color,
+      row,
+      col,
+      captured: captured.map((stone) => ({ ...stone })),
+    };
+    this.#recordUndo(this.lastMove, undoSnapshot);
 
     return {
       ok: true,
@@ -604,7 +900,7 @@ export class GoEngine {
       color,
       row,
       col,
-      captured,
+      captured: captured.map((stone) => ({ ...stone })),
       nextPlayer: this.currentPlayer,
       phase: this.phase,
     };
@@ -621,11 +917,13 @@ export class GoEngine {
       return this.#failure(MOVE_ERRORS.GAME_NOT_PLAYING);
     }
 
+    const undoSnapshot = this.#undoSnapshot();
     const color = this.currentPlayer;
     this.consecutivePasses += 1;
     this.currentPlayer = oppositeColor(color);
     if (this.consecutivePasses >= 2) this.phase = PHASE_SCORING;
     this.lastMove = { type: "pass", color };
+    this.#recordUndo(this.lastMove, undoSnapshot);
 
     return {
       ok: true,
@@ -639,6 +937,37 @@ export class GoEngine {
 
   passMove() {
     return this.pass();
+  }
+
+  /** Whether at least one successful play or pass can be taken back. */
+  canUndo() {
+    return this.undoHistory.length > 0;
+  }
+
+  /**
+   * Undo the latest successful play or pass and restore the complete state from
+   * immediately before it. Scoring decisions made after the final pass are
+   * discarded together with that pass.
+   */
+  undo() {
+    if (!this.canUndo()) {
+      return this.#failure(MOVE_ERRORS.NOTHING_TO_UNDO);
+    }
+
+    const entry = this.undoHistory.pop();
+    if (entry.move.type === "play") {
+      const movePosition = this.#positionHash(this.#boardAfterUndoEntry(entry));
+      this.positionHistory.delete(movePosition);
+    }
+    this.#restoreUndoSnapshot(entry.before);
+
+    return {
+      ok: true,
+      type: "undo",
+      move: copyLastMove(entry.move, this.size),
+      currentPlayer: this.currentPlayer,
+      phase: this.phase,
+    };
   }
 
   /**
@@ -849,6 +1178,7 @@ export class GoEngine {
     return {
       ...this.getState(),
       positionHistory: [...this.positionHistory],
+      undoHistory: cloneSerializable(this.undoHistory, "undoHistory"),
     };
   }
 

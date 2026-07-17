@@ -135,7 +135,7 @@ export class TorusBoard {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.setAttribute(
       "aria-label",
-      "上下左右均首尾相接的三维环面围棋棋盘。拖动旋转，滚轮或双指缩放。",
+      "上下左右均首尾相接的三维甜甜圈围棋棋盘。拖动旋转，滚轮或双指缩放。",
     );
     this.container.appendChild(this.renderer.domElement);
 

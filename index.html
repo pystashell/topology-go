@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101715" />
     <meta
       name="description"
-      content="3D Baduk：支持竹筒与四边相连的环面棋盘、KataGo AI、在线对局以及平面和三维视图。"
+      content="3D Baduk：支持竹筒与甜甜圈棋盘、KataGo AI、音效、悔棋、在线对局以及平面和三维视图。"
     />
     <title>3D Baduk · 奇异棋盘围棋</title>
   </head>
@@ -22,17 +22,10 @@
             <small>奇异棋盘围棋</small>
           </span>
         </a>
-        <button
-          id="topology-quick-toggle"
-          class="topology-badge"
-          type="button"
-          aria-label="切换为四边连接棋盘"
-          aria-live="polite"
-        >
-          <span id="topology-badge-icon" aria-hidden="true">↔</span>
-          <strong id="topology-badge-text">竹筒</strong>
-          <small id="topology-badge-action">选四边连接</small>
-        </button>
+        <div class="topology-switch" role="group" aria-label="棋盘形状">
+          <button type="button" data-board-topology="cylinder" class="active" aria-pressed="true">竹筒</button>
+          <button type="button" data-board-topology="torus" aria-pressed="false">甜甜圈</button>
+        </div>
       </header>
 
       <main class="game-layout">
@@ -40,7 +33,7 @@
           <div id="flat-scene" class="view-surface" aria-label="可横向滑动的竹筒表面平面展开棋盘" hidden></div>
           <div id="arc-scene" class="view-surface" aria-label="可横向循环滑动的3D弧面棋盘"></div>
           <div id="scene" class="view-surface" aria-label="可旋转的3D竹筒围棋棋盘" hidden></div>
-          <div id="torus-scene" class="view-surface" aria-label="可旋转的3D环面围棋棋盘" hidden></div>
+          <div id="torus-scene" class="view-surface" aria-label="可旋转的3D甜甜圈围棋棋盘" hidden></div>
 
           <div class="view-switch" role="group" aria-label="棋盘视图">
             <button type="button" data-view-mode="flat" aria-pressed="false">
@@ -65,6 +58,10 @@
             <button id="toggle-rotation" class="icon-button" type="button" aria-label="自动旋转" aria-pressed="false">
               <span aria-hidden="true">↻</span>
               <span class="toolbar-label">自动旋转</span>
+            </button>
+            <button id="toggle-sound" class="icon-button" type="button" aria-label="关闭音效" aria-pressed="true">
+              <span id="sound-icon" aria-hidden="true">♪</span>
+              <span id="sound-label" class="toolbar-label">音效开</span>
             </button>
           </div>
           <div class="gesture-hint" aria-hidden="true">
@@ -172,9 +169,22 @@
             </div>
           </section>
 
-          <section id="play-controls" class="primary-actions" aria-label="对局操作">
+          <section id="play-controls" class="primary-actions play-actions" aria-label="对局操作">
             <button id="pass-button" class="primary-button" type="button">停一手</button>
+            <button id="undo-button" class="secondary-button" type="button">悔棋</button>
             <button id="new-game-button" class="secondary-button" type="button">新棋盘</button>
+          </section>
+
+          <section id="undo-request-panel" class="undo-request-panel" aria-live="polite" hidden>
+            <div>
+              <span class="eyebrow">联机悔棋</span>
+              <strong id="undo-request-text">对方申请撤回上一手</strong>
+            </div>
+            <div id="undo-response-actions" class="undo-request-actions">
+              <button id="approve-undo" class="primary-button" type="button">同意</button>
+              <button id="decline-undo" class="secondary-button" type="button">拒绝</button>
+            </div>
+            <button id="cancel-undo-request" class="secondary-button" type="button" hidden>取消申请</button>
           </section>
 
           <section id="scoring-panel" class="scoring-panel" hidden>
@@ -193,7 +203,7 @@
           <section class="settings" aria-labelledby="settings-title">
             <div class="section-heading">
               <h2 id="settings-title">棋盘设置</h2>
-              <span id="board-topology">19 路 · 筒面</span>
+              <span id="board-topology">19 路 · 竹筒</span>
             </div>
 
             <div class="field-group">
@@ -203,7 +213,7 @@
                   竹筒 · 左右连接
                 </button>
                 <button type="button" data-board-topology="torus" aria-pressed="false">
-                  环面 · 四边连接
+                  甜甜圈 · 上下左右连接
                 </button>
               </div>
             </div>
@@ -259,7 +269,7 @@
               <li>同一行最左与最右相邻，同一列最上与最下也相邻。</li>
               <li>每一个棋点都有四个方向，没有边、角和一线。</li>
               <li>平面视图可向上下左右或斜向拖动，改变两个方向的展开起点。</li>
-              <li>立体视图是甜甜圈形环面；内圈格子会比外圈更密，这是三维嵌入造成的视觉形变。</li>
+              <li>立体视图就是甜甜圈；数学上叫环面，内圈格子会比外圈更密。</li>
               <li>禁自杀并采用位置超级劫，提子、连通与点目都跨越四条接缝计算。</li>
               <li>双方连续停一手后进入点目，可先标记死子。</li>
             </ul>
