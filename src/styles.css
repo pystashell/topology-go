@@ -761,6 +761,147 @@ summary:focus-visible {
   font-size: 11px;
 }
 
+.ai-review-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(82, 190, 171, 0.3);
+  border-radius: 11px;
+  background: rgba(34, 79, 70, 0.18);
+}
+
+.ai-review-heading,
+.ai-review-recommendation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ai-review-heading > span:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.ai-review-heading strong {
+  color: #e9f5f1;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.ai-review-model {
+  padding: 4px 7px;
+  border: 1px solid rgba(82, 190, 171, 0.36);
+  border-radius: 999px;
+  color: #99e1d2;
+  background: rgba(42, 118, 104, 0.16);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.ai-review-status,
+.ai-review-disclaimer,
+.ai-review-result p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.ai-review-status.error {
+  color: #ef9b91;
+}
+
+.ai-review-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.ai-review-actions button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 7px 8px;
+  font-size: 10px;
+}
+
+.ai-review-actions button:only-child,
+.ai-review-actions #ai-review-cancel:not([hidden]) {
+  grid-column: 1 / -1;
+}
+
+.ai-review-result {
+  display: grid;
+  gap: 8px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ai-review-result[hidden] {
+  display: none;
+}
+
+.ai-review-recommendation span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.ai-review-recommendation strong {
+  color: #8ee4d3;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-review-candidates {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-review-candidates li {
+  display: grid;
+  grid-template-columns: 17px minmax(38px, auto) 1fr;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #d9e8e3;
+  font-size: 10px;
+}
+
+.ai-review-rank {
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #0d2823;
+  background: #65cdb8;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.ai-review-meter {
+  position: relative;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.ai-review-meter > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #3f9f8d, #83ddcc);
+}
+
+.ai-review-disclaimer {
+  opacity: 0.78;
+}
+
 .replay-panel-footer {
   gap: 12px;
   margin-top: 12px;

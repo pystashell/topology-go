@@ -61,16 +61,7 @@ function applyReplayEvent(game, event, index) {
   return result;
 }
 
-/**
- * Expand a compact replay into render-ready positions.
- *
- * frames[0] is the starting position and every successful play/pass adds one
- * frame. Scoring and resume-play events update the current frame without
- * incrementing the move number, preserving the exact final result while the
- * transport remains expressed in ordinary Go hands.
- * `steps[index]` describes the move from frames[index] to frames[index + 1].
- */
-export function buildReplayFrames(replay) {
+function createReplayGame(replay) {
   requireReplayObject(replay, "replay");
   if (replay.version !== REPLAY_VERSION) {
     throw new TypeError(`Unsupported replay version: ${replay.version}`);
@@ -85,8 +76,20 @@ export function buildReplayFrames(replay) {
   if (!Array.isArray(replay.events)) {
     throw new TypeError("replay.events must be an array");
   }
+  return GoEngine.fromState(replay.base);
+}
 
-  const game = GoEngine.fromState(replay.base);
+/**
+ * Expand a compact replay into render-ready positions.
+ *
+ * frames[0] is the starting position and every successful play/pass adds one
+ * frame. Scoring and resume-play events update the current frame without
+ * incrementing the move number, preserving the exact final result while the
+ * transport remains expressed in ordinary Go hands.
+ * `steps[index]` describes the move from frames[index] to frames[index + 1].
+ */
+export function buildReplayFrames(replay) {
+  const game = createReplayGame(replay);
   const frames = [game.getState()];
   const steps = [];
 
@@ -112,6 +115,36 @@ export function buildReplayFrames(replay) {
   });
 
   return { frames, steps, complete: replay.complete };
+}
+
+/**
+ * Rebuild the authoritative engine snapshot shown at one replay move number.
+ * Unlike a render frame, this includes positional superko history and can be
+ * sent directly to an AI worker. Non-move scoring/resume events that belong to
+ * the requested frame are applied before the snapshot is returned.
+ */
+export function buildReplayStateAtStep(replay, requestedStep) {
+  if (!Number.isSafeInteger(requestedStep) || requestedStep < 0) {
+    throw new RangeError("Replay step must be a non-negative safe integer");
+  }
+
+  const game = createReplayGame(replay);
+  let moveCount = 0;
+
+  for (let eventIndex = 0; eventIndex < replay.events.length; eventIndex += 1) {
+    const event = replay.events[eventIndex];
+    const isMove = ["play", "pass"].includes(event?.type);
+    if (isMove && moveCount >= requestedStep) break;
+    applyReplayEvent(game, event, eventIndex);
+    if (isMove) moveCount += 1;
+  }
+
+  if (moveCount < requestedStep) {
+    throw new RangeError(
+      `Replay step ${requestedStep} exceeds the recorded move count ${moveCount}`,
+    );
+  }
+  return game.exportState({ includeReplay: false });
 }
 
 export default buildReplayFrames;

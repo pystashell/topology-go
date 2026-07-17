@@ -13,7 +13,10 @@ import {
   UNDO_HISTORY_LIMIT,
   WHITE,
 } from "../src/game/goEngine.js";
-import { buildReplayFrames } from "../src/game/replay.js";
+import {
+  buildReplayFrames,
+  buildReplayStateAtStep,
+} from "../src/game/replay.js";
 
 function boardFromRows(rows) {
   return rows.map((row) =>
@@ -231,6 +234,53 @@ test("temporary AI states can omit replay without changing normal persistence", 
   assert.equal(Object.hasOwn(searchState, "replay"), false);
   assert.equal(Object.hasOwn(game.exportState(), "replay"), true);
   assert.deepEqual(GoEngine.fromState(searchState).getState(), game.getState());
+});
+
+test("AI replay states include superko history and match each rendered step", () => {
+  const game = new GoEngine({ size: 5, topology: TOPOLOGY_TORUS });
+  game.play(0, 0);
+  game.play(2, 2);
+  game.play(4, 4);
+
+  const replay = game.getReplayState();
+  const { frames } = buildReplayFrames(replay);
+  for (let step = 0; step < frames.length; step += 1) {
+    const state = buildReplayStateAtStep(replay, step);
+    assert.equal(Object.hasOwn(state, "replay"), false);
+    assert.ok(Array.isArray(state.positionHistory));
+    assert.ok(state.positionHistory.length >= 1);
+    assert.deepEqual(GoEngine.fromState(state).getState(), frames[step]);
+  }
+});
+
+test("AI replay states include non-move events attached to a timeline frame", () => {
+  const game = new GoEngine({
+    size: 5,
+    initialBoard: boardFromRows([
+      "B....",
+      ".....",
+      ".....",
+      ".....",
+      ".....",
+    ]),
+  });
+  game.pass();
+  game.pass();
+  game.toggleDead(0, 0);
+  game.resumePlay(WHITE);
+  game.play(2, 2);
+
+  const replay = game.getReplayState();
+  const state = buildReplayStateAtStep(replay, 2);
+  assert.equal(state.phase, PHASE_PLAY);
+  assert.equal(state.currentPlayer, WHITE);
+  assert.deepEqual(state.deadStones, []);
+  assert.deepEqual(
+    GoEngine.fromState(state).getState(),
+    buildReplayFrames(replay).frames[2],
+  );
+  assert.throws(() => buildReplayStateAtStep(replay, 4), RangeError);
+  assert.throws(() => buildReplayStateAtStep(replay, -1), RangeError);
 });
 
 test("legacy saves start a partial replay at the restored current position", () => {

@@ -206,6 +206,39 @@
               <button id="replay-last" class="secondary-button" type="button" aria-label="跳到结尾" title="跳到结尾">›|</button>
             </div>
 
+            <section id="ai-review-panel" class="ai-review-panel" aria-label="KataGo AI 复盘">
+              <div class="ai-review-heading">
+                <span>
+                  <span class="eyebrow">AI 复盘</span>
+                  <strong>KataGo 棋局参考</strong>
+                </span>
+                <span class="ai-review-model">b10 · 本机</span>
+              </div>
+
+              <p id="ai-review-status" class="ai-review-status" aria-live="polite">
+                停在任意一手，查看 AI 在当时更偏好的下法。
+              </p>
+
+              <div class="ai-review-actions">
+                <button id="ai-review-current" class="primary-button" type="button">分析当前局面</button>
+                <button id="ai-review-all" class="secondary-button" type="button">快速分析整局</button>
+                <button id="ai-review-cancel" class="secondary-button" type="button" hidden>停止分析</button>
+              </div>
+
+              <div id="ai-review-result" class="ai-review-result" hidden>
+                <div class="ai-review-recommendation">
+                  <span>AI 首选下一手</span>
+                  <strong id="ai-review-move">—</strong>
+                </div>
+                <p id="ai-review-comparison"></p>
+                <ol id="ai-review-candidates" class="ai-review-candidates"></ol>
+              </div>
+
+              <p class="ai-review-disclaimer">
+                短搜索仅供复盘参考；“搜索估值”不是官方 KataGo 胜率，也不直接判定好棋或坏棋。
+              </p>
+            </section>
+
             <div class="replay-panel-footer">
               <label class="replay-speed-label" for="replay-speed">
                 <span>播放速度</span>

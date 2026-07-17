@@ -11,7 +11,15 @@ import {
   TOPOLOGY_CYLINDER,
   TOPOLOGY_TORUS,
 } from "./game/goEngine.js";
-import { buildReplayFrames } from "./game/replay.js";
+import {
+  buildReplayFrames,
+  buildReplayStateAtStep,
+} from "./game/replay.js";
+import {
+  candidateVisitShare,
+  compareReviewMove,
+  topReviewCandidates,
+} from "./ai/replayReview.js";
 import { CylinderBoard } from "./view/CylinderBoard.js";
 import { FlatBoard } from "./view/FlatBoard.js";
 import { ArcBoard } from "./view/ArcBoard.js";
@@ -54,6 +62,14 @@ const elements = {
   replayLast: $("#replay-last"),
   replaySpeed: $("#replay-speed"),
   replayExit: $("#replay-exit"),
+  aiReviewStatus: $("#ai-review-status"),
+  aiReviewCurrent: $("#ai-review-current"),
+  aiReviewAll: $("#ai-review-all"),
+  aiReviewCancel: $("#ai-review-cancel"),
+  aiReviewResult: $("#ai-review-result"),
+  aiReviewMove: $("#ai-review-move"),
+  aiReviewComparison: $("#ai-review-comparison"),
+  aiReviewCandidates: $("#ai-review-candidates"),
   undoRequestPanel: $("#undo-request-panel"),
   undoRequestText: $("#undo-request-text"),
   undoResponseActions: $("#undo-response-actions"),
@@ -161,6 +177,9 @@ let aiWorker = null;
 let aiRequestId = 0;
 let replaySession = null;
 let replayTimer = null;
+let reviewWorker = null;
+let reviewRequestId = 0;
+let reviewActive = null;
 
 const PLAYER_NAME_KEY = "bamboo-baduk-player-name";
 const SOUND_ENABLED_KEY = "3d-baduk-sound-enabled";
@@ -185,6 +204,16 @@ const KATAGO_AI = Object.freeze({
 });
 
 const REPLAY_INTERVAL_MS = 900;
+const AI_REVIEW_CURRENT = Object.freeze({
+  timeMs: 1_200,
+  maxIterations: 700,
+  rolloutLimit: 14,
+});
+const AI_REVIEW_BATCH = Object.freeze({
+  timeMs: 280,
+  maxIterations: 180,
+  rolloutLimit: 7,
+});
 
 function colorName(color) {
   return color === BLACK ? "黑方" : "白方";
@@ -260,6 +289,215 @@ function replayEventCount(source = replaySource()) {
   return Array.isArray(source?.events)
     ? source.events.filter((event) => ["play", "pass"].includes(event?.type)).length
     : 0;
+}
+
+function formatReviewMove(move, size = game?.size ?? 19) {
+  if (move?.type === "pass") return "停一手";
+  if (move?.type !== "play") return "—";
+  const letter = COORDINATE_LETTERS[move.col] || String(move.col + 1);
+  return `${letter}${size - move.row}`;
+}
+
+function reviewStageText(active = reviewActive) {
+  if (!active) return "";
+  const prefix = active.mode === "batch" && replaySession?.analysisBatch
+    ? `整局分析 ${replaySession.analysisBatch.completed} / ${replaySession.analysisBatch.total} · 第 ${active.step} 手 · `
+    : `第 ${active.step} 手 · `;
+  if (active.stage === "loading_model") {
+    return `${prefix}首次载入 KataGo b10 模型（约 11 MB）…`;
+  }
+  if (active.stage === "neural_inference") {
+    return `${prefix}神经网络正在观察局面…`;
+  }
+  if (active.stage === "searching") {
+    return `${prefix}正在按${topologyName(replaySession?.frames?.[active.step]?.topology)}规则短搜索…`;
+  }
+  return `${prefix}正在准备分析…`;
+}
+
+function terminateReviewWorker() {
+  reviewWorker?.terminate();
+  reviewWorker = null;
+}
+
+function cancelReplayAIReview({ terminate = false, announce = false } = {}) {
+  const wasRunning = Boolean(reviewActive || replaySession?.analysisBatch);
+  if (reviewActive && reviewWorker) {
+    reviewWorker.postMessage({ type: "cancel", id: reviewActive.id });
+  }
+  reviewRequestId += 1;
+  reviewActive = null;
+  if (replaySession) {
+    replaySession.analysisBatch = null;
+    if (announce && wasRunning) replaySession.analysisMessage = "AI 分析已停止，已完成的结果仍然保留。";
+  }
+  if (terminate) terminateReviewWorker();
+}
+
+function handleReviewWorkerMessage(event) {
+  const message = event.data ?? {};
+  if (!reviewActive || message.id !== reviewActive.id) return;
+
+  if (message.type === "status") {
+    reviewActive.stage = message.stage;
+    reviewActive.backend = message.backend ?? reviewActive.backend;
+    syncAIReviewUI();
+    return;
+  }
+
+  const completed = reviewActive;
+  reviewActive = null;
+  if (!replaySession) return;
+
+  if (message.type === "result") {
+    replaySession.analysisByStep.set(completed.step, {
+      move: cloneSerializable(message.move),
+      stats: cloneSerializable(message.stats ?? {}),
+      mode: completed.mode,
+    });
+    replaySession.analysisMessage = "";
+
+    if (completed.mode === "batch" && replaySession.analysisBatch) {
+      const completedVisibleStep = replaySession.index === completed.step;
+      replaySession.analysisBatch.completed += 1;
+      startNextBatchReview();
+      if (completedVisibleStep && replaySession) updateUI();
+    } else if (replaySession.index === completed.step) {
+      updateUI();
+    } else {
+      syncAIReviewUI();
+    }
+    return;
+  }
+
+  if (message.code === "AI_SEARCH_CANCELLED") {
+    syncAIReviewUI();
+    return;
+  }
+
+  replaySession.analysisBatch = null;
+  replaySession.analysisMessage = `AI 复盘暂时失败：${message.message || "分析线程返回错误"}`;
+  replaySession.analysisError = true;
+  syncAIReviewUI();
+}
+
+function handleReviewWorkerError(event) {
+  if (!reviewActive) return;
+  reviewActive = null;
+  terminateReviewWorker();
+  if (!replaySession) return;
+  replaySession.analysisBatch = null;
+  replaySession.analysisMessage = `AI 复盘线程没有正常启动：${event.message || "未知错误"}`;
+  replaySession.analysisError = true;
+  syncAIReviewUI();
+}
+
+function ensureReviewWorker() {
+  if (reviewWorker) return reviewWorker;
+  const worker = new Worker(new URL("./ai/katagoWorker.js", import.meta.url), {
+    type: "module",
+  });
+  reviewWorker = worker;
+  worker.addEventListener("message", handleReviewWorkerMessage);
+  worker.addEventListener("error", handleReviewWorkerError);
+  return worker;
+}
+
+function startReviewAtStep(step, mode) {
+  if (!replaySession) return false;
+  const frame = replaySession.frames[step];
+  if (frame?.phase !== PHASE_PLAY) return false;
+  if (typeof Worker !== "function") {
+    replaySession.analysisBatch = null;
+    replaySession.analysisMessage = "当前浏览器不支持后台 AI 复盘。";
+    replaySession.analysisError = true;
+    syncAIReviewUI();
+    return false;
+  }
+
+  let state;
+  let worker;
+  try {
+    state = buildReplayStateAtStep(replaySession.source, step);
+    worker = ensureReviewWorker();
+  } catch (error) {
+    replaySession.analysisBatch = null;
+    replaySession.analysisMessage = `无法重建第 ${step} 手：${error.message}`;
+    replaySession.analysisError = true;
+    syncAIReviewUI();
+    return false;
+  }
+
+  const settings = mode === "batch" ? AI_REVIEW_BATCH : AI_REVIEW_CURRENT;
+  const id = ++reviewRequestId;
+  reviewActive = { id, step, mode, stage: "preparing" };
+  replaySession.analysisError = false;
+  worker.postMessage({
+    type: "think",
+    id,
+    state,
+    options: {
+      difficulty: "hard",
+      timeLimitMs: settings.timeMs,
+      maxIterations: settings.maxIterations,
+      rolloutLimit: Math.min(settings.rolloutLimit, frame.size * frame.size * 2),
+    },
+  });
+  syncAIReviewUI();
+  return true;
+}
+
+function startNextBatchReview() {
+  const batch = replaySession?.analysisBatch;
+  if (!batch) return;
+  while (batch.cursor < batch.steps.length) {
+    const step = batch.steps[batch.cursor];
+    batch.cursor += 1;
+    if (replaySession.analysisByStep.has(step)) {
+      batch.completed += 1;
+      continue;
+    }
+    if (startReviewAtStep(step, "batch")) return;
+    return;
+  }
+
+  replaySession.analysisBatch = null;
+  replaySession.analysisMessage = `整局快速分析完成：共分析 ${batch.total} 个实战局面。`;
+  replaySession.analysisError = false;
+  updateUI();
+}
+
+function analyzeCurrentReplayStep() {
+  if (!replaySession) return;
+  stopReplayPlayback();
+  cancelReplayAIReview();
+  replaySession.analysisMessage = "";
+  replaySession.analysisError = false;
+  startReviewAtStep(replaySession.index, "current");
+}
+
+function analyzeWholeReplay() {
+  if (!replaySession) return;
+  stopReplayPlayback();
+  cancelReplayAIReview();
+  const steps = replaySession.steps
+    .map((_, index) => index)
+    .filter((index) => replaySession.frames[index]?.phase === PHASE_PLAY);
+  if (steps.length === 0) {
+    replaySession.analysisMessage = "这份棋谱里没有可以分析的行棋局面。";
+    replaySession.analysisError = true;
+    syncAIReviewUI();
+    return;
+  }
+  replaySession.analysisBatch = {
+    steps,
+    cursor: 0,
+    completed: 0,
+    total: steps.length,
+  };
+  replaySession.analysisMessage = "";
+  replaySession.analysisError = false;
+  startNextBatchReview();
 }
 
 function clearReplayTimer() {
@@ -344,16 +582,22 @@ function enterReplay() {
   }
 
   try {
+    if (aiThinking) cancelAIThinking();
     const replay = buildReplayFrames(cloneSerializable(source));
     if (!Array.isArray(replay.frames) || replay.frames.length < 2) {
       throw new TypeError("棋谱中没有可播放的棋步");
     }
     replaySession = {
+      source: cloneSerializable(source),
       frames: replay.frames,
       steps: replay.steps,
       complete: replay.complete !== false,
       index: 0,
       playing: false,
+      analysisByStep: new Map(),
+      analysisBatch: null,
+      analysisMessage: "",
+      analysisError: false,
     };
     elements.coordinateHint.textContent = "";
     updateUI();
@@ -361,16 +605,19 @@ function enterReplay() {
   } catch (error) {
     console.error("Unable to start replay", error);
     setMessage("这份棋谱暂时无法复盘，请继续当前对局或建立新棋盘。", true);
+    maybeStartAITurn();
   }
 }
 
 function exitReplay({ announce = true } = {}) {
   if (!isReplaying()) return;
   clearReplayTimer();
+  cancelReplayAIReview({ terminate: true });
   replaySession = null;
   if (announce) setMessage("已退出复盘，回到当前棋局。");
   updateUI();
   elements.replayButton.focus({ preventScroll: true });
+  if (announce) maybeStartAITurn();
 }
 
 function hasOnlineSession() {
@@ -1285,8 +1532,12 @@ function updateScoreUI(score) {
   elements.scoreBreakdown.textContent = scoreBreakdown(score);
 }
 
-function renderBoardPosition(state, lastMove = state.lastMove) {
-  const viewState = { ...state, lastMove };
+function renderBoardPosition(
+  state,
+  lastMove = state.lastMove,
+  analysisMove = null,
+) {
+  const viewState = { ...state, lastMove, analysisMove };
   cylinderView?.setPosition(viewState);
   torusView?.setPosition(viewState);
   flatView?.setPosition(viewState);
@@ -1300,6 +1551,93 @@ function syncReplayEntryAvailability() {
   elements.replayButton.disabled = !reviewing && replayEventCount() === 0;
 }
 
+function syncAIReviewUI() {
+  if (!replaySession) return;
+  const frame = replaySession.frames[replaySession.index];
+  const analysis = replaySession.analysisByStep.get(replaySession.index);
+  const running = Boolean(reviewActive);
+  const canAnalyzeCurrent = frame?.phase === PHASE_PLAY;
+
+  elements.aiReviewCurrent.hidden = running;
+  elements.aiReviewAll.hidden = running;
+  elements.aiReviewCancel.hidden = !running;
+  elements.aiReviewCurrent.disabled = !canAnalyzeCurrent;
+  elements.aiReviewAll.disabled = replaySession.steps.length === 0;
+  elements.aiReviewCurrent.textContent = analysis
+    ? "重新深入分析"
+    : "分析当前局面";
+  elements.aiReviewAll.textContent = replaySession.analysisByStep.size > 0
+    ? "补齐整局分析"
+    : "快速分析整局";
+
+  let status = "停在任意一手，查看 AI 在当时更偏好的下法。";
+  if (running) {
+    status = reviewStageText();
+  } else if (replaySession.analysisMessage) {
+    status = replaySession.analysisMessage;
+  } else if (analysis) {
+    const detail = [
+      analysis.stats?.backend?.toUpperCase?.(),
+      Number.isFinite(analysis.stats?.iterations)
+        ? `搜索 ${analysis.stats.iterations} 次`
+        : null,
+    ].filter(Boolean).join(" · ");
+    status = `第 ${replaySession.index} 手已有 AI 参考${detail ? ` · ${detail}` : ""}。`;
+  } else if (!canAnalyzeCurrent) {
+    status = "当前时间点已经进入点目或终局，AI 不再推荐落子。";
+  }
+  elements.aiReviewStatus.textContent = status;
+  elements.aiReviewStatus.classList.toggle(
+    "error",
+    !running && replaySession.analysisError,
+  );
+
+  elements.aiReviewResult.hidden = !analysis;
+  elements.aiReviewCandidates.replaceChildren();
+  if (!analysis) return;
+
+  const actualMove = replaySession.steps[replaySession.index] ?? null;
+  const candidates = Array.isArray(analysis.stats?.candidates)
+    ? analysis.stats.candidates
+    : [];
+  const comparison = compareReviewMove(actualMove, analysis.move, candidates);
+  elements.aiReviewMove.textContent = formatReviewMove(analysis.move, frame.size);
+
+  let comparisonText;
+  if (comparison.kind === "match") {
+    comparisonText = `实战 ${formatReviewMove(actualMove, frame.size)} 与 AI 首选一致。`;
+  } else if (comparison.kind === "candidate") {
+    comparisonText = `实战 ${formatReviewMove(actualMove, frame.size)} 是本次搜索候选第 ${comparison.rank}。`;
+  } else if (comparison.kind === "outside") {
+    comparisonText = `实战 ${formatReviewMove(actualMove, frame.size)} 未进入本次 ${comparison.candidateCount} 个已搜索候选；这不等于它一定是坏棋。`;
+  } else {
+    comparisonText = "这是棋谱当前末尾，没有实战下一手可比较。";
+  }
+  if (Number.isFinite(analysis.stats?.winRate)) {
+    comparisonText += ` 首选搜索估值 ${Math.round(analysis.stats.winRate * 100)}%（当前行棋方视角）。`;
+  }
+  elements.aiReviewComparison.textContent = comparisonText;
+
+  topReviewCandidates(analysis.stats, 3, analysis.move).forEach((candidate, index) => {
+    const share = candidateVisitShare(candidate, candidates);
+    const percent = Math.round(share * 100);
+    const item = document.createElement("li");
+    const rank = document.createElement("span");
+    rank.className = "ai-review-rank";
+    rank.textContent = String(index + 1);
+    const label = document.createElement("span");
+    label.textContent = `${formatReviewMove(candidate.move, frame.size)} · ${percent}%`;
+    const meter = document.createElement("span");
+    meter.className = "ai-review-meter";
+    meter.setAttribute("aria-label", `搜索访问占比 ${percent}%`);
+    const fill = document.createElement("span");
+    fill.style.width = `${percent}%`;
+    meter.appendChild(fill);
+    item.append(rank, label, meter);
+    elements.aiReviewCandidates.appendChild(item);
+  });
+}
+
 function updateReplayUI() {
   const frame = replaySession.frames[replaySession.index];
   const lastIndex = replaySession.frames.length - 1;
@@ -1308,7 +1646,8 @@ function updateReplayUI() {
   const finishedAtEnd = atRecordedEnd && frame.phase === PHASE_FINISHED;
   const scoringAtEnd = atRecordedEnd && frame.phase === PHASE_SCORING;
 
-  renderBoardPosition(frame, move);
+  const analysis = replaySession.analysisByStep.get(replaySession.index);
+  renderBoardPosition(frame, move, analysis?.move ?? null);
   elements.blackCaptures.textContent = String(frame.captures.black);
   elements.whiteCaptures.textContent = String(frame.captures.white);
   elements.boardTopology.textContent =
@@ -1348,6 +1687,7 @@ function updateReplayUI() {
   elements.replayPlay.disabled = lastIndex === 0;
   setReplayPlaying(replaySession.playing && replaySession.index < lastIndex);
   elements.message.setAttribute("aria-live", replaySession.playing ? "off" : "polite");
+  syncAIReviewUI();
 
   updateRoomUI();
   const availableViewCopy = frame.topology === TOPOLOGY_TORUS
@@ -1601,6 +1941,12 @@ elements.replaySlider.addEventListener("input", () => {
 });
 elements.replaySpeed.addEventListener("change", () => {
   if (replaySession?.playing) scheduleReplayTick();
+});
+elements.aiReviewCurrent.addEventListener("click", analyzeCurrentReplayStep);
+elements.aiReviewAll.addEventListener("click", analyzeWholeReplay);
+elements.aiReviewCancel.addEventListener("click", () => {
+  cancelReplayAIReview({ announce: true });
+  syncAIReviewUI();
 });
 
 elements.passButton.addEventListener("click", () => {

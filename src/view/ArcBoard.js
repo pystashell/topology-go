@@ -101,6 +101,7 @@ export class ArcBoard {
     this.phase = "play";
     this.currentPlayer = "black";
     this.lastMove = null;
+    this.analysisMove = null;
     this.deadKeys = new Set();
     this.offsetColumns = 0;
     this.pointerState = null;
@@ -198,6 +199,7 @@ export class ArcBoard {
     this.currentPlayer = "black";
     this.phase = "play";
     this.lastMove = null;
+    this.analysisMove = null;
     this.deadKeys.clear();
     this.offsetColumns = 0;
     this.pointerState = null;
@@ -461,9 +463,10 @@ export class ArcBoard {
   }
 
   positionMarker(marker, row, col) {
-    const frame = this.frame(row, col, 0.27);
+    const frame = this.frame(row, col, marker.userData.surfaceOffset ?? 0.27);
     marker.position.copy(frame.position);
     marker.quaternion.setFromUnitVectors(LOCAL_FORWARD, frame.normal);
+    if (marker.userData.twist) marker.rotateZ(marker.userData.twist);
   }
 
   updateContentLayout() {
@@ -505,11 +508,19 @@ export class ArcBoard {
     );
   }
 
-  setPosition({ board, currentPlayer, phase, lastMove, deadStones = [] }) {
+  setPosition({
+    board,
+    currentPlayer,
+    phase,
+    lastMove,
+    deadStones = [],
+    analysisMove = null,
+  }) {
     this.board = board;
     this.currentPlayer = currentPlayer;
     this.phase = phase;
     this.lastMove = lastMove;
+    this.analysisMove = analysisMove?.type === "play" ? analysisMove : null;
     this.deadKeys = new Set(deadStones.map(({ row, col }) => `${row},${col}`));
 
     while (this.stonesGroup.children.length > 0) {
@@ -547,6 +558,18 @@ export class ArcBoard {
     if (lastMove?.type === "play" && board[lastMove.row]?.[lastMove.col]) {
       this.addLastMoveMarker(lastMove.row, lastMove.col);
     }
+    if (
+      this.analysisMove &&
+      Number.isInteger(this.analysisMove.row) &&
+      Number.isInteger(this.analysisMove.col) &&
+      this.analysisMove.row >= 0 &&
+      this.analysisMove.row < this.size &&
+      this.analysisMove.col >= 0 &&
+      this.analysisMove.col < this.size &&
+      !board[this.analysisMove.row]?.[this.analysisMove.col]
+    ) {
+      this.addAnalysisMarker(this.analysisMove.row, this.analysisMove.col);
+    }
     this.refreshHover();
   }
 
@@ -570,6 +593,40 @@ export class ArcBoard {
     marker.userData.col = col;
     this.positionMarker(marker, row, col);
     this.markersGroup.add(marker);
+  }
+
+  addAnalysisMarker(row, col) {
+    const diamond = new THREE.Mesh(
+      new THREE.CircleGeometry(0.27, 4),
+      new THREE.MeshBasicMaterial({
+        color: 0x38e4c5,
+        transparent: true,
+        opacity: 0.82,
+        side: THREE.DoubleSide,
+        depthTest: true,
+        depthWrite: false,
+      }),
+    );
+    diamond.userData.row = row;
+    diamond.userData.col = col;
+    diamond.userData.surfaceOffset = 0.07;
+    diamond.userData.twist = Math.PI / 4;
+    this.positionMarker(diamond, row, col);
+    this.markersGroup.add(diamond);
+
+    const center = new THREE.Mesh(
+      new THREE.CircleGeometry(0.065, 20),
+      new THREE.MeshBasicMaterial({
+        color: 0xf3cf78,
+        side: THREE.DoubleSide,
+        depthTest: true,
+      }),
+    );
+    center.userData.row = row;
+    center.userData.col = col;
+    center.userData.surfaceOffset = 0.078;
+    this.positionMarker(center, row, col);
+    this.markersGroup.add(center);
   }
 
   raycastPoint(event) {

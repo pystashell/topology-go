@@ -40,6 +40,7 @@ export class FlatBoard {
     this.currentPlayer = "black";
     this.phase = "play";
     this.lastMove = null;
+    this.analysisMove = null;
     this.deadKeys = new Set();
     this.hoveredPoint = null;
     this.offsetColumns = 0;
@@ -92,6 +93,7 @@ export class FlatBoard {
     this.currentPlayer = "black";
     this.phase = "play";
     this.lastMove = null;
+    this.analysisMove = null;
     this.deadKeys.clear();
     this.offsetColumns = 0;
     this.offsetRows = 0;
@@ -103,11 +105,19 @@ export class FlatBoard {
     this.notifyPan();
   }
 
-  setPosition({ board, currentPlayer, phase, lastMove, deadStones = [] }) {
+  setPosition({
+    board,
+    currentPlayer,
+    phase,
+    lastMove,
+    deadStones = [],
+    analysisMove = null,
+  }) {
     this.board = board;
     this.currentPlayer = currentPlayer;
     this.phase = phase;
     this.lastMove = lastMove;
+    this.analysisMove = analysisMove?.type === "play" ? analysisMove : null;
     this.deadKeys = new Set(deadStones.map(({ row, col }) => `${row},${col}`));
     this.draw();
   }
@@ -416,6 +426,7 @@ export class FlatBoard {
     this.drawStarPoints(context);
     this.drawStones(context);
     this.drawHover(context);
+    this.drawAnalysisMove(context);
     this.drawSeam(context);
     this.drawColumnLabels(context);
   }
@@ -627,6 +638,57 @@ export class FlatBoard {
       context.stroke();
       context.restore();
     }
+  }
+
+  drawAnalysisMove(context) {
+    const move = this.analysisMove;
+    if (
+      move?.type !== "play" ||
+      !Number.isInteger(move.row) ||
+      !Number.isInteger(move.col) ||
+      move.row < 0 ||
+      move.row >= this.size ||
+      move.col < 0 ||
+      move.col >= this.size ||
+      this.board?.[move.row]?.[move.col]
+    ) {
+      return;
+    }
+
+    const radius = clamp(this.cell * 0.29, 5, 14);
+    context.save();
+    context.beginPath();
+    context.rect(this.frameX, this.frameY, this.boardPixels, this.boardPixels);
+    context.clip();
+    this.forEachWrappedPoint(
+      this.pointX(move.col),
+      this.pointY(move.row),
+      radius,
+      (x, y) => {
+        context.save();
+        context.shadowColor = "rgba(42, 238, 202, 0.85)";
+        context.shadowBlur = Math.max(5, radius * 0.7);
+        context.fillStyle = "rgba(38, 214, 184, 0.68)";
+        context.strokeStyle = "#72ffe2";
+        context.lineWidth = Math.max(1.5, radius * 0.14);
+        context.beginPath();
+        context.moveTo(x, y - radius);
+        context.lineTo(x + radius, y);
+        context.lineTo(x, y + radius);
+        context.lineTo(x - radius, y);
+        context.closePath();
+        context.fill();
+        context.stroke();
+
+        context.shadowBlur = 0;
+        context.fillStyle = "#f3cf78";
+        context.beginPath();
+        context.arc(x, y, radius * 0.22, 0, TAU);
+        context.fill();
+        context.restore();
+      },
+    );
+    context.restore();
   }
 
   drawHover(context) {

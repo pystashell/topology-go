@@ -110,6 +110,7 @@ export class TorusBoard {
     this.phase = "play";
     this.currentPlayer = "black";
     this.lastMove = null;
+    this.analysisMove = null;
     this.deadKeys = new Set();
     this.pointerStart = null;
     this.hoveredPoint = null;
@@ -202,6 +203,7 @@ export class TorusBoard {
     this.currentPlayer = "black";
     this.phase = "play";
     this.lastMove = null;
+    this.analysisMove = null;
     this.deadKeys.clear();
     this.hoveredPoint = null;
     this.pointerStart = null;
@@ -379,11 +381,19 @@ export class TorusBoard {
     };
   }
 
-  setPosition({ board, currentPlayer, phase, lastMove, deadStones = [] }) {
+  setPosition({
+    board,
+    currentPlayer,
+    phase,
+    lastMove,
+    deadStones = [],
+    analysisMove = null,
+  }) {
     this.board = board;
     this.currentPlayer = currentPlayer;
     this.phase = phase;
     this.lastMove = lastMove;
+    this.analysisMove = analysisMove?.type === "play" ? analysisMove : null;
     this.deadKeys = new Set(deadStones.map(({ row, col }) => `${row},${col}`));
 
     while (this.stonesGroup.children.length > 0) {
@@ -419,6 +429,18 @@ export class TorusBoard {
     if (lastMove?.type === "play" && board[lastMove.row]?.[lastMove.col]) {
       this.addLastMoveMarker(lastMove.row, lastMove.col);
     }
+    if (
+      this.analysisMove &&
+      Number.isInteger(this.analysisMove.row) &&
+      Number.isInteger(this.analysisMove.col) &&
+      this.analysisMove.row >= 0 &&
+      this.analysisMove.row < this.size &&
+      this.analysisMove.col >= 0 &&
+      this.analysisMove.col < this.size &&
+      !board[this.analysisMove.row]?.[this.analysisMove.col]
+    ) {
+      this.addAnalysisMarker(this.analysisMove.row, this.analysisMove.col);
+    }
     this.refreshHover();
   }
 
@@ -442,6 +464,38 @@ export class TorusBoard {
     marker.position.copy(frame.position);
     marker.quaternion.setFromUnitVectors(LOCAL_FORWARD, frame.normal);
     this.markersGroup.add(marker);
+  }
+
+  addAnalysisMarker(row, col) {
+    const diamondFrame = this.frame(row, col, 0.068);
+    const diamond = new THREE.Mesh(
+      new THREE.CircleGeometry(0.25, 4),
+      new THREE.MeshBasicMaterial({
+        color: 0x38e4c5,
+        transparent: true,
+        opacity: 0.82,
+        side: THREE.DoubleSide,
+        depthTest: true,
+        depthWrite: false,
+      }),
+    );
+    diamond.position.copy(diamondFrame.position);
+    diamond.quaternion.setFromUnitVectors(LOCAL_FORWARD, diamondFrame.normal);
+    diamond.rotateZ(Math.PI / 4);
+    this.markersGroup.add(diamond);
+
+    const centerFrame = this.frame(row, col, 0.076);
+    const center = new THREE.Mesh(
+      new THREE.CircleGeometry(0.062, 20),
+      new THREE.MeshBasicMaterial({
+        color: 0xf3cf78,
+        side: THREE.DoubleSide,
+        depthTest: true,
+      }),
+    );
+    center.position.copy(centerFrame.position);
+    center.quaternion.setFromUnitVectors(LOCAL_FORWARD, centerFrame.normal);
+    this.markersGroup.add(center);
   }
 
   raycastPoint(event) {
