@@ -134,7 +134,7 @@
                 </div>
               </div>
               <div class="room-actions">
-                <button id="change-ai-settings" class="secondary-button" type="button">更换执子</button>
+                <button id="change-ai-settings" class="secondary-button" type="button">更换 AI 设置</button>
                 <button id="leave-ai" class="text-button" type="button">退出 AI</button>
               </div>
               <p id="ai-hint" class="room-hint">轮到你落子。</p>
@@ -212,8 +212,16 @@
                   <span class="eyebrow">AI 复盘</span>
                   <strong>KataGo 棋局参考</strong>
                 </span>
-                <span class="ai-review-model">b10 · 本机</span>
+                <label class="ai-review-model" for="ai-review-model">
+                  <span>分析模型</span>
+                  <select id="ai-review-model" aria-describedby="ai-review-model-note">
+                    <option value="b10">b10 快速（段位未测）</option>
+                    <option value="b18">b18 增强（高耗资源 · 段位未测）</option>
+                  </select>
+                </label>
               </div>
+
+              <p id="ai-review-model-note" class="ai-review-model-note"></p>
 
               <p id="ai-review-status" class="ai-review-status" aria-live="polite">
                 停在任意一手，查看 AI 在当时更偏好的下法。
@@ -351,6 +359,12 @@
               <li>双方连续停一手后进入点目，可先标记死子。</li>
             </ul>
           </details>
+
+          <p class="legal-links">
+            <a href="/KATAGO_NETWORK_LICENSE.txt" target="_blank" rel="license noopener">
+              KataGo 模型版权与许可
+            </a>
+          </p>
         </aside>
       </main>
     </div>
@@ -392,7 +406,21 @@
       <form id="ai-form">
         <span class="eyebrow">本机 AI 对手</span>
         <h2>和 KataGo 下一盘</h2>
-        <p>KataGo b10 会在浏览器后台观察全盘，再按当前棋盘的接缝规则搜索落点。无需账号或第三方 API。</p>
+        <p>模型会在浏览器后台观察全盘，再按当前棋盘的接缝规则搜索落点。无需账号或第三方 API，服务器不承担推理。</p>
+
+        <label class="dialog-field" for="ai-model">
+          <span>AI 模型</span>
+          <select id="ai-model" aria-describedby="ai-model-warning">
+            <option value="b10">b10 快速（特殊棋盘段位未测）</option>
+            <option value="b18">b18 增强（高耗资源 · 段位未测）</option>
+          </select>
+        </label>
+
+        <div id="ai-model-warning" class="ai-model-warning" role="status">
+          <strong id="ai-model-warning-title"></strong>
+          <span id="ai-model-warning-resource"></span>
+          <span id="ai-model-warning-strength"></span>
+        </div>
 
         <label class="dialog-field" for="ai-human-color">
           <span>你执哪一方</span>
@@ -402,7 +430,7 @@
           </select>
         </label>
 
-        <p class="ai-level-note">首次使用会下载约 11 MB 模型；同一盘棋会持续复用，不会每手重新下载。</p>
+        <p class="ai-level-note">模型会被浏览器缓存，不会每手重新下载。官方普通围棋网络达到职业级以上，但竹筒与甜甜圈棋力无法诚实换算成人类几段。</p>
         <div class="dialog-actions">
           <button id="cancel-ai" class="secondary-button" type="button">取消</button>
           <button id="start-ai" class="primary-button" type="submit">开始对局</button>

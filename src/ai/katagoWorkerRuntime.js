@@ -51,6 +51,7 @@ export function attachKataGoWorkerRuntime(
       const neural = await neuralPolicy({
         scope,
         id: message.id,
+        modelId: message.modelId,
         state: message.state,
         signal: controller.signal,
         postStatus: (stage, detail) => postStatus(message.id, stage, detail),
@@ -75,6 +76,7 @@ export function attachKataGoWorkerRuntime(
         stats: {
           ...result.stats,
           engine: "katago-hybrid",
+          modelId: neural.modelId,
           modelName: neural.modelName,
           backend: neural.backend,
           modelBytes: neural.compressedBytes,

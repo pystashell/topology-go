@@ -20,6 +20,12 @@ import {
   compareReviewMove,
   topReviewCandidates,
 } from "./ai/replayReview.js";
+import {
+  DEFAULT_AI_MODEL_ID,
+  formatModelDownloadProgress,
+  getAIModel,
+  normalizeAIModelId,
+} from "./ai/modelCatalog.js";
 import { CylinderBoard } from "./view/CylinderBoard.js";
 import { FlatBoard } from "./view/FlatBoard.js";
 import { ArcBoard } from "./view/ArcBoard.js";
@@ -70,6 +76,8 @@ const elements = {
   aiReviewMove: $("#ai-review-move"),
   aiReviewComparison: $("#ai-review-comparison"),
   aiReviewCandidates: $("#ai-review-candidates"),
+  aiReviewModel: $("#ai-review-model"),
+  aiReviewModelNote: $("#ai-review-model-note"),
   undoRequestPanel: $("#undo-request-panel"),
   undoRequestText: $("#undo-request-text"),
   undoResponseActions: $("#undo-response-actions"),
@@ -128,6 +136,11 @@ const elements = {
   leaveAi: $("#leave-ai"),
   aiDialog: $("#ai-dialog"),
   aiForm: $("#ai-form"),
+  aiModel: $("#ai-model"),
+  aiModelWarning: $("#ai-model-warning"),
+  aiModelWarningTitle: $("#ai-model-warning-title"),
+  aiModelWarningResource: $("#ai-model-warning-resource"),
+  aiModelWarningStrength: $("#ai-model-warning-strength"),
   aiHumanColor: $("#ai-human-color"),
   cancelAi: $("#cancel-ai"),
   startAi: $("#start-ai"),
@@ -172,6 +185,8 @@ let lastAnnouncedRoomRevision = null;
 let offlineGameState = null;
 let aiActive = false;
 let aiHumanColor = BLACK;
+let preferredAIModelId = DEFAULT_AI_MODEL_ID;
+let aiGameModelId = DEFAULT_AI_MODEL_ID;
 let aiThinking = false;
 let aiWorker = null;
 let aiRequestId = 0;
@@ -183,6 +198,7 @@ let reviewActive = null;
 
 const PLAYER_NAME_KEY = "bamboo-baduk-player-name";
 const SOUND_ENABLED_KEY = "3d-baduk-sound-enabled";
+const AI_MODEL_KEY = "3d-baduk-ai-model";
 const roomClient = new RoomClient();
 
 function savedSoundEnabled() {
@@ -193,11 +209,48 @@ function savedSoundEnabled() {
   }
 }
 
+function savedAIModelId() {
+  try {
+    return normalizeAIModelId(window.localStorage.getItem(AI_MODEL_KEY));
+  } catch {
+    return DEFAULT_AI_MODEL_ID;
+  }
+}
+
+function rememberPreferredAIModel() {
+  try {
+    window.localStorage.setItem(AI_MODEL_KEY, preferredAIModelId);
+  } catch {
+    // Model choice remains usable for this tab when storage is unavailable.
+  }
+}
+
+function browserSupportsAIModel(modelId) {
+  const model = getAIModel(modelId);
+  return !model.requiresWebGPU || Boolean(window.navigator?.gpu);
+}
+
+function syncAIDialogModelPresentation() {
+  const model = getAIModel(elements.aiModel.value);
+  const supported = browserSupportsAIModel(model.id);
+  elements.aiModelWarningTitle.textContent = model.heavy
+    ? `${model.name} · 增强模型 / 高耗资源`
+    : `${model.name} · 快速模型 / 轻量`;
+  elements.aiModelWarningResource.textContent = supported
+    ? model.resourceNote
+    : `${model.resourceNote} 当前浏览器没有检测到 WebGPU，无法使用 b18，请选择 b10。`;
+  elements.aiModelWarningStrength.textContent = model.strengthNote;
+  elements.aiModelWarning.classList.toggle("heavy", model.heavy);
+  elements.aiModelWarning.classList.toggle("error", !supported);
+  elements.startAi.disabled = !supported;
+}
+
 let soundEnabled = savedSoundEnabled();
+preferredAIModelId = savedAIModelId();
+aiGameModelId = preferredAIModelId;
 const gameSounds = createGameSounds({ enabled: soundEnabled });
 
 const KATAGO_AI = Object.freeze({
-  label: "KataGo b10",
   timeMs: 1_400,
   maxIterations: 800,
   rolloutLimit: 16,
@@ -298,13 +351,21 @@ function formatReviewMove(move, size = game?.size ?? 19) {
   return `${letter}${size - move.row}`;
 }
 
+function currentReviewModel() {
+  return getAIModel(replaySession?.analysisModelId ?? preferredAIModelId);
+}
+
 function reviewStageText(active = reviewActive) {
   if (!active) return "";
+  const model = getAIModel(active.modelId);
   const prefix = active.mode === "batch" && replaySession?.analysisBatch
     ? `整局分析 ${replaySession.analysisBatch.completed} / ${replaySession.analysisBatch.total} · 第 ${active.step} 手 · `
     : `第 ${active.step} 手 · `;
   if (active.stage === "loading_model") {
-    return `${prefix}首次载入 KataGo b10 模型（约 11 MB）…`;
+    const progress = Number.isFinite(active.loadedBytes) && active.loadedBytes > 0
+      ? ` · ${formatModelDownloadProgress(active.loadedBytes, model.id)}`
+      : "";
+    return `${prefix}载入 KataGo ${model.shortLabel} 模型（${model.downloadLabel}）${progress}…`;
   }
   if (active.stage === "neural_inference") {
     return `${prefix}神经网络正在观察局面…`;
@@ -322,6 +383,11 @@ function terminateReviewWorker() {
 
 function cancelReplayAIReview({ terminate = false, announce = false } = {}) {
   const wasRunning = Boolean(reviewActive || replaySession?.analysisBatch);
+  // A cooperative cancel cannot interrupt a model fetch, decompression, or a
+  // WebGPU dispatch. Terminate an actively working thread so stopping b18 also
+  // stops its network, memory, and GPU work immediately. Keep an idle worker
+  // alive so its already-loaded model can still be reused for the next step.
+  const shouldTerminate = terminate || Boolean(reviewActive);
   if (reviewActive && reviewWorker) {
     reviewWorker.postMessage({ type: "cancel", id: reviewActive.id });
   }
@@ -331,7 +397,7 @@ function cancelReplayAIReview({ terminate = false, announce = false } = {}) {
     replaySession.analysisBatch = null;
     if (announce && wasRunning) replaySession.analysisMessage = "AI 分析已停止，已完成的结果仍然保留。";
   }
-  if (terminate) terminateReviewWorker();
+  if (shouldTerminate) terminateReviewWorker();
 }
 
 function handleReviewWorkerMessage(event) {
@@ -341,6 +407,7 @@ function handleReviewWorkerMessage(event) {
   if (message.type === "status") {
     reviewActive.stage = message.stage;
     reviewActive.backend = message.backend ?? reviewActive.backend;
+    reviewActive.loadedBytes = message.loadedBytes ?? reviewActive.loadedBytes;
     syncAIReviewUI();
     return;
   }
@@ -414,6 +481,15 @@ function startReviewAtStep(step, mode) {
     syncAIReviewUI();
     return false;
   }
+  const model = currentReviewModel();
+  if (!browserSupportsAIModel(model.id)) {
+    replaySession.analysisBatch = null;
+    replaySession.analysisMessage =
+      "KataGo b18 需要桌面端 WebGPU；当前浏览器不支持，请改选 b10。";
+    replaySession.analysisError = true;
+    syncAIReviewUI();
+    return false;
+  }
 
   let state;
   let worker;
@@ -430,11 +506,12 @@ function startReviewAtStep(step, mode) {
 
   const settings = mode === "batch" ? AI_REVIEW_BATCH : AI_REVIEW_CURRENT;
   const id = ++reviewRequestId;
-  reviewActive = { id, step, mode, stage: "preparing" };
+  reviewActive = { id, step, mode, modelId: model.id, stage: "preparing" };
   replaySession.analysisError = false;
   worker.postMessage({
     type: "think",
     id,
+    modelId: model.id,
     state,
     options: {
       difficulty: "hard",
@@ -478,6 +555,15 @@ function analyzeCurrentReplayStep() {
 
 function analyzeWholeReplay() {
   if (!replaySession) return;
+  const model = currentReviewModel();
+  if (
+    model.heavy &&
+    !window.confirm(
+      "使用 b18 分析整局会反复占用大量显存和内存，耗电、发热和等待时间都会明显增加。确定继续吗？",
+    )
+  ) {
+    return;
+  }
   stopReplayPlayback();
   cancelReplayAIReview();
   const steps = replaySession.steps
@@ -582,11 +668,13 @@ function enterReplay() {
   }
 
   try {
-    if (aiThinking) cancelAIThinking();
+    if (aiThinking || aiWorker) cancelAIThinking();
     const replay = buildReplayFrames(cloneSerializable(source));
     if (!Array.isArray(replay.frames) || replay.frames.length < 2) {
       throw new TypeError("棋谱中没有可播放的棋步");
     }
+    const analysisModelId = isAIMode() ? aiGameModelId : preferredAIModelId;
+    const analysisByStep = new Map();
     replaySession = {
       source: cloneSerializable(source),
       frames: replay.frames,
@@ -594,7 +682,9 @@ function enterReplay() {
       complete: replay.complete !== false,
       index: 0,
       playing: false,
-      analysisByStep: new Map(),
+      analysisModelId,
+      analysisByStep,
+      analysisByModel: new Map([[analysisModelId, analysisByStep]]),
       analysisBatch: null,
       analysisMessage: "",
       analysisError: false,
@@ -607,6 +697,29 @@ function enterReplay() {
     setMessage("这份棋谱暂时无法复盘，请继续当前对局或建立新棋盘。", true);
     maybeStartAITurn();
   }
+}
+
+function setReplayAnalysisModel(modelId) {
+  if (!replaySession) return;
+  const normalized = normalizeAIModelId(modelId);
+  if (normalized === replaySession.analysisModelId) {
+    syncAIReviewUI();
+    return;
+  }
+  cancelReplayAIReview({ terminate: true });
+  replaySession.analysisModelId = normalized;
+  if (!replaySession.analysisByModel.has(normalized)) {
+    replaySession.analysisByModel.set(normalized, new Map());
+  }
+  replaySession.analysisByStep = replaySession.analysisByModel.get(normalized);
+  preferredAIModelId = normalized;
+  rememberPreferredAIModel();
+  const model = getAIModel(normalized);
+  replaySession.analysisMessage = browserSupportsAIModel(normalized)
+    ? `已切换到 ${model.name}；不同模型的分析结果会分别保留。`
+    : "当前浏览器没有检测到 WebGPU，b18 无法运行，请改选 b10。";
+  replaySession.analysisError = !browserSupportsAIModel(normalized);
+  updateUI();
 }
 
 function exitReplay({ announce = true } = {}) {
@@ -671,6 +784,8 @@ function showAIDialog() {
     return;
   }
   elements.aiHumanColor.value = aiHumanColor;
+  elements.aiModel.value = isAIMode() ? aiGameModelId : preferredAIModelId;
+  syncAIDialogModelPresentation();
   elements.startAi.textContent = isAIMode() ? "按新设置重开" : "开始对局";
   if (typeof elements.aiDialog.showModal === "function") {
     if (!elements.aiDialog.open) elements.aiDialog.showModal();
@@ -730,8 +845,14 @@ function handleAIWorkerMessage(event) {
   const message = event.data ?? {};
   if (message.id !== aiRequestId) return;
   if (message.type === "status") {
+    const model = getAIModel(aiGameModelId);
     if (message.stage === "loading_model") {
-      setMessage("正在首次载入 KataGo b10 神经网络 · 约 11 MB…");
+      const progress = Number.isFinite(message.loadedBytes) && message.loadedBytes > 0
+        ? ` · ${formatModelDownloadProgress(message.loadedBytes, model.id)}`
+        : "";
+      setMessage(
+        `正在载入 KataGo ${model.shortLabel} 神经网络 · ${model.downloadLabel}${progress}…`,
+      );
     } else if (message.stage === "neural_inference") {
       setMessage(`KataGo 正在观察整盘棋 · ${message.backend ?? "浏览器"} 推理…`);
     } else if (message.stage === "searching") {
@@ -805,6 +926,7 @@ function maybeStartAITurn() {
     worker.postMessage({
       type: "think",
       id: requestId,
+      modelId: aiGameModelId,
       // Search clones the state many times and never needs the historical
       // replay timeline. Keep the AI payload and its inner loops bounded as a
       // real game grows longer.
@@ -826,7 +948,16 @@ async function startAIGame(event) {
     setMessage("请先退出联机房间，再开始 AI 对局。", true);
     return;
   }
+  const requestedModelId = normalizeAIModelId(elements.aiModel.value);
+  if (!browserSupportsAIModel(requestedModelId)) {
+    syncAIDialogModelPresentation();
+    setMessage("当前浏览器没有检测到 WebGPU，无法使用 b18；请选择 b10。", true);
+    return;
+  }
   cancelAIThinking();
+  preferredAIModelId = requestedModelId;
+  aiGameModelId = requestedModelId;
+  rememberPreferredAIModel();
   aiHumanColor = elements.aiHumanColor.value === WHITE ? WHITE : BLACK;
   aiActive = true;
   closeAIDialog();
@@ -1053,7 +1184,7 @@ function updateRoomUI() {
 
   if (aiMode) {
     elements.aiOpponentName.textContent = currentAIName();
-    elements.aiLevelBadge.textContent = KATAGO_AI.label;
+    elements.aiLevelBadge.textContent = getAIModel(aiGameModelId).badgeLabel;
     elements.aiBlackSeat.textContent = aiHumanColor === BLACK ? "你 · 黑方" : "AI · 黑方";
     elements.aiWhiteSeat.textContent = aiHumanColor === WHITE ? "你 · 白方" : "AI · 白方";
     if (aiThinking) {
@@ -1211,6 +1342,7 @@ function rememberOfflineGame() {
     ai: {
       active: isAIMode(),
       humanColor: aiHumanColor,
+      modelId: aiGameModelId,
     },
   };
 }
@@ -1257,6 +1389,11 @@ function restoreOfflineGame() {
   lastPlayedPoint = offlineGameState.lastPlayedPoint;
   aiActive = Boolean(offlineGameState.ai?.active);
   aiHumanColor = offlineGameState.ai?.humanColor === WHITE ? WHITE : BLACK;
+  aiGameModelId = normalizeAIModelId(offlineGameState.ai?.modelId);
+  if (aiActive) {
+    preferredAIModelId = aiGameModelId;
+    rememberPreferredAIModel();
+  }
   if (previousSize !== game.size || previousTopology !== game.topology) {
     rebuildViews(game.size, game.topology);
   }
@@ -1557,6 +1694,12 @@ function syncAIReviewUI() {
   const analysis = replaySession.analysisByStep.get(replaySession.index);
   const running = Boolean(reviewActive);
   const canAnalyzeCurrent = frame?.phase === PHASE_PLAY;
+  const model = currentReviewModel();
+
+  elements.aiReviewModel.value = model.id;
+  elements.aiReviewModel.disabled = running;
+  elements.aiReviewModelNote.textContent = `${model.resourceNote} ${model.strengthNote}`;
+  elements.aiReviewModelNote.classList.toggle("heavy", model.heavy);
 
   elements.aiReviewCurrent.hidden = running;
   elements.aiReviewAll.hidden = running;
@@ -1577,6 +1720,7 @@ function syncAIReviewUI() {
     status = replaySession.analysisMessage;
   } else if (analysis) {
     const detail = [
+      getAIModel(analysis.stats?.modelId ?? model.id).shortLabel,
       analysis.stats?.backend?.toUpperCase?.(),
       Number.isFinite(analysis.stats?.iterations)
         ? `搜索 ${analysis.stats.iterations} 次`
@@ -2338,6 +2482,21 @@ elements.changeAiSettings.addEventListener("click", showAIDialog);
 elements.cancelAi.addEventListener("click", closeAIDialog);
 elements.leaveAi.addEventListener("click", leaveAIGame);
 elements.aiForm.addEventListener("submit", (event) => void startAIGame(event));
+elements.aiModel.addEventListener("change", syncAIDialogModelPresentation);
+elements.aiReviewModel.addEventListener("change", () => {
+  const requested = normalizeAIModelId(elements.aiReviewModel.value);
+  if (
+    getAIModel(requested).heavy &&
+    requested !== replaySession?.analysisModelId &&
+    !window.confirm(
+      "b18 首次需要下载约 93.4 MB，并会占用数百 MB 内存与显存、增加耗电和发热。仅建议桌面端 WebGPU。确定切换吗？",
+    )
+  ) {
+    elements.aiReviewModel.value = replaySession?.analysisModelId ?? preferredAIModelId;
+    return;
+  }
+  setReplayAnalysisModel(requested);
+});
 elements.openOnlineDialog.addEventListener("click", () => showOnlineDialog());
 elements.cancelOnline.addEventListener("click", closeOnlineDialog);
 elements.onlineForm.addEventListener("submit", (event) => event.preventDefault());
@@ -2395,6 +2554,8 @@ roomClient.on("error", (error) => {
 
 setPendingSize(19);
 setPendingTopology(TOPOLOGY_CYLINDER);
+elements.aiModel.value = preferredAIModelId;
+syncAIDialogModelPresentation();
 game = new GoEngine({
   size: 19,
   topology: TOPOLOGY_CYLINDER,

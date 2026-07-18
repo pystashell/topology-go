@@ -791,13 +791,45 @@ summary:focus-visible {
 }
 
 .ai-review-model {
-  padding: 4px 7px;
+  display: grid;
+  gap: 3px;
+  padding: 5px 7px;
   border: 1px solid rgba(82, 190, 171, 0.36);
-  border-radius: 999px;
+  border-radius: 8px;
   color: #99e1d2;
   background: rgba(42, 118, 104, 0.16);
   font-size: 9px;
   white-space: nowrap;
+}
+
+.ai-review-model select {
+  max-width: 190px;
+  border: 0;
+  color: #d8f2ec;
+  background: transparent;
+  font: inherit;
+  font-weight: 650;
+}
+
+.ai-review-model select option {
+  color: #e8efeb;
+  background: #17211e;
+}
+
+.ai-review-model-note {
+  margin: -2px 0 0;
+  padding: 7px 8px;
+  border-left: 2px solid rgba(82, 190, 171, 0.7);
+  color: var(--muted);
+  background: rgba(42, 118, 104, 0.08);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.ai-review-model-note.heavy {
+  border-left-color: #e1a65f;
+  color: #edc58e;
+  background: rgba(195, 119, 42, 0.1);
 }
 
 .ai-review-status,
@@ -1102,6 +1134,23 @@ select:disabled {
   line-height: 1.7;
 }
 
+.legal-links {
+  margin: 14px 2px 0;
+  font-size: 0.76rem;
+  text-align: center;
+  opacity: 0.68;
+}
+
+.legal-links a {
+  color: inherit;
+  text-underline-offset: 3px;
+}
+
+.legal-links a:hover,
+.legal-links a:focus-visible {
+  opacity: 1;
+}
+
 .scoring-panel p {
   margin: 0 0 12px;
   color: var(--muted);
@@ -1204,6 +1253,38 @@ select:disabled {
   border-left: 2px solid var(--accent);
   background: rgba(215, 169, 91, 0.05);
   font-size: 10px !important;
+}
+
+.ai-model-warning {
+  display: grid;
+  gap: 4px;
+  padding: 10px 11px;
+  border: 1px solid rgba(82, 190, 171, 0.28);
+  border-radius: 9px;
+  color: var(--muted);
+  background: rgba(42, 118, 104, 0.08);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.ai-model-warning strong {
+  color: #dff4ef;
+  font-size: 11px;
+}
+
+.ai-model-warning.heavy {
+  border-color: rgba(225, 166, 95, 0.48);
+  color: #edc58e;
+  background: rgba(195, 119, 42, 0.1);
+}
+
+.ai-model-warning.heavy strong {
+  color: #ffd8a2;
+}
+
+.ai-model-warning.error {
+  border-color: rgba(239, 124, 109, 0.55);
+  color: #f2b7ae;
 }
 
 .room-code-input {

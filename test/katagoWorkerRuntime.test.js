@@ -26,6 +26,7 @@ class FakeWorkerScope {
 function neuralResult(overrides = {}) {
   return {
     priors: new Float32Array([0.1, 0.9]),
+    modelId: "b18",
     modelName: "test-b10",
     backend: "cpu",
     compressedBytes: 1234,
@@ -34,7 +35,7 @@ function neuralResult(overrides = {}) {
   };
 }
 
-test("KataGo runtime returns the move, enforced options, and hybrid stats", async () => {
+test("KataGo runtime returns the move, model identity, enforced options, and hybrid stats", async () => {
   const scope = new FakeWorkerScope();
   const state = { turn: 7 };
   const neural = neuralResult();
@@ -42,8 +43,9 @@ test("KataGo runtime returns the move, enforced options, and hybrid stats", asyn
   let receivedOptions;
 
   attachKataGoWorkerRuntime(scope, {
-    async neuralPolicy({ state: policyState, postStatus }) {
+    async neuralPolicy({ state: policyState, modelId, postStatus }) {
       assert.equal(policyState, state);
+      assert.equal(modelId, "b18");
       postStatus("neural_inference", { backend: neural.backend });
       return neural;
     },
@@ -60,6 +62,7 @@ test("KataGo runtime returns the move, enforced options, and hybrid stats", asyn
   await scope.dispatch({
     type: "think",
     id: 42,
+    modelId: "b18",
     state,
     options: {
       timeLimitMs: 900,
@@ -82,6 +85,7 @@ test("KataGo runtime returns the move, enforced options, and hybrid stats", asyn
     stats: {
       visits: 81,
       engine: "katago-hybrid",
+      modelId: "b18",
       modelName: "test-b10",
       backend: "cpu",
       modelBytes: 1234,
