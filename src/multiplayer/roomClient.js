@@ -764,10 +764,18 @@ export class RoomClient {
     const snapshot = message.snapshot?.room ?? message.snapshot;
     const incoming = message.room ?? message.state ?? snapshot ?? message.payload ?? null;
     if (!incoming) return;
-    const room =
-      incoming.chat === undefined && this.room?.chat
-        ? { ...incoming, chat: this.room.chat }
-        : incoming;
+    let room = incoming;
+    if (incoming.chat === undefined && this.room?.chat) {
+      room = { ...incoming, chat: this.room.chat };
+    } else if (incoming.chat && typeof incoming.chat === "object") {
+      room = {
+        ...incoming,
+        chat: {
+          ...incoming.chat,
+          messages: trimStoredChatHistory(incoming.chat.messages),
+        },
+      };
+    }
     this.room = room;
     this._emit("state", {
       room,

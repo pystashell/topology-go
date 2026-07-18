@@ -6,6 +6,7 @@ import {
   RoomEngine,
   RoomEngineError,
 } from "../src/multiplayer/roomEngine.js";
+import { CHAT_HISTORY_MAX_BYTES } from "../src/multiplayer/chat.js";
 
 const BLACK_HASH = "a".repeat(64);
 const WHITE_HASH = "b".repeat(64);
@@ -1354,4 +1355,50 @@ test("chat history stays bounded and legacy rooms restore with empty chat", () =
     sequence: 0,
     messages: [],
   });
+});
+
+test("long text chat stays within 64 KiB across snapshots and restoration", () => {
+  const room = createRoom(1_000);
+  joinWhite(room, 1_100);
+  const longText = "界".repeat(300);
+
+  for (let sequence = 1; sequence <= 100; sequence += 1) {
+    room.postChat({
+      playerId: "black-player",
+      sequence,
+      payload: { kind: "text", text: longText },
+      now: 2_000 + sequence * 1_200,
+    });
+  }
+
+  const snapshot = room.snapshot(123_000);
+  const snapshotBytes = new TextEncoder().encode(
+    JSON.stringify(snapshot.chat.messages),
+  ).byteLength;
+  assert.ok(snapshotBytes <= CHAT_HISTORY_MAX_BYTES);
+  assert.ok(snapshot.chat.messages.length < 100);
+  assert.ok(snapshot.chat.messages[0].sequence > 1);
+  assert.equal(snapshot.chat.messages.at(-1).sequence, 100);
+
+  const restored = RoomEngine.restore(room.serialize());
+  const restoredSnapshot = restored.snapshot(123_001);
+  const restoredBytes = new TextEncoder().encode(
+    JSON.stringify(restoredSnapshot.chat.messages),
+  ).byteLength;
+  assert.ok(restoredBytes <= CHAT_HISTORY_MAX_BYTES);
+  assert.deepEqual(restoredSnapshot.chat, snapshot.chat);
+
+  restored.postChat({
+    playerId: "black-player",
+    sequence: 101,
+    payload: { kind: "text", text: longText },
+    now: 123_200,
+  });
+  const continued = restored.snapshot(123_201);
+  const continuedBytes = new TextEncoder().encode(
+    JSON.stringify(continued.chat.messages),
+  ).byteLength;
+  assert.ok(continuedBytes <= CHAT_HISTORY_MAX_BYTES);
+  assert.equal(continued.chat.sequence, 101);
+  assert.equal(continued.chat.messages.at(-1).sequence, 101);
 });

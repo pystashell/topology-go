@@ -333,6 +333,32 @@ test("RoomClient sends chat independently and merges incremental chat events", a
   assert.ok(chatBytes <= CHAT_HISTORY_MAX_BYTES);
   assert.ok(client.room.chat.messages.length < 80);
   assert.equal(client.room.chat.messages.at(-1).sequence, 80);
+
+  const oversizedSnapshotMessages = Array.from({ length: 80 }, (_, index) => ({
+    ...message,
+    id: `white:${index + 81}`,
+    sequence: index + 81,
+    senderId: "white",
+    senderName: "White",
+    senderColor: "white",
+    text: "界".repeat(300),
+    points: [],
+    sentAt: 3_000 + index,
+  }));
+  socket.message({
+    type: "state",
+    room: {
+      code: "AB12CD",
+      revision: 3,
+      chat: { sequence: 160, messages: oversizedSnapshotMessages },
+    },
+  });
+  const snapshotChatBytes = new TextEncoder().encode(
+    JSON.stringify(client.room.chat.messages),
+  ).byteLength;
+  assert.ok(snapshotChatBytes <= CHAT_HISTORY_MAX_BYTES);
+  assert.ok(client.room.chat.messages.length < oversizedSnapshotMessages.length);
+  assert.equal(client.room.chat.messages.at(-1).sequence, 160);
   client.disconnect();
 });
 
