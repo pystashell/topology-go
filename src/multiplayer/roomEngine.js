@@ -10,6 +10,10 @@ import {
   WHITE,
 } from "../game/goEngine.js";
 import {
+  MAX_BOARD_DIMENSION,
+  MIN_BOARD_DIMENSION,
+} from "../game/boardDimensions.js";
+import {
   advanceTimeControl,
   completeTimeControlTurn,
   createTimeControl,
@@ -155,9 +159,13 @@ function normalizeTokenHash(value) {
 
 function normalizeDimension(value, label = "棋盘大小") {
   const dimension = value ?? 19;
-  if (!Number.isInteger(dimension) || dimension < 3 || dimension > 25) {
+  if (
+    !Number.isInteger(dimension) ||
+    dimension < MIN_BOARD_DIMENSION ||
+    dimension > MAX_BOARD_DIMENSION
+  ) {
     throw new RoomEngineError(
-      `${label}必须是 3 到 25 之间的整数。`,
+      `${label}必须是 ${MIN_BOARD_DIMENSION} 到 ${MAX_BOARD_DIMENSION} 之间的整数。`,
       400,
       "BAD_REQUEST",
     );

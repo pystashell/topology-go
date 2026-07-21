@@ -123,6 +123,31 @@ test("rectangular SZ uses width:height and preserves authoritative dimensions", 
   assert.equal(buildReplayFrames(imported.replay).frames.at(-1).board[4][6], "black");
 });
 
+test("30x20 SGF round-trips upper-case FF4 point coordinates", () => {
+  const replay = {
+    version: 1,
+    complete: true,
+    base: replayBase({ width: 30, height: 20, topology: "torus" }),
+    events: [
+      { type: "play", color: "black", row: 19, col: 29 },
+      { type: "play", color: "white", row: 0, col: 28 },
+    ],
+  };
+
+  const exported = exportSgf(replay);
+  assert.match(exported.sgf, /SZ\[30:20\]/u);
+  assert.match(exported.sgf, /;B\[Dt\]\s*;W\[Ca\]/u);
+  const imported = importSgf(exported.sgf);
+  assert.equal(imported.width, 30);
+  assert.equal(imported.height, 20);
+  assert.deepEqual(imported.replay.events, replay.events);
+  assert.equal(buildReplayFrames(imported.replay).frames.at(-1).board[0][28], "white");
+
+  assert.throws(() => importSgf("(;FF[4]GM[1]SZ[31:20])"), {
+    code: "INVALID_BOARD_SIZE",
+  });
+});
+
 test("all connected topologies use ignorable XTOP while retaining standard moves", () => {
   for (const topology of ["cylinder", "torus", "mobius"]) {
     const replay = {

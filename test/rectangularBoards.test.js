@@ -200,6 +200,51 @@ test("KataGo features, legal masks, priors and MCTS flatten rectangles by width"
   );
 });
 
+test("30x20 rules, persistence and AI policy indexing use every intersection", () => {
+  const width = 30;
+  const height = 20;
+  const game = new GoEngine({ width, height, topology: TOPOLOGY_TORUS, komi: 0 });
+  assert.equal(game.play(height - 1, width - 1).ok, true);
+  assert.equal(game.get(height - 1, width - 1), BLACK);
+  assert.deepEqual(
+    new Set(game.neighbors(0, 0).map(({ row, col }) => `${row},${col}`)),
+    new Set(["0,29", "0,1", "19,0", "1,0"]),
+  );
+
+  const restored = GoEngine.deserialize(game.serialize());
+  assert.equal(restored.width, width);
+  assert.equal(restored.height, height);
+  assert.equal(restored.board.length, height);
+  assert.equal(restored.board[0].length, width);
+
+  const features = buildCylinderFeatures(restored);
+  assert.equal(features.spatial.length, width * height * KATAGO_SPATIAL_CHANNELS);
+  const priors = policyPriorsFromLogits({
+    policy: new Float32Array(width * height),
+    pass: new Float32Array([0]),
+    gameOrState: restored,
+    policyChannels: 1,
+  });
+  assert.equal(priors.length, width * height + 1);
+  assert.equal(priors[(height - 1) * width + width - 1], 0);
+  assert.ok(Math.abs(priors.reduce((sum, value) => sum + value, 0) - 1) < 1e-5);
+
+  const searched = chooseMonteCarloMove(restored, {
+    iterations: 1,
+    timeLimitMs: Infinity,
+    rolloutLimit: 1,
+    candidateLimit: 2,
+    rootPolicy: priors,
+    seed: "30x20-search",
+  });
+  assert.ok(
+    searched.move.type === "pass" ||
+      (searched.move.row >= 0 && searched.move.row < height &&
+        searched.move.col >= 0 && searched.move.col < width),
+  );
+  assert.throws(() => new GoEngine({ width: 31, height: 20 }), /3 to 30/);
+});
+
 test("rectangular torus geometry roundtrips every row and column", () => {
   const width = 8;
   const height = 5;

@@ -5,6 +5,7 @@ import {
   pointerGestureRoles,
   preventBoardContextMenu,
 } from "./pointerGestures.js";
+import { translateText } from "../i18n.js";
 
 const TAU = Math.PI * 2;
 const CELL = 1;
@@ -114,7 +115,9 @@ export class CylinderBoard {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.setAttribute(
       "aria-label",
-      "左右相接的三维竹筒围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+      translateText(
+        "左右相接的三维竹筒围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+      ),
     );
     this.container.appendChild(this.renderer.domElement);
 
@@ -173,6 +176,15 @@ export class CylinderBoard {
 
     this.rebuild(boardWidth, boardHeight);
     this.animate();
+  }
+
+  refreshLanguage() {
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      translateText(
+        "左右相接的三维竹筒围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+      ),
+    );
   }
 
   rebuild(width, height = width) {

@@ -22,22 +22,51 @@
             <small>奇异棋盘围棋</small>
           </span>
         </a>
-        <div class="topology-switch" role="group" aria-label="棋盘形状">
-          <button type="button" data-board-topology="cylinder" class="active" aria-pressed="true">竹筒</button>
-          <button type="button" data-board-topology="torus" aria-pressed="false">甜甜圈</button>
-          <button type="button" data-board-topology="mobius" aria-pressed="false">莫比乌斯</button>
+        <div class="topbar-actions">
+          <div class="topology-switch" role="group" aria-label="棋盘形状">
+            <button type="button" data-board-topology="cylinder" class="active" aria-pressed="true">竹筒</button>
+            <button type="button" data-board-topology="torus" aria-pressed="false">甜甜圈</button>
+            <button type="button" data-board-topology="mobius" aria-pressed="false">莫比乌斯</button>
+          </div>
+          <div class="language-switch" role="group" aria-label="界面语言">
+            <button type="button" data-language="zh-CN" lang="zh-CN" class="active" aria-pressed="true">中文</button>
+            <button type="button" data-language="en" lang="en" aria-pressed="false">EN</button>
+          </div>
         </div>
       </header>
 
       <main class="game-layout">
-        <section class="board-stage" data-view-mode="arc" data-topology="cylinder" aria-label="3D Baduk 棋盘区域">
+        <section
+          class="board-stage"
+          data-view-mode="arc"
+          data-topology="cylinder"
+          data-chat-pick-hint="📍 点击一个棋点引用到聊天（不会落子）"
+          data-analysis-pick-hint="◇ 点击棋点，只在本页建立分析分支"
+          aria-label="3D Baduk 棋盘区域"
+        >
           <div id="flat-scene" class="view-surface" aria-label="可横向滑动的竹筒表面平面展开棋盘" hidden></div>
           <div id="arc-scene" class="view-surface" aria-label="可横向循环滑动的3D弧面棋盘"></div>
           <div id="scene" class="view-surface" aria-label="可旋转的3D竹筒围棋棋盘" hidden></div>
           <div id="torus-scene" class="view-surface" aria-label="可旋转的3D甜甜圈围棋棋盘" hidden></div>
           <div id="mobius-scene" class="view-surface" aria-label="可旋转的3D莫比乌斯围棋棋盘" hidden></div>
 
-          <div class="view-switch" role="group" aria-label="棋盘视图">
+          <section id="lobby-overlay" class="lobby-overlay" aria-labelledby="lobby-overlay-title">
+            <span class="eyebrow">我的房间</span>
+            <h1 id="lobby-overlay-title">棋局尚未开始</h1>
+            <p>先选择对手并确认棋盘规则，准备好之后才会正式开局。</p>
+            <strong id="lobby-summary">19 × 19 · 竹筒 · 中国规则 · 不计时</strong>
+            <button class="primary-button lobby-overlay-action" type="button" data-open-invite>
+              邀请对局
+            </button>
+          </section>
+
+          <div
+            class="view-switch"
+            role="group"
+            aria-label="棋盘视图"
+            data-torus-width-label="◉ 立体甜甜圈"
+            data-mobius-width-label="◉ 立体莫比乌斯"
+          >
             <button type="button" data-view-mode="flat" aria-pressed="false">
               <span aria-hidden="true">▦</span>
               平面展开
@@ -82,18 +111,19 @@
               <div class="room-heading">
                 <span id="room-status-dot" class="room-status-dot offline" aria-hidden="true"></span>
                 <span>
-                  <span id="room-mode" class="eyebrow">单机模式</span>
-                  <strong id="room-title">和朋友一起下棋</strong>
+                  <span id="room-mode" class="eyebrow">我的房间</span>
+                  <strong id="room-title">还没有发起对局</strong>
                 </span>
               </div>
-              <div id="offline-opponent-actions" class="room-main-actions">
-                <button id="open-ai-dialog" class="secondary-button room-main-action ai-main-action" type="button">
-                  AI 对战
-                </button>
-                <button id="open-online-dialog" class="secondary-button room-main-action" type="button">
-                  联机
-                </button>
-              </div>
+            </div>
+            <div id="offline-opponent-actions" class="room-main-actions">
+              <button class="primary-button room-invite-action" type="button" data-open-invite>
+                <strong>邀请对局</strong>
+                <small>选择 AI、好友、本地双人或 AI 自对弈</small>
+              </button>
+              <button id="join-invitation" class="secondary-button room-main-action" type="button">
+                已有邀请？加入房间
+              </button>
             </div>
 
             <div id="room-connected" class="room-connected" hidden>
@@ -149,11 +179,11 @@
             </div>
           </section>
 
-          <section id="clock-panel" class="clock-panel" aria-label="双方用时">
+          <section id="clock-panel" class="clock-panel" aria-label="双方用时" hidden>
             <article id="black-clock-card" class="clock-card active" data-color="black">
               <span class="stone black" aria-hidden="true"></span>
               <span class="clock-player">
-                <strong id="black-clock-name">黑方</strong>
+                <strong id="black-clock-name" data-i18n-ignore>黑方</strong>
                 <small id="black-clock-status">准备落子</small>
               </span>
               <span class="clock-reading">
@@ -164,7 +194,7 @@
             <article id="white-clock-card" class="clock-card" data-color="white">
               <span class="stone white" aria-hidden="true"></span>
               <span class="clock-player">
-                <strong id="white-clock-name">白方</strong>
+                <strong id="white-clock-name" data-i18n-ignore>白方</strong>
                 <small id="white-clock-status">等待黑方</small>
               </span>
               <span class="clock-reading">
@@ -174,29 +204,29 @@
             </article>
           </section>
 
-          <nav class="sidebar-tabs" aria-label="侧栏功能">
-            <button type="button" data-sidebar-tab="game" class="active" aria-selected="true" aria-controls="sidebar-panel-game">
+          <nav class="sidebar-tabs" role="tablist" aria-label="侧栏功能">
+            <button id="sidebar-tab-game" type="button" role="tab" data-sidebar-tab="game" class="active" aria-selected="true" aria-controls="sidebar-panel-game">
               <span aria-hidden="true">●</span><b>对局</b>
             </button>
-            <button type="button" data-sidebar-tab="analysis" aria-selected="false" aria-controls="sidebar-panel-analysis">
+            <button id="sidebar-tab-analysis" type="button" role="tab" data-sidebar-tab="analysis" aria-selected="false" aria-controls="sidebar-panel-analysis">
               <span aria-hidden="true">◇</span><b>分析</b>
             </button>
-            <button type="button" data-sidebar-tab="chat" aria-selected="false" aria-controls="sidebar-panel-chat">
+            <button id="sidebar-tab-chat" type="button" role="tab" data-sidebar-tab="chat" aria-selected="false" aria-controls="sidebar-panel-chat">
               <span aria-hidden="true">✦</span><b>聊天</b>
             </button>
-            <button type="button" data-sidebar-tab="record" aria-selected="false" aria-controls="sidebar-panel-record">
+            <button id="sidebar-tab-record" type="button" role="tab" data-sidebar-tab="record" aria-selected="false" aria-controls="sidebar-panel-record">
               <span aria-hidden="true">▶</span><b>棋谱</b>
             </button>
-            <button type="button" data-sidebar-tab="settings" aria-selected="false" aria-controls="sidebar-panel-settings">
-              <span aria-hidden="true">⚙</span><b>设置</b>
+            <button id="sidebar-tab-settings" type="button" role="tab" data-sidebar-tab="settings" aria-label="棋盘设置" aria-selected="false" aria-controls="sidebar-panel-settings">
+              <span aria-hidden="true">⚙</span><b>棋盘设置</b>
             </button>
           </nav>
 
-          <div id="sidebar-panel-game" class="sidebar-panel" data-sidebar-panel="game" role="tabpanel"></div>
-          <div id="sidebar-panel-analysis" class="sidebar-panel" data-sidebar-panel="analysis" role="tabpanel" hidden></div>
-          <div id="sidebar-panel-chat" class="sidebar-panel" data-sidebar-panel="chat" role="tabpanel" hidden></div>
-          <div id="sidebar-panel-record" class="sidebar-panel" data-sidebar-panel="record" role="tabpanel" hidden></div>
-          <div id="sidebar-panel-settings" class="sidebar-panel" data-sidebar-panel="settings" role="tabpanel" hidden></div>
+          <div id="sidebar-panel-game" class="sidebar-panel" data-sidebar-panel="game" role="tabpanel" aria-labelledby="sidebar-tab-game"></div>
+          <div id="sidebar-panel-analysis" class="sidebar-panel" data-sidebar-panel="analysis" role="tabpanel" aria-labelledby="sidebar-tab-analysis" hidden></div>
+          <div id="sidebar-panel-chat" class="sidebar-panel" data-sidebar-panel="chat" role="tabpanel" aria-labelledby="sidebar-tab-chat" hidden></div>
+          <div id="sidebar-panel-record" class="sidebar-panel" data-sidebar-panel="record" role="tabpanel" aria-labelledby="sidebar-tab-record" hidden></div>
+          <div id="sidebar-panel-settings" class="sidebar-panel" data-sidebar-panel="settings" role="tabpanel" aria-labelledby="sidebar-tab-settings" hidden></div>
 
           <section id="chat-panel" class="chat-panel" aria-label="房间聊天" hidden>
             <div class="chat-heading">
@@ -239,20 +269,20 @@
 
           <section class="turn-card" aria-labelledby="turn-label">
             <div>
-              <span id="phase-label" class="eyebrow">对局中</span>
+              <span id="phase-label" class="eyebrow">准备大厅</span>
               <h1 id="turn-label">
-                <span id="turn-stone" class="stone black" aria-hidden="true"></span>
-                <span id="turn-text">黑方落子</span>
+                <span id="turn-stone" class="stone black" aria-hidden="true" hidden></span>
+                <span id="turn-text">尚未开始</span>
               </h1>
             </div>
-            <span id="move-number" class="move-number">第 1 手</span>
+            <span id="move-number" class="move-number">19 × 19 · 竹筒</span>
           </section>
 
           <div id="message" class="message" role="status" aria-live="polite">
-            点击棋盘交叉点落子
+            邀请对手并确认设置后开始对局
           </div>
 
-          <section class="score-strip" aria-label="提子数">
+          <section class="score-strip" aria-label="提子数" hidden>
             <div>
               <span class="stone black small" aria-hidden="true"></span>
               <span>黑方提子</span>
@@ -265,14 +295,18 @@
             </div>
           </section>
 
-          <section id="play-controls" class="primary-actions play-actions" aria-label="对局操作">
+          <section id="play-controls" class="primary-actions play-actions" aria-label="对局操作" hidden>
             <button id="pass-button" class="primary-button" type="button">停一手</button>
             <button id="undo-button" class="secondary-button" type="button">悔棋</button>
             <button id="resign-button" class="secondary-button danger-button" type="button">认输</button>
             <button id="new-game-button" class="secondary-button" type="button">新棋盘</button>
           </section>
 
-          <button id="replay-button" class="secondary-button replay-entry-button" type="button">
+          <button id="return-to-lobby" class="secondary-button return-to-lobby-button" type="button" hidden>
+            返回房间设置新棋局
+          </button>
+
+          <button id="replay-button" class="secondary-button replay-entry-button" type="button" hidden>
             <span class="replay-entry-icon" aria-hidden="true">▶</span>
             <span>
               <strong>复盘整局</strong>
@@ -281,7 +315,7 @@
             <span class="replay-entry-arrow" aria-hidden="true">›</span>
           </button>
 
-          <section class="record-actions" aria-labelledby="record-actions-title">
+          <section class="record-actions" data-sidebar-staged hidden aria-labelledby="record-actions-title">
             <div>
               <span class="eyebrow">SGF 棋谱</span>
               <strong id="record-actions-title">保存或打开异形棋谱</strong>
@@ -316,7 +350,7 @@
               <button id="replay-last" class="secondary-button" type="button" aria-label="跳到结尾" title="跳到结尾">›|</button>
             </div>
 
-            <section id="ai-review-panel" class="ai-review-panel" aria-label="KataGo AI 局势分析">
+            <section id="ai-review-panel" class="ai-review-panel" data-sidebar-staged hidden aria-label="KataGo AI 局势分析">
               <div class="ai-review-heading">
                 <span>
                   <span id="ai-review-eyebrow" class="eyebrow">AI 局势分析</span>
@@ -401,7 +435,7 @@
             </div>
           </section>
 
-          <section class="settings" aria-labelledby="settings-title">
+          <section class="settings" data-sidebar-staged hidden aria-labelledby="settings-title">
             <div class="section-heading">
               <h2 id="settings-title">棋盘设置</h2>
               <span id="board-topology">19 路 · 竹筒</span>
@@ -435,16 +469,16 @@
               <label class="input-row" for="custom-width">
                 <span>
                   <strong>宽度</strong>
-                  <small>横向列数 · 5–25</small>
+                  <small>横向列数 · 5–30</small>
                 </span>
-                <input id="custom-width" type="number" min="5" max="25" step="1" value="19" inputmode="numeric" />
+                <input id="custom-width" type="number" min="5" max="30" step="1" value="19" inputmode="numeric" />
               </label>
               <label class="input-row" for="custom-height">
                 <span>
                   <strong>高度</strong>
-                  <small>纵向行数 · 5–25</small>
+                  <small>纵向行数 · 5–30</small>
                 </span>
-                <input id="custom-height" type="number" min="5" max="25" step="1" value="19" inputmode="numeric" />
+                <input id="custom-height" type="number" min="5" max="30" step="1" value="19" inputmode="numeric" />
               </label>
             </div>
 
@@ -503,7 +537,7 @@
             </div>
           </section>
 
-          <details class="rules-note">
+          <details class="rules-note" data-sidebar-staged hidden>
             <summary id="rules-summary">竹筒表面规则说明</summary>
             <ul id="cylinder-rules">
               <li>同一行最左与最右的棋点相邻。</li>
@@ -531,7 +565,7 @@
             </ul>
           </details>
 
-          <p class="legal-links">
+          <p class="legal-links" data-sidebar-staged hidden>
             <a href="/KATAGO_NETWORK_LICENSE.txt" target="_blank" rel="license noopener">
               KataGo 模型版权与许可
             </a>
@@ -540,6 +574,63 @@
         </aside>
       </main>
     </div>
+
+    <dialog
+      id="invite-dialog"
+      class="game-dialog invite-dialog"
+      aria-labelledby="invite-dialog-title"
+      aria-describedby="invite-dialog-intro"
+    >
+      <form id="invite-form">
+        <span class="eyebrow">我的房间</span>
+        <h2 id="invite-dialog-title">邀请一场对局</h2>
+        <p id="invite-dialog-intro">选择对手类型。只有确认设置并准备就绪后，棋局才会正式开始。</p>
+
+        <section class="invite-settings-summary" aria-label="本局设置">
+          <span>本局设置</span>
+          <strong id="invite-settings-summary">19 × 19 · 竹筒 · 中国规则 · 不计时</strong>
+          <button id="invite-modify-settings" class="text-button" type="button">修改棋盘设置</button>
+        </section>
+
+        <div class="invite-choice-group" role="group" aria-labelledby="invite-choice-title">
+          <h3 id="invite-choice-title">选择对手</h3>
+          <div class="invite-choice-grid">
+            <button id="invite-ai" class="invite-choice" type="button">
+              <span class="invite-choice-icon" aria-hidden="true">AI</span>
+              <span>
+                <strong>与 AI 对弈</strong>
+                <small>选择模型和你执哪一方</small>
+              </span>
+            </button>
+            <button id="invite-friend" class="invite-choice" type="button">
+              <span class="invite-choice-icon" aria-hidden="true">↗</span>
+              <span>
+                <strong>邀请好友</strong>
+                <small>创建在线房间并分享链接</small>
+              </span>
+            </button>
+            <button id="invite-local" class="invite-choice" type="button">
+              <span class="invite-choice-icon" aria-hidden="true">●○</span>
+              <span>
+                <strong>本地双人</strong>
+                <small>两个人在同一台设备轮流落子</small>
+              </span>
+            </button>
+            <button id="invite-self-play" class="invite-choice" type="button">
+              <span class="invite-choice-icon" aria-hidden="true">AI²</span>
+              <span>
+                <strong>AI 自对弈</strong>
+                <small>观看 KataGo 控制黑白双方</small>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <div class="dialog-actions">
+          <button id="cancel-invite" class="secondary-button" type="button">取消</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="online-dialog" class="game-dialog online-dialog">
       <form id="online-form">

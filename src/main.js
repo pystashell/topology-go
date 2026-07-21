@@ -19,6 +19,10 @@ import {
 } from "./game/replay.js";
 import { exportSgf, importSgf, SgfError } from "./game/sgf.js";
 import {
+  MAX_BOARD_DIMENSION,
+  PUBLIC_MIN_BOARD_DIMENSION,
+} from "./game/boardDimensions.js";
+import {
   activeReviewCandidate,
   candidateVisitShare,
   compareReviewMove,
@@ -84,10 +88,21 @@ import {
   routeMatchAction,
   shouldProtectOnlineAITurn,
 } from "./game/matchSession.js";
+import {
+  applyDocumentTranslations,
+  getLocale,
+  initializeI18n,
+  setLocale,
+  subscribeLocale,
+  translateText,
+} from "./i18n.js";
+
+initializeI18n();
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
   boardStage: $(".board-stage"),
+  viewSwitch: $(".view-switch"),
   scene: $("#scene"),
   torusScene: $("#torus-scene"),
   mobiusScene: $("#mobius-scene"),
@@ -103,11 +118,13 @@ const elements = {
   message: $("#message"),
   blackCaptures: $("#black-captures"),
   whiteCaptures: $("#white-captures"),
+  scoreStrip: $(".score-strip"),
   playControls: $("#play-controls"),
   passButton: $("#pass-button"),
   undoButton: $("#undo-button"),
   resignButton: $("#resign-button"),
   newGameButton: $("#new-game-button"),
+  returnToLobby: $("#return-to-lobby"),
   replayButton: $("#replay-button"),
   replayPanel: $("#replay-panel"),
   replayProgress: $("#replay-progress"),
@@ -199,8 +216,10 @@ const elements = {
   roomMode: $("#room-mode"),
   roomTitle: $("#room-title"),
   offlineOpponentActions: $("#offline-opponent-actions"),
-  openAiDialog: $("#open-ai-dialog"),
-  openOnlineDialog: $("#open-online-dialog"),
+  lobbyOverlay: $("#lobby-overlay"),
+  lobbySummary: $("#lobby-summary"),
+  openInviteButtons: [...document.querySelectorAll("[data-open-invite]")],
+  joinInvitation: $("#join-invitation"),
   roomConnected: $("#room-connected"),
   roomCode: $("#room-code"),
   localRole: $("#local-role"),
@@ -248,6 +267,14 @@ const elements = {
   aiHumanColor: $("#ai-human-color"),
   cancelAi: $("#cancel-ai"),
   startAi: $("#start-ai"),
+  inviteDialog: $("#invite-dialog"),
+  inviteSettingsSummary: $("#invite-settings-summary"),
+  inviteAi: $("#invite-ai"),
+  inviteFriend: $("#invite-friend"),
+  inviteLocal: $("#invite-local"),
+  inviteSelfPlay: $("#invite-self-play"),
+  inviteModifySettings: $("#invite-modify-settings"),
+  cancelInvite: $("#cancel-invite"),
   onlineDialog: $("#online-dialog"),
   onlineForm: $("#online-form"),
   playerName: $("#player-name"),
@@ -260,6 +287,7 @@ const elements = {
   cancelOnline: $("#cancel-online"),
   onlineBoardSummary: $("#online-board-summary"),
   onlineModifySettings: $("#online-modify-settings"),
+  languageButtons: [...document.querySelectorAll("[data-language]")],
 };
 
 const ERROR_MESSAGES = {
@@ -280,6 +308,12 @@ let mobiusView;
 let flatView;
 let arcView;
 let activeViewMode = "arc";
+const MATCH_LIFECYCLE_LOBBY = "lobby";
+const MATCH_LIFECYCLE_WAITING = "waiting";
+const MATCH_LIFECYCLE_PLAYING = "playing";
+const MATCH_LIFECYCLE_FINISHED = "finished";
+let matchLifecycle = MATCH_LIFECYCLE_LOBBY;
+let lobbyPreviewFrame = null;
 const autoRotateByView = { arc: false, "3d": false };
 let moveCount = 0;
 let pendingWidth = 19;
@@ -376,12 +410,12 @@ function syncAIDialogModelPresentation() {
   const model = getAIModel(elements.aiModel.value);
   const supported = browserSupportsAIModel(model.id);
   elements.aiModelWarningTitle.textContent = model.heavy
-    ? `${model.name} · 增强模型 / 高耗资源`
-    : `${model.name} · 快速模型 / 轻量`;
+    ? `${model.name} · ${translateText("增强模型 / 高耗资源")}`
+    : `${model.name} · ${translateText("快速模型 / 轻量")}`;
   elements.aiModelWarningResource.textContent = supported
-    ? model.resourceNote
-    : `${model.resourceNote} 当前浏览器没有检测到 WebGPU，无法使用 b18，请选择 b10。`;
-  elements.aiModelWarningStrength.textContent = model.strengthNote;
+    ? translateText(model.resourceNote)
+    : `${translateText(model.resourceNote)} ${translateText("当前浏览器没有检测到 WebGPU，无法使用 b18，请选择 b10。")}`;
+  elements.aiModelWarningStrength.textContent = translateText(model.strengthNote);
   elements.aiModelWarning.classList.toggle("heavy", model.heavy);
   elements.aiModelWarning.classList.toggle("error", !supported);
   elements.startAi.disabled = !supported;
@@ -429,6 +463,10 @@ function initializeSidebarPanels() {
     selectors.forEach((selector) => {
       const node = document.querySelector(selector);
       if (node && node !== panel && !panel.contains(node)) panel.appendChild(node);
+      if (node?.hasAttribute("data-sidebar-staged")) {
+        node.removeAttribute("data-sidebar-staged");
+        node.hidden = false;
+      }
     });
   };
   // The existing controls keep their stable ids; only their visual grouping
@@ -440,6 +478,7 @@ function initializeSidebarPanels() {
     "#message",
     ".score-strip",
     "#play-controls",
+    "#return-to-lobby",
     "#undo-request-panel",
     "#scoring-panel",
   ]);
@@ -459,6 +498,7 @@ function setSidebarTab(name, { focus = false } = {}) {
     const active = button.dataset.sidebarTab === requested;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
     if (active && focus) button.focus({ preventScroll: true });
   }
   if (requested === "analysis") {
@@ -608,12 +648,12 @@ function formatClockDuration(milliseconds) {
 }
 
 function clockDisplayName(color) {
-  if (hasOnlineSession()) return roomSeat(color)?.name ?? colorName(color);
+  if (hasOnlineSession()) return roomSeat(color)?.name ?? translateText(colorName(color));
   if (isAIMode()) {
     if (isAIvsAI()) return `${getAIModel(aiGameModelId).shortLabel} AI`;
-    return color === aiHumanColor ? "你" : getAIModel(aiGameModelId).shortLabel;
+    return color === aiHumanColor ? translateText("你") : getAIModel(aiGameModelId).shortLabel;
   }
-  return colorName(color);
+  return translateText(colorName(color));
 }
 
 function syncClockUI(now = Date.now()) {
@@ -695,6 +735,45 @@ function setMessage(text, isError = false) {
   elements.message.classList.toggle("error", isError);
 }
 
+function syncLanguageControls() {
+  const locale = getLocale();
+  for (const button of elements.languageButtons) {
+    const active = button.dataset.language === locale;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+  if (elements.viewSwitch) {
+    elements.viewSwitch.dataset.torusWidthLabel = translateText("◉ 立体甜甜圈");
+    elements.viewSwitch.dataset.mobiusWidthLabel = translateText("◉ 立体莫比乌斯");
+  }
+  elements.boardStage.dataset.chatPickHint = translateText(
+    "📍 点击一个棋点引用到聊天（不会落子）",
+  );
+  elements.boardStage.dataset.analysisPickHint = translateText(
+    "◇ 点击棋点，只在本页建立分析分支",
+  );
+}
+
+function refreshLanguageDependentUI() {
+  syncLanguageControls();
+  lastRenderedChatKey = "";
+  syncAIDialogModelPresentation();
+  syncAIMatchModePresentation();
+  syncSoundControl();
+  buildChatPickers();
+  cylinderView?.refreshLanguage?.();
+  torusView?.refreshLanguage?.();
+  mobiusView?.refreshLanguage?.();
+  flatView?.refreshLanguage?.();
+  arcView?.refreshLanguage?.();
+  if (game) {
+    syncTopologyPresentation();
+    setViewMode(activeViewMode);
+    updateUI();
+  }
+  applyDocumentTranslations(document);
+}
+
 function syncSoundControl() {
   elements.toggleSound.setAttribute("aria-pressed", String(soundEnabled));
   elements.toggleSound.setAttribute("aria-label", soundEnabled ? "关闭音效" : "开启音效");
@@ -764,6 +843,7 @@ function isReplaying() {
 
 function replaySource() {
   if (replaySession?.source) return cloneSerializable(replaySession.source);
+  if (!hasStartedMatch()) return null;
   if (hasOnlineSession() && onlineRoom?.replay) {
     return cloneSerializable(onlineRoom.replay);
   }
@@ -1022,10 +1102,11 @@ function renderChatMessage(message) {
   meta.className = "chat-message-meta";
   const name = document.createElement("span");
   name.className = message.senderColor === BLACK ? "black-name" : "white-name";
-  name.textContent = `${message.senderName} · ${colorName(message.senderColor)}`;
+  name.dataset.i18nIgnore = "";
+  name.textContent = `${message.senderName} · ${translateText(colorName(message.senderColor))}`;
   const time = document.createElement("time");
   time.dateTime = new Date(message.sentAt).toISOString();
-  time.textContent = new Intl.DateTimeFormat("zh-CN", {
+  time.textContent = new Intl.DateTimeFormat(getLocale(), {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(message.sentAt));
@@ -1041,10 +1122,11 @@ function renderChatMessage(message) {
     emoji.textContent = sticker?.emoji ?? "❔";
     const label = document.createElement("span");
     label.className = "sticker-label";
-    label.textContent = sticker?.label ?? "表情包";
+    label.textContent = translateText(sticker?.label ?? "表情包");
     bubble.append(emoji, label);
   } else {
     // Deliberately use textContent: messages are uncensored text, never HTML.
+    bubble.dataset.i18nIgnore = "";
     bubble.textContent = String(message.text ?? "");
   }
   article.append(meta, bubble);
@@ -1057,9 +1139,9 @@ function renderChatMessage(message) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "chat-point-link";
-      button.textContent = matchesBoard
+      button.textContent = translateText(matchesBoard
         ? `📍 ${point.label} · 查看棋盘`
-        : `📍 ${point.label} · 上一块棋盘`;
+        : `📍 ${point.label} · 上一块棋盘`);
       button.disabled = !matchesBoard;
       button.addEventListener("click", () => focusChatPoint(message, point));
       pointList.append(button);
@@ -1216,22 +1298,26 @@ async function sendChatPayload(payload, { clearText = false } = {}) {
 }
 
 function buildChatPickers() {
+  elements.chatPicker.replaceChildren();
+  elements.stickerPicker.replaceChildren();
   for (const emoji of CHAT_EMOJIS) {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = emoji;
-    button.setAttribute("aria-label", `插入 ${emoji}`);
+    button.setAttribute("aria-label", translateText(`插入 ${emoji}`));
     button.addEventListener("click", () => insertChatText(emoji));
     elements.chatPicker.append(button);
   }
   for (const sticker of CHAT_STICKERS) {
     const button = document.createElement("button");
     button.type = "button";
-    button.setAttribute("aria-label", `发送表情包：${sticker.label}`);
+    button.setAttribute("aria-label", translateText("发送表情包：{label}", {
+      label: translateText(sticker.label),
+    }));
     const emoji = document.createElement("span");
     emoji.textContent = sticker.emoji;
     const label = document.createElement("span");
-    label.textContent = sticker.label;
+    label.textContent = translateText(sticker.label);
     button.append(emoji, label);
     button.addEventListener("click", () => {
       void sendChatPayload({ kind: "sticker", stickerId: sticker.id });
@@ -1297,7 +1383,7 @@ function isLiveOnlineFairPlayLocked() {
 }
 
 function canAnalyzeLivePosition() {
-  if (!game || game.phase !== PHASE_PLAY || currentTimeoutOutcome()) return false;
+  if (!hasStartedMatch() || !game || game.phase !== PHASE_PLAY || currentTimeoutOutcome()) return false;
   if (onlineAITurnNeedsController()) return false;
   // Live AI help is deliberately unavailable to either online player. A room
   // spectator gets an entirely local analysis copy that never enters the room
@@ -1670,9 +1756,9 @@ function analyzeWholeReplay() {
   const model = currentReviewModel();
   if (
     model.heavy &&
-    !window.confirm(
+    !window.confirm(translateText(
       "使用 b18 分析整局会反复占用大量显存和内存，耗电、发热和等待时间都会明显增加。确定继续吗？",
-    )
+    ))
   ) {
     return;
   }
@@ -1894,6 +1980,31 @@ function hasOnlineSession() {
   return Boolean(roomClient.session && roomClient.roomCode);
 }
 
+function isLocalLobby() {
+  return !hasOnlineSession() && matchLifecycle === MATCH_LIFECYCLE_LOBBY;
+}
+
+function hasMatchGame() {
+  return matchLifecycle !== MATCH_LIFECYCLE_LOBBY;
+}
+
+function hasStartedMatch() {
+  return [MATCH_LIFECYCLE_PLAYING, MATCH_LIFECYCLE_FINISHED].includes(matchLifecycle);
+}
+
+function syncLifecycleFromCurrentGame() {
+  if (matchLifecycle === MATCH_LIFECYCLE_LOBBY && !hasOnlineSession()) return;
+  if (game?.phase === PHASE_FINISHED || currentTimeoutOutcome()) {
+    matchLifecycle = MATCH_LIFECYCLE_FINISHED;
+    return;
+  }
+  if (hasOnlineSession() && !(roomSeat(BLACK) && roomSeat(WHITE))) {
+    matchLifecycle = MATCH_LIFECYCLE_WAITING;
+    return;
+  }
+  matchLifecycle = MATCH_LIFECYCLE_PLAYING;
+}
+
 function isAIMode() {
   return aiActive && !hasOnlineSession();
 }
@@ -1944,6 +2055,8 @@ function currentMatchSession() {
     controllerByColor: controllers,
     identity,
     room: onlineRoom,
+    hasGame: hasMatchGame(),
+    started: hasStartedMatch(),
     phase: game?.phase,
     currentPlayer: game?.currentPlayer,
     connected: roomClient.isConnected,
@@ -2343,6 +2456,7 @@ async function startAIGame(event) {
   aiHumanColor = elements.aiHumanColor.value === WHITE ? WHITE : BLACK;
   aiAutoplayPaused = false;
   aiActive = true;
+  matchLifecycle = MATCH_LIFECYCLE_PLAYING;
   closeAIDialog();
   await startNewGame();
   setMessage(
@@ -2358,7 +2472,7 @@ async function startAIGame(event) {
 
 async function detachOnlineAI() {
   if (!isOnlineHost() || !onlineAISeat(WHITE)) return;
-  if (!window.confirm("移除在线 AI 后白方座位会重新开放，当前棋局会保留。确定继续吗？")) return;
+  if (!window.confirm(translateText("移除在线 AI 后白方座位会重新开放，当前棋局会保留。确定继续吗？"))) return;
   cancelAIThinking();
   setMessage("正在移除在线 AI…");
   const sent = await sendOnlineCommand("detach_ai");
@@ -2368,10 +2482,18 @@ async function detachOnlineAI() {
 
 function leaveAIGame() {
   if (!isAIMode()) return;
+  returnToLocalLobby("已退出 AI 对战，回到我的房间；可以重新邀请对局。");
+}
+
+async function startLocalTwoPlayerGame() {
+  closeInviteDialog();
   cancelAIThinking();
+  cancelReplayAIReview({ terminate: true });
   aiActive = false;
   aiAutoplayPaused = false;
-  setMessage("已退出 AI 对战；当前棋局保留为普通单机棋局。可继续由双方轮流落子。");
+  matchLifecycle = MATCH_LIFECYCLE_PLAYING;
+  await startNewGame();
+  setMessage("本地双人对局已开始：黑白双方在这台设备上轮流落子。");
   updateUI();
 }
 
@@ -2513,10 +2635,41 @@ function onlineBoardSummaryText() {
   return `${width} × ${height} · ${topologySurfaceName(pendingTopology)} · ${rule} · ${clockLabel}`;
 }
 
+function syncLobbySettingsSummary() {
+  const summary = onlineBoardSummaryText();
+  if (elements.lobbySummary) elements.lobbySummary.textContent = summary;
+  if (elements.inviteSettingsSummary) elements.inviteSettingsSummary.textContent = summary;
+  if (elements.onlineBoardSummary) elements.onlineBoardSummary.textContent = summary;
+}
+
+function closeInviteDialog() {
+  if (!elements.inviteDialog) return;
+  if (typeof elements.inviteDialog.close === "function") elements.inviteDialog.close();
+  else elements.inviteDialog.removeAttribute("open");
+}
+
+function showInviteDialog() {
+  if (hasOnlineSession()) {
+    setMessage("请先退出当前联机房间，再邀请一场新对局。", true);
+    return;
+  }
+  if (!isLocalLobby()) {
+    setMessage("请先结束当前对局并返回房间，再邀请下一局。", true);
+    return;
+  }
+  if (isReplaying()) exitReplay({ announce: false });
+  syncLobbySettingsSummary();
+  if (typeof elements.inviteDialog?.showModal === "function") {
+    if (!elements.inviteDialog.open) elements.inviteDialog.showModal();
+  } else {
+    elements.inviteDialog?.setAttribute("open", "");
+  }
+}
+
 function showOnlineDialog(roomCode = "") {
   elements.playerName.value = elements.playerName.value || savedPlayerName();
   if (roomCode) elements.roomCodeInput.value = sanitizeRoomCode(roomCode);
-  elements.onlineBoardSummary.textContent = onlineBoardSummaryText();
+  syncLobbySettingsSummary();
   showOnlineError();
   if (typeof elements.onlineDialog.showModal === "function") {
     if (!elements.onlineDialog.open) elements.onlineDialog.showModal();
@@ -2543,6 +2696,8 @@ function roomSeat(color) {
 function updateRoomUI() {
   const active = hasOnlineSession();
   const aiMode = isAIMode();
+  const lobby = isLocalLobby();
+  const waiting = active && !hasStartedMatch();
   const match = currentMatchSession();
   const onlineAi = active ? onlineAISeat() : null;
   const reviewing = isReplaying();
@@ -2579,17 +2734,23 @@ function updateRoomUI() {
     ? onlineAi ? "在线人机房间" : "在线房间"
     : aiMode
       ? isAIvsAI() ? "AI 自对弈" : "AI 对战"
-      : "单机模式";
+      : lobby ? "我的房间" : "本地双人";
   elements.roomTitle.textContent = active
     ? onlineAi ? "和 KataGo 对弈，朋友可以观战" : "和朋友共享同一盘棋"
     : aiMode
       ? isAIvsAI()
         ? "KataGo 同时控制黑白双方"
         : `你执${colorName(aiHumanColor).replace("方", "")} · AI 执${colorName(aiColor()).replace("方", "")}`
-      : "选择电脑或朋友作为对手";
-  elements.offlineOpponentActions.hidden = active || aiMode || reviewing;
+      : lobby ? "还没有发起对局" : "双方在同一台设备轮流落子";
+  elements.offlineOpponentActions.hidden = !lobby || reviewing;
   elements.roomConnected.hidden = !active;
   elements.aiConnected.hidden = !aiMode;
+  if (elements.lobbyOverlay) elements.lobbyOverlay.hidden = !lobby || reviewing;
+  if (elements.scoreStrip) elements.scoreStrip.hidden = (lobby || waiting) && !reviewing;
+  elements.clockPanel.hidden = reviewing || [
+    MATCH_LIFECYCLE_LOBBY,
+    MATCH_LIFECYCLE_WAITING,
+  ].includes(matchLifecycle);
 
   if (aiMode) {
     elements.aiOpponentName.textContent = isAIvsAI() ? "KataGo AI 自对弈" : currentAIName();
@@ -2612,7 +2773,7 @@ function updateRoomUI() {
     } else if (aiThinking) {
       elements.aiHint.textContent = `${currentAIName()} 正在思考。你仍可旋转或切换视图。`;
     } else if (game.phase === PHASE_FINISHED) {
-      elements.aiHint.textContent = "本局已经结束，可以建立新棋盘再来一局。";
+      elements.aiHint.textContent = "本局已经结束；返回我的房间后可以重新设置并邀请下一局。";
     } else if (isAIvsAI()) {
       elements.aiHint.textContent = `${colorName(game.currentPlayer)} AI 正在准备下一手。`;
     } else if (game.currentPlayer === aiHumanColor) {
@@ -2677,9 +2838,7 @@ function updateRoomUI() {
         elements.roomHint.textContent = "点目中：双方可以标记死子，结果需双方确认。";
       }
     } else if (game.phase === PHASE_FINISHED) {
-      elements.roomHint.textContent = isOnlineHost()
-        ? "本局已结束；黑方可以建立新棋盘。"
-        : "本局已结束，等待黑方建立新棋盘。";
+      elements.roomHint.textContent = "本局已结束；返回我的房间后可以重新设置并邀请下一局。";
     } else {
       elements.roomHint.textContent = isOnlineTurn()
         ? "轮到你了。"
@@ -2705,7 +2864,11 @@ function updateRoomUI() {
       ? "忘记房间"
       : "退出";
   elements.passButton.disabled = !match.capabilities.pass;
-  elements.newGameButton.disabled = !match.capabilities.new_game;
+  elements.newGameButton.disabled = true;
+  if (elements.returnToLobby) {
+    elements.returnToLobby.hidden = reviewing || matchLifecycle !== MATCH_LIFECYCLE_FINISHED;
+    elements.returnToLobby.disabled = active && onlineBusy;
+  }
   elements.undoButton.textContent = active
     ? match.opponentController === MATCH_CONTROLLER_AI ? "直接悔棋" : "申请悔棋"
     : aiMode
@@ -2744,7 +2907,7 @@ function updateRoomUI() {
       ? "确认同意结果"
       : "确认结果";
 
-  const canChangeOnlineSettings = match.capabilities.new_game && !undoRequest && !aiThinking;
+  const canChangeOnlineSettings = lobby && !undoRequest && !aiThinking;
   elements.customWidth.disabled = !canChangeOnlineSettings;
   elements.customHeight.disabled = !canChangeOnlineSettings;
   elements.scoringRule.disabled = !canChangeOnlineSettings;
@@ -2759,11 +2922,19 @@ function updateRoomUI() {
   }
   elements.changeAiSettings.disabled = reviewing;
   elements.leaveAi.disabled = reviewing;
+  const canAttachWaitingAI = Boolean(
+    waiting && active && onlineReady && connected && isOnlineHost() &&
+    game?.phase === PHASE_PLAY && !roomSeat(WHITE),
+  );
+  const canAttachRoomAI = match.capabilities.attach_ai || canAttachWaitingAI;
   const roomAiActions = elements.attachRoomAi?.closest(".room-ai-actions");
-  if (roomAiActions) roomAiActions.hidden = !active || (!onlineAi && !match.capabilities.attach_ai);
+  if (roomAiActions) roomAiActions.hidden = !active || (!onlineAi && !canAttachRoomAI);
   elements.attachRoomAi.textContent = onlineAi ? "调整 / 重试在线 AI" : "让 AI 接替白方";
-  elements.attachRoomAi.hidden = !match.capabilities.attach_ai;
+  elements.attachRoomAi.hidden = !canAttachRoomAI;
+  elements.attachRoomAi.disabled = reviewing || !canAttachRoomAI;
   elements.detachRoomAi.hidden = !match.capabilities.detach_ai;
+  elements.exportSgf.disabled = !hasStartedMatch() && !reviewing;
+  elements.importSgf.disabled = false;
   syncChatUI();
   syncMovePreviewAvailability();
   syncClockUI();
@@ -2775,6 +2946,7 @@ function rememberOfflineGame() {
     ? pauseTimeControl(localTimeControl, Date.now())
     : cloneSerializable(localTimeControl);
   offlineGameState = {
+    lifecycle: matchLifecycle,
     game: game.exportState(),
     timeControl: cloneSerializable(pausedClock),
     moveCount,
@@ -2844,6 +3016,14 @@ function restoreOfflineGame() {
   const previousDimensions = { width: boardWidth(), height: boardHeight() };
   const previousTopology = game?.topology;
   game = GoEngine.fromState(offlineGameState.game);
+  matchLifecycle = [
+    MATCH_LIFECYCLE_LOBBY,
+    MATCH_LIFECYCLE_WAITING,
+    MATCH_LIFECYCLE_PLAYING,
+    MATCH_LIFECYCLE_FINISHED,
+  ].includes(offlineGameState.lifecycle)
+    ? offlineGameState.lifecycle
+    : MATCH_LIFECYCLE_LOBBY;
   localTimeControl = cloneSerializable(offlineGameState.timeControl);
   moveCount = offlineGameState.moveCount;
   lastPlayedPoint = offlineGameState.lastPlayedPoint;
@@ -2857,6 +3037,7 @@ function restoreOfflineGame() {
     rememberPreferredAIModel();
   }
   if (
+    matchLifecycle !== MATCH_LIFECYCLE_LOBBY &&
     localTimeControl && !localTimeControl.outcome && game.phase === PHASE_PLAY &&
     !(aiActive && aiMatchMode === AI_MATCH_SELF_PLAY && aiAutoplayPaused)
   ) {
@@ -3015,6 +3196,15 @@ function applyOnlineRoom(room) {
   }
   game = hydratePublicGame(room.game);
   moveCount = Number.isSafeInteger(room.moveCount) ? room.moveCount : 0;
+  const onlineHasBothSeats = Boolean(
+    room.players?.some((player) => player.color === BLACK) &&
+    room.players?.some((player) => player.color === WHITE),
+  );
+  matchLifecycle = room.game.phase === PHASE_FINISHED || Boolean(room.timeControl?.outcome)
+    ? MATCH_LIFECYCLE_FINISHED
+    : onlineHasBothSeats
+      ? MATCH_LIFECYCLE_PLAYING
+      : MATCH_LIFECYCLE_WAITING;
   lastPlayedPoint = game.lastMove?.type === "play"
     ? { row: game.lastMove.row, col: game.lastMove.col }
     : null;
@@ -3106,6 +3296,9 @@ async function sendOnlineCommand(action, payload = {}) {
 }
 
 function matchActionUnavailableMessage(action, session = currentMatchSession()) {
+  if (!session.started) {
+    return "棋局尚未开始；请先在房间里邀请一场对局。";
+  }
   if (session.transport === MATCH_TRANSPORT_ONLINE) {
     if (!session.onlineReady) return "房间正在连接或同步，请稍等一下。";
     if (!session.player) return "旁观者不能操作棋局。";
@@ -3312,7 +3505,10 @@ async function dispatchMatchAction(action, payload = {}, options = {}) {
 
 function normalizeBoardDimension(value, fallback = 19) {
   const numeric = Number(value);
-  return Math.max(5, Math.min(25, Math.round(Number.isFinite(numeric) ? numeric : fallback)));
+  return Math.max(
+    PUBLIC_MIN_BOARD_DIMENSION,
+    Math.min(MAX_BOARD_DIMENSION, Math.round(Number.isFinite(numeric) ? numeric : fallback)),
+  );
 }
 
 function setPendingDimensions(width, height = width) {
@@ -3361,6 +3557,54 @@ function getNewGameOptions() {
   };
 }
 
+function resetLobbyPreview({ message = "" } = {}) {
+  const options = getNewGameOptions();
+  const previousDimensions = game
+    ? { width: boardWidth(), height: boardHeight() }
+    : null;
+  const previousTopology = game?.topology;
+  game = new GoEngine(options);
+  matchLifecycle = MATCH_LIFECYCLE_LOBBY;
+  localTimeControl = null;
+  moveCount = 0;
+  lastPlayedPoint = null;
+  liveAnalysis = {
+    modelId: liveAnalysis.modelId,
+    positionKey: null,
+    result: null,
+    message: "",
+    error: false,
+    manualCandidate: null,
+  };
+  reviewCandidateState = createReviewCandidateState();
+  reviewCandidateContextKey = "";
+  elements.coordinateHint.textContent = "";
+  if (
+    !previousDimensions ||
+    !sameBoardDimensions(previousDimensions, game) ||
+    previousTopology !== game.topology
+  ) {
+    rebuildViews(options.width, options.height, options.topology);
+  } else {
+    renderBoardPosition(game.getState(), null);
+  }
+  setViewMode(activeViewMode);
+  syncLobbySettingsSummary();
+  if (message) setMessage(message);
+  updateUI();
+}
+
+function returnToLocalLobby(message = "已回到我的房间，可以重新邀请一场对局。") {
+  cancelAIThinking();
+  cancelReplayAIReview({ terminate: true });
+  aiActive = false;
+  aiAutoplayPaused = false;
+  matchLifecycle = MATCH_LIFECYCLE_LOBBY;
+  if (isReplaying()) exitReplay({ announce: false });
+  setSidebarTab("game");
+  resetLobbyPreview({ message });
+}
+
 async function startNewGame() {
   exitReplay({ announce: false });
   cancelReplayAIReview({ terminate: true });
@@ -3396,7 +3640,7 @@ function requestNewGame() {
   if (typeof elements.newGameDialog.showModal === "function") {
     elements.newGameDialog.showModal();
   } else {
-    if (window.confirm("建立新棋盘并清除当前对局？")) {
+    if (window.confirm(translateText("建立新棋盘并清除当前对局？"))) {
       void startNewGame();
     } else {
       setPendingDimensions(boardWidth(), boardHeight());
@@ -3604,11 +3848,12 @@ function applyReviewCandidateAction(action, candidates) {
 
 function syncReplayEntryAvailability() {
   const reviewing = isReplaying();
+  const matchStarted = hasStartedMatch();
   const protectingOnlineAI = onlineAITurnNeedsController();
-  elements.replayButton.hidden = reviewing;
+  elements.replayButton.hidden = reviewing || !matchStarted;
   elements.replayPanel.hidden = !reviewing;
   elements.replayButton.disabled = !reviewing && (
-    replayEventCount() === 0 || protectingOnlineAI
+    !matchStarted || replayEventCount() === 0 || protectingOnlineAI
   );
   elements.replayButton.title = protectingOnlineAI
     ? "请等在线 AI 落子后再进入复盘"
@@ -3626,6 +3871,27 @@ function syncAIReviewUI() {
     : canAnalyzeLivePosition();
   const model = currentReviewModel();
 
+  if (!hasStartedMatch() && !replaySession) {
+    elements.aiReviewEyebrow.textContent = "房间准备";
+    elements.aiReviewTitle.textContent = "AI 局势分析";
+    elements.aiReviewModel.value = model.id;
+    elements.aiReviewModel.disabled = true;
+    elements.aiReviewModelNote.textContent = `${translateText(model.resourceNote)} ${translateText(model.strengthNote)}`;
+    elements.aiReviewModelNote.classList.toggle("heavy", model.heavy);
+    elements.aiReviewCurrent.hidden = false;
+    elements.aiReviewCurrent.disabled = true;
+    elements.aiReviewAll.hidden = true;
+    elements.aiReviewCancel.hidden = true;
+    elements.aiReviewStatus.textContent = "对局开始后，才可以分析当前局面或复盘棋谱。";
+    elements.aiReviewStatus.classList.remove("error");
+    elements.aiReviewResult.hidden = true;
+    elements.aiReviewCandidates.replaceChildren();
+    elements.aiVariationPreview.hidden = true;
+    elements.boardStage.classList.remove("analysis-point-picking");
+    renderCurrentAnalysisPosition();
+    return;
+  }
+
   elements.aiReviewEyebrow.textContent = replaySession
     ? "Replay intelligence"
     : hasOnlineSession()
@@ -3642,7 +3908,7 @@ function syncAIReviewUI() {
       : "AI 局势分析";
   elements.aiReviewModel.value = model.id;
   elements.aiReviewModel.disabled = running || isLiveOnlineFairPlayLocked() || protectingOnlineAI;
-  elements.aiReviewModelNote.textContent = `${model.resourceNote} ${model.strengthNote}`;
+  elements.aiReviewModelNote.textContent = `${translateText(model.resourceNote)} ${translateText(model.strengthNote)}`;
   elements.aiReviewModelNote.classList.toggle("heavy", model.heavy);
 
   elements.aiReviewCurrent.hidden = running;
@@ -3878,6 +4144,7 @@ function updateUI() {
     return;
   }
 
+  syncLifecycleFromCurrentGame();
   elements.message.setAttribute("aria-live", "polite");
   const state = game.getState();
   const timeoutOutcome = currentTimeoutOutcome() ?? (
@@ -3889,6 +4156,45 @@ function updateUI() {
     : state.lastMove;
   renderBoardPosition(state, renderLastMove);
 
+  if (isLocalLobby()) {
+    elements.blackCaptures.textContent = "0";
+    elements.whiteCaptures.textContent = "0";
+    elements.boardTopology.textContent =
+      `${boardDimensionLabel(state)} · ${boardPointCount(state)} 点 · ${topologySurfaceName(state.topology)}`;
+    elements.phaseLabel.textContent = "我的房间";
+    elements.turnStone.hidden = true;
+    elements.turnText.textContent = "邀请对局后开始";
+    elements.moveNumber.textContent = "棋局尚未开始";
+    elements.playControls.hidden = true;
+    elements.scoringPanel.hidden = true;
+    elements.replayPanel.hidden = true;
+    elements.gesturePlace.textContent = "棋盘预览 · 可拖动查看";
+    syncLobbySettingsSummary();
+    syncReplayEntryAvailability();
+    updateRoomUI();
+    syncAIReviewUI();
+    return;
+  }
+
+  if (matchLifecycle === MATCH_LIFECYCLE_WAITING) {
+    elements.blackCaptures.textContent = "0";
+    elements.whiteCaptures.textContent = "0";
+    elements.boardTopology.textContent =
+      `${boardDimensionLabel(state)} · ${boardPointCount(state)} 点 · ${topologySurfaceName(state.topology)}`;
+    elements.phaseLabel.textContent = "邀请已发出";
+    elements.turnStone.hidden = true;
+    elements.turnText.textContent = "等待对手加入";
+    elements.moveNumber.textContent = "棋局尚未开始";
+    elements.playControls.hidden = true;
+    elements.scoringPanel.hidden = true;
+    elements.replayPanel.hidden = true;
+    elements.gesturePlace.textContent = "棋盘预览 · 等待对手";
+    syncReplayEntryAvailability();
+    updateRoomUI();
+    syncAIReviewUI();
+    return;
+  }
+
   elements.blackCaptures.textContent = String(state.captures.black);
   elements.whiteCaptures.textContent = String(state.captures.white);
   elements.boardTopology.textContent =
@@ -3898,8 +4204,10 @@ function updateUI() {
   elements.turnStone.classList.toggle("white", state.currentPlayer === WHITE);
 
   const playing = state.phase === PHASE_PLAY && !timeoutOutcome;
+  const terminal = Boolean(timeoutOutcome || resignOutcome || state.phase === PHASE_FINISHED);
   elements.passButton.hidden = !playing;
-  elements.playControls.hidden = false;
+  elements.newGameButton.hidden = true;
+  elements.playControls.hidden = terminal;
   elements.playControls.classList.toggle("scoring-actions", !playing);
   elements.scoringPanel.hidden = playing || Boolean(timeoutOutcome) || Boolean(resignOutcome);
   elements.confirmScore.hidden = state.phase === PHASE_FINISHED;
@@ -3967,6 +4275,10 @@ function updateUI() {
 }
 
 function handleBoardPoint({ row, col }) {
+  if (isLocalLobby()) {
+    setMessage("棋局尚未开始；请先邀请 AI、好友或本地对手。", true);
+    return;
+  }
   if (chatPointPicking && hasOnlineSession()) {
     insertPickedChatPoint(row, col);
     return;
@@ -4203,8 +4515,28 @@ for (const button of elements.sidebarTabs) {
   button.addEventListener("click", () => {
     setSidebarTab(button.dataset.sidebarTab, { focus: true });
   });
+  button.addEventListener("keydown", (event) => {
+    const currentIndex = elements.sidebarTabs.indexOf(button);
+    let nextIndex = null;
+    if (event.key === "ArrowRight") {
+      nextIndex = (currentIndex + 1) % elements.sidebarTabs.length;
+    } else if (event.key === "ArrowLeft") {
+      nextIndex = (currentIndex - 1 + elements.sidebarTabs.length) % elements.sidebarTabs.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = elements.sidebarTabs.length - 1;
+    }
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextTab = elements.sidebarTabs[nextIndex];
+    setSidebarTab(nextTab.dataset.sidebarTab, { focus: true });
+  });
 }
-elements.timeControlPreset.addEventListener("change", syncTimeControlFields);
+elements.timeControlPreset.addEventListener("change", () => {
+  syncTimeControlFields();
+  syncLobbySettingsSummary();
+});
 
 elements.replayButton.addEventListener("click", () => enterReplay());
 elements.replayExit.addEventListener("click", () => exitReplay());
@@ -4290,18 +4622,35 @@ elements.resumeGame.addEventListener("click", () => {
   void dispatchMatchAction(MATCH_ACTION_RESUME_PLAY);
 });
 
-elements.newGameButton.addEventListener("click", requestNewGame);
+elements.returnToLobby?.addEventListener("click", () => {
+  if (matchLifecycle !== MATCH_LIFECYCLE_FINISHED) return;
+  if (hasOnlineSession()) {
+    void (async () => {
+      await leaveOnlineRoom();
+      if (isLocalLobby()) setSidebarTab("settings", { focus: true });
+    })();
+    return;
+  }
+  const confirmed = window.confirm(translateText(
+    "返回房间后可以重新设置并邀请下一局；当前终局棋盘将被清空。确定返回吗？",
+  ));
+  if (!confirmed) return;
+  returnToLocalLobby("本局已结束，已回到我的房间；可以调整设置并邀请下一局。");
+  setSidebarTab("settings", { focus: true });
+});
 
 for (const button of elements.sizeButtons) {
   button.addEventListener("click", () => {
     const size = Number(button.dataset.boardSize);
+    if (!isLocalLobby()) return;
     setPendingDimensions(size, size);
-    requestNewGame();
+    resetLobbyPreview();
   });
 }
 
 for (const button of elements.topologyButtons) {
   button.addEventListener("click", () => {
+    if (!isLocalLobby()) return;
     const requestedTopology = button.dataset.boardTopology;
     const nextTopology = [
       TOPOLOGY_CYLINDER,
@@ -4310,28 +4659,72 @@ for (const button of elements.topologyButtons) {
     ].includes(requestedTopology)
       ? requestedTopology
       : TOPOLOGY_CYLINDER;
+    const previewMode = nextTopology === TOPOLOGY_CYLINDER ? "arc" : "3d";
     if (nextTopology === game.topology) {
       setPendingTopology(game.topology);
+      activeViewMode = previewMode;
+      setViewMode(previewMode);
       return;
     }
     setPendingTopology(nextTopology);
-    requestNewGame();
+    activeViewMode = previewMode;
+    resetLobbyPreview();
   });
 }
 
 function commitPendingDimensionInputs() {
+  if (!isLocalLobby()) return;
+  if (lobbyPreviewFrame !== null) {
+    window.cancelAnimationFrame(lobbyPreviewFrame);
+    lobbyPreviewFrame = null;
+  }
   setPendingDimensions(elements.customWidth.value, elements.customHeight.value);
-  setMessage(`已选择 ${pendingWidth} × ${pendingHeight}；点击“新棋盘”后生效。`);
+  resetLobbyPreview();
+  setMessage(`房间预览已更新为 ${pendingWidth} × ${pendingHeight}；邀请对局时会使用这套设置。`);
+}
+
+function scheduleLobbyDimensionPreview() {
+  if (!isLocalLobby()) return;
+  const width = Number(elements.customWidth.value);
+  const height = Number(elements.customHeight.value);
+  const valid = [width, height].every(
+    (value) => Number.isInteger(value) &&
+      value >= PUBLIC_MIN_BOARD_DIMENSION &&
+      value <= MAX_BOARD_DIMENSION,
+  );
+  if (!valid) return;
+  if (lobbyPreviewFrame !== null) window.cancelAnimationFrame(lobbyPreviewFrame);
+  lobbyPreviewFrame = window.requestAnimationFrame(() => {
+    lobbyPreviewFrame = null;
+    if (!isLocalLobby()) return;
+    setPendingDimensions(width, height);
+    resetLobbyPreview();
+  });
 }
 
 for (const input of [elements.customWidth, elements.customHeight]) {
+  input.addEventListener("input", scheduleLobbyDimensionPreview);
   input.addEventListener("change", commitPendingDimensionInputs);
   input.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
     commitPendingDimensionInputs();
     input.blur();
-    requestNewGame();
+  });
+}
+
+for (const input of [
+  elements.scoringRule,
+  elements.komi,
+  elements.mainTimeMinutes,
+  elements.byoYomiPeriods,
+  elements.byoYomiSeconds,
+]) {
+  input.addEventListener("change", () => {
+    syncLobbySettingsSummary();
+    if (isLocalLobby() && [elements.scoringRule, elements.komi].includes(input)) {
+      resetLobbyPreview();
+    }
   });
 }
 
@@ -4438,7 +4831,9 @@ function setViewMode(mode) {
   elements.resetView.setAttribute("aria-label", viewCopy.resetLabel);
   elements.gesturePrimary.textContent = viewCopy.primaryGesture;
   elements.gestureSecondary.textContent = viewCopy.secondaryGesture;
-  elements.gesturePlace.textContent = finePointer ? "左键点击落子" : "轻点落子";
+  elements.gesturePlace.textContent = isLocalLobby()
+    ? "棋盘预览 · 可拖动查看"
+    : finePointer ? "左键点击落子" : "轻点落子";
   elements.coordinateHint.textContent = "";
   if (chatReferencePoint && chatReferenceFocusViews) {
     syncReferenceFocusRotationState();
@@ -4483,6 +4878,9 @@ async function createOnlineRoom() {
   setOnlineBusy(true, "create");
   try {
     const result = await roomClient.createRoom({ name, ...getNewGameOptions() });
+    if (matchLifecycle === MATCH_LIFECYCLE_LOBBY) {
+      matchLifecycle = MATCH_LIFECYCLE_WAITING;
+    }
     resetChatSessionState();
     updateRoomUrl(result.roomCode);
     closeOnlineDialog();
@@ -4524,6 +4922,9 @@ async function joinOnlineRoom(role = "player") {
   setOnlineBusy(true, role === "spectator" ? "watch" : "join");
   try {
     const result = await roomClient.joinRoom({ code, name, role });
+    if (matchLifecycle === MATCH_LIFECYCLE_LOBBY) {
+      matchLifecycle = MATCH_LIFECYCLE_WAITING;
+    }
     resetChatSessionState();
     updateRoomUrl(result.roomCode);
     closeOnlineDialog();
@@ -4601,15 +5002,15 @@ async function leaveOnlineRoom() {
       setMessage("房间正在重连；连接恢复后才能安全释放座位。", true);
       return;
     }
-    const abandon = window.confirm(
+    const abandon = window.confirm(translateText(
       "当前无法通知服务器释放座位。忘记房间只会清除本机凭据，原座位可能继续保留。确定继续吗？",
-    );
+    ));
     if (!abandon) return;
     roomClient.abandonRoom();
     returnToOffline("已停止重连并忘记这个房间。");
     return;
   }
-  const confirmed = window.confirm("退出房间会释放你的座位，确定退出吗？");
+  const confirmed = window.confirm(translateText("退出房间会释放你的座位，确定退出吗？"));
   if (!confirmed) return;
   setOnlineBusy(true);
   try {
@@ -4626,7 +5027,37 @@ async function leaveOnlineRoom() {
   }
 }
 
-elements.openAiDialog.addEventListener("click", showAIDialog);
+for (const button of elements.openInviteButtons) {
+  button.addEventListener("click", showInviteDialog);
+}
+elements.joinInvitation.addEventListener("click", () => showOnlineDialog());
+elements.cancelInvite.addEventListener("click", closeInviteDialog);
+elements.inviteModifySettings.addEventListener("click", () => {
+  closeInviteDialog();
+  setSidebarTab("settings", { focus: true });
+  setMessage("先调整棋盘、规则与计时；邀请对局时会使用同一套设置。");
+});
+elements.inviteAi.addEventListener("click", () => {
+  closeInviteDialog();
+  aiMatchMode = "human-ai";
+  elements.aiMatchMode.value = aiMatchMode;
+  showAIDialog();
+});
+elements.inviteSelfPlay.addEventListener("click", () => {
+  closeInviteDialog();
+  aiMatchMode = AI_MATCH_SELF_PLAY;
+  elements.aiMatchMode.value = aiMatchMode;
+  showAIDialog();
+});
+elements.inviteFriend.addEventListener("click", () => {
+  closeInviteDialog();
+  showOnlineDialog();
+});
+elements.inviteLocal.addEventListener("click", () => void startLocalTwoPlayerGame());
+for (const button of elements.languageButtons) {
+  button.addEventListener("click", () => setLocale(button.dataset.language));
+}
+const unsubscribeLocale = subscribeLocale(refreshLanguageDependentUI);
 elements.changeAiSettings.addEventListener("click", showAIDialog);
 elements.cancelAi.addEventListener("click", closeAIDialog);
 elements.leaveAi.addEventListener("click", leaveAIGame);
@@ -4640,21 +5071,20 @@ elements.aiReviewModel.addEventListener("change", () => {
   if (
     getAIModel(requested).heavy &&
     requested !== currentModelId &&
-    !window.confirm(
+    !window.confirm(translateText(
       "b18 首次需要下载约 93.4 MB，并会占用数百 MB 内存与显存、增加耗电和发热。仅建议桌面端 WebGPU。确定切换吗？",
-    )
+    ))
   ) {
     elements.aiReviewModel.value = currentModelId;
     return;
   }
   setReplayAnalysisModel(requested);
 });
-elements.openOnlineDialog.addEventListener("click", () => showOnlineDialog());
 elements.cancelOnline.addEventListener("click", closeOnlineDialog);
 elements.onlineModifySettings.addEventListener("click", () => {
   closeOnlineDialog();
   setSidebarTab("settings", { focus: true });
-  setMessage("先在“设置”中调整棋盘；创建房间时会使用这里的同一套设置。");
+  setMessage("先在“棋盘设置”中调整棋盘；创建房间时会使用这里的同一套设置。");
 });
 elements.onlineForm.addEventListener("submit", (event) => event.preventDefault());
 elements.createRoom.addEventListener("click", () => void createOnlineRoom());
@@ -4806,10 +5236,12 @@ arcView = new ArcBoard(elements.arcScene, {
 });
 setSidebarTab("game");
 buildChatPickers();
+syncLanguageControls();
 syncTopologyPresentation();
 syncSoundControl();
 setViewMode("arc");
 updateUI();
+applyDocumentTranslations(document);
 rememberOfflineGame();
 clockTimer = window.setInterval(tickClock, 250);
 
@@ -4843,6 +5275,7 @@ window.addEventListener(
     flatView.destroy();
     arcView.destroy();
     roomClient.destroy();
+    unsubscribeLocale();
     void gameSounds.destroy();
   },
   { once: true },

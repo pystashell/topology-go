@@ -2,15 +2,16 @@ import {
   mobiusPointFromCover,
   mobiusPointInCopy,
 } from "../game/mobiusTopology.js";
+import { formatGoColumn } from "../game/boardDimensions.js";
 import {
   invalidatePendingTapOnAdditionalPointer,
   pointerGestureRoles,
   preventBoardContextMenu,
 } from "./pointerGestures.js";
+import { translateText } from "../i18n.js";
 
 const TAU = Math.PI * 2;
 const DRAG_THRESHOLD = 6;
-const COORDINATE_LETTERS = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
 
 function mod(value, divisor) {
   return ((value % divisor) + divisor) % divisor;
@@ -75,7 +76,9 @@ export class FlatBoard {
     this.canvas = document.createElement("canvas");
     this.canvas.setAttribute(
       "aria-label",
-      "竹筒围棋的平面展开视图。左键点击落子；右键或触屏单指横向拖动改变展开起点。",
+      translateText(
+        "竹筒围棋的平面展开视图。左键点击落子；右键或触屏单指横向拖动改变展开起点。",
+      ),
     );
     this.context = this.canvas.getContext("2d");
     this.container.appendChild(this.canvas);
@@ -113,14 +116,7 @@ export class FlatBoard {
     this.wrapRows = this.topology === "torus";
     this.isMobius = this.topology === "mobius";
     this.container.dataset.topology = this.topology;
-    this.canvas.setAttribute(
-      "aria-label",
-      this.wrapRows
-        ? "甜甜圈围棋的平面展开视图。左键点击落子；右键或触屏单指向任意方向拖动改变展开起点。"
-        : this.isMobius
-          ? "莫比乌斯围棋的平面展开视图。左键点击落子；右键或触屏单指横向滑过一圈后棋盘会上下翻转。"
-        : "竹筒围棋的平面展开视图。左键点击落子；右键或触屏单指横向拖动改变展开起点。",
-    );
+    this.updateAriaLabel();
     this.board = Array.from({ length: height }, () => Array(width).fill(null));
     this.currentPlayer = "black";
     this.phase = "play";
@@ -138,6 +134,24 @@ export class FlatBoard {
     this.cancelSnap();
     this.resize();
     this.notifyPan();
+  }
+
+  updateAriaLabel() {
+    this.canvas.setAttribute(
+      "aria-label",
+      translateText(
+        this.wrapRows
+          ? "甜甜圈围棋的平面展开视图。左键点击落子；右键或触屏单指向任意方向拖动改变展开起点。"
+          : this.isMobius
+            ? "莫比乌斯围棋的平面展开视图。左键点击落子；右键或触屏单指横向滑过一圈后棋盘会上下翻转。"
+            : "竹筒围棋的平面展开视图。左键点击落子；右键或触屏单指横向拖动改变展开起点。",
+      ),
+    );
+  }
+
+  refreshLanguage() {
+    this.updateAriaLabel();
+    if (!this.destroyed) this.draw();
   }
 
   setPosition({
@@ -1144,7 +1158,7 @@ export class FlatBoard {
     context.fillStyle = "rgba(228, 233, 229, 0.82)";
     if (this.viewportWidth >= 560) {
       context.fillText(
-        "← 左右首尾相接 · 右键/触摸拖动改变展开起点 →",
+        translateText("← 左右首尾相接 · 右键/触摸拖动改变展开起点 →"),
         (left + right) / 2,
         top - 30,
       );
@@ -1155,12 +1169,12 @@ export class FlatBoard {
     context.save();
     context.translate(left - 20, (top + bottom) / 2);
     context.rotate(-Math.PI / 2);
-    context.fillText("与右侧相接", 0, 0);
+    context.fillText(translateText("与右侧相接"), 0, 0);
     context.restore();
     context.save();
     context.translate(right + 20, (top + bottom) / 2);
     context.rotate(Math.PI / 2);
-    context.fillText("与左侧相接", 0, 0);
+    context.fillText(translateText("与左侧相接"), 0, 0);
     context.restore();
 
     context.strokeStyle = "rgba(50, 30, 18, 0.82)";
@@ -1235,7 +1249,7 @@ export class FlatBoard {
     context.fillStyle = "rgba(228, 233, 229, 0.86)";
     if (this.viewportWidth >= 560) {
       context.fillText(
-        "↕ 左右反向相接 · 横向一圈后上下翻转",
+        translateText("↕ 左右反向相接 · 横向一圈后上下翻转"),
         (left + right) / 2,
         top - 30,
       );
@@ -1246,12 +1260,12 @@ export class FlatBoard {
     context.save();
     context.translate(left - 20, (top + bottom) / 2);
     context.rotate(-Math.PI / 2);
-    context.fillText("与右侧倒序相接", 0, 0);
+    context.fillText(translateText("与右侧倒序相接"), 0, 0);
     context.restore();
     context.save();
     context.translate(right + 20, (top + bottom) / 2);
     context.rotate(Math.PI / 2);
-    context.fillText("与左侧倒序相接", 0, 0);
+    context.fillText(translateText("与左侧倒序相接"), 0, 0);
     context.restore();
     context.restore();
   }
@@ -1313,7 +1327,7 @@ export class FlatBoard {
     context.fillStyle = "rgba(228, 233, 229, 0.84)";
     if (this.viewportWidth >= 560) {
       context.fillText(
-        "↔ 左右相接 · ↕ 上下相接 · 右键/触摸任意方向拖动",
+        translateText("↔ 左右相接 · ↕ 上下相接 · 右键/触摸任意方向拖动"),
         (left + right) / 2,
         top - 30,
       );
@@ -1324,15 +1338,23 @@ export class FlatBoard {
     context.save();
     context.translate(left - 20, (top + bottom) / 2);
     context.rotate(-Math.PI / 2);
-    context.fillText("与右侧相接", 0, 0);
+    context.fillText(translateText("与右侧相接"), 0, 0);
     context.restore();
     context.save();
     context.translate(right + 20, (top + bottom) / 2);
     context.rotate(Math.PI / 2);
-    context.fillText("与左侧相接", 0, 0);
+    context.fillText(translateText("与左侧相接"), 0, 0);
     context.restore();
-    context.fillText("与下侧相接", (left + right) / 2, top + 12);
-    context.fillText("与上侧相接", (left + right) / 2, bottom - 12);
+    context.fillText(
+      translateText("与下侧相接"),
+      (left + right) / 2,
+      top + 12,
+    );
+    context.fillText(
+      translateText("与上侧相接"),
+      (left + right) / 2,
+      bottom - 12,
+    );
     context.restore();
   }
 
@@ -1346,7 +1368,7 @@ export class FlatBoard {
     context.fillStyle = "rgba(235, 240, 237, 0.54)";
     for (let col = 0; col < this.width; col += 1) {
       const x = this.pointX(col);
-      const label = COORDINATE_LETTERS[col] || String(col + 1);
+      const label = formatGoColumn(col) || String(col + 1);
       context.fillText(label, x, this.frameY - 10);
       context.fillText(label, x, this.frameY + this.boardPixelsHeight + 11);
     }

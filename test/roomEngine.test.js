@@ -1169,6 +1169,54 @@ test("rectangular rooms create, persist, play and start another rectangular game
   assert.equal(fresh.room.game.topology, "mobius");
 });
 
+test("online rooms accept and persist 30x20 games without square aliases", () => {
+  const room = RoomEngine.create({
+    code: "MAX23A",
+    name: "黑方",
+    width: 30,
+    height: 20,
+    topology: "torus",
+    playerId: "black-player",
+    tokenHash: BLACK_HASH,
+    now: 1_000,
+  });
+  joinWhite(room, 1_100);
+  const played = room.applyAction({
+    playerId: "black-player",
+    action: "play",
+    payload: { row: 19, col: 29 },
+    now: 1_200,
+  });
+  assert.equal(played.room.game.width, 30);
+  assert.equal(played.room.game.height, 20);
+  assert.equal("size" in played.room.game, false);
+  assert.equal(played.room.game.board[19][29], "black");
+
+  const restored = RoomEngine.restore(room.serialize());
+  assert.equal(restored.snapshot(1_300).game.board[19][29], "black");
+  const fresh = restored.applyAction({
+    playerId: "black-player",
+    action: "new_game",
+    payload: { width: 20, height: 30, topology: "mobius" },
+    now: 1_400,
+  });
+  assert.equal(fresh.room.game.width, 20);
+  assert.equal(fresh.room.game.height, 30);
+  assert.equal(fresh.room.game.board.length, 30);
+  assert.equal(fresh.room.game.board[0].length, 20);
+
+  assert.throws(
+    () =>
+      restored.applyAction({
+        playerId: "black-player",
+        action: "new_game",
+        payload: { width: 31, height: 20 },
+        now: 1_500,
+      }),
+    (error) => error instanceof RoomEngineError && error.code === "BAD_REQUEST",
+  );
+});
+
 test("lets the host switch topology for a new game and rejects invalid topology", () => {
   const room = createRoom();
   joinWhite(room);

@@ -14,6 +14,8 @@
  * Unknown X* properties are preserved as metadata by importSgf().
  */
 
+import { MAX_BOARD_DIMENSION } from "./boardDimensions.js";
+
 const BLACK = "black";
 const WHITE = "white";
 const EMPTY = null;
@@ -44,7 +46,7 @@ export const SGF_DEFAULT_LIMITS = Object.freeze({
   maxPropertyIdentifierLength: 32,
   // GoEngine's supported range. Callers that only inspect SGF metadata may
   // explicitly raise this up to the 52 coordinates supported by this module.
-  maxBoardDimension: 25,
+  maxBoardDimension: MAX_BOARD_DIMENSION,
 });
 
 export class SgfError extends Error {

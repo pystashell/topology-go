@@ -7,8 +7,10 @@ import {
   SEARCH_VARIATION_LIMIT,
   searchMoveKey,
 } from "./searchStats.js";
-
-const BOARD_COORDINATE_LETTERS = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
+import {
+  formatGoColumn,
+  MAX_BOARD_DIMENSION,
+} from "../game/boardDimensions.js";
 
 export const REVIEW_CANDIDATE_LIMIT = SEARCH_VARIATION_CANDIDATE_LIMIT;
 export const REVIEW_VARIATION_LIMIT = SEARCH_VARIATION_LIMIT;
@@ -116,11 +118,12 @@ export function formatReviewMove(move, height = 19) {
     !Number.isSafeInteger(height) ||
     height < 1 ||
     normalized.row >= height ||
-    normalized.col >= BOARD_COORDINATE_LETTERS.length
+    normalized.col >= MAX_BOARD_DIMENSION
   ) {
     return "—";
   }
-  return `${BOARD_COORDINATE_LETTERS[normalized.col]}${height - normalized.row}`;
+  const column = formatGoColumn(normalized.col);
+  return column ? `${column}${height - normalized.row}` : "—";
 }
 
 export function formatReviewVariation(

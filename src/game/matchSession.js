@@ -70,6 +70,8 @@ export function createMatchSession(input = {}) {
   const currentPlayer = COLORS.includes(input.currentPlayer)
     ? input.currentPlayer
     : "black";
+  const hasGame = input.hasGame !== false;
+  const started = hasGame && input.started !== false;
   const player = identity.role === "player" && COLORS.includes(identity.color);
   const onlineReady = transport === MATCH_TRANSPORT_ONLINE && Boolean(
     input.connected && input.roomReady && !input.busy && !input.commandPending,
@@ -93,26 +95,26 @@ export function createMatchSession(input = {}) {
     controllerByColor.white === MATCH_CONTROLLER_AI;
 
   const capabilities = {
-    play: interactive && phase === "play" && bothSeats && actionReady && !undoPending &&
+    play: started && interactive && phase === "play" && bothSeats && actionReady && !undoPending &&
       canActAsHuman,
-    pass: interactive && phase === "play" && bothSeats && actionReady && !undoPending &&
+    pass: started && interactive && phase === "play" && bothSeats && actionReady && !undoPending &&
       canActAsHuman,
-    undo: interactive && phase === "play" && bothSeats && actionReady && undoAvailable &&
+    undo: started && interactive && phase === "play" && bothSeats && actionReady && undoAvailable &&
       (transport === MATCH_TRANSPORT_LOCAL || player),
-    resign: interactive && phase === "play" && bothSeats && actionReady &&
+    resign: started && interactive && phase === "play" && bothSeats && actionReady &&
       (transport === MATCH_TRANSPORT_ONLINE ? player : !localAiSelfPlay),
-    new_game: !input.replaying && !input.undoRequest && actionReady &&
+    new_game: started && !input.replaying && !input.undoRequest && actionReady &&
       (transport === MATCH_TRANSPORT_LOCAL || (player && identity.color === "black")),
-    toggle_dead: interactive && phase === "scoring" && actionReady &&
+    toggle_dead: started && interactive && phase === "scoring" && actionReady &&
       (transport === MATCH_TRANSPORT_LOCAL || player),
-    finish_scoring: interactive && phase === "scoring" && actionReady &&
+    finish_scoring: started && interactive && phase === "scoring" && actionReady &&
       (transport === MATCH_TRANSPORT_LOCAL || player),
-    resume_play: interactive && phase === "scoring" && actionReady &&
+    resume_play: started && interactive && phase === "scoring" && actionReady &&
       (transport === MATCH_TRANSPORT_LOCAL || player),
-    attach_ai: transport === MATCH_TRANSPORT_ONLINE && onlineReady && player &&
+    attach_ai: started && transport === MATCH_TRANSPORT_ONLINE && onlineReady && player &&
       identity.color === "black" && phase === "play" &&
       (!input.whiteSeat || Boolean(automatedSeat(input.room, "white"))),
-    detach_ai: transport === MATCH_TRANSPORT_ONLINE && onlineReady && player &&
+    detach_ai: started && transport === MATCH_TRANSPORT_ONLINE && onlineReady && player &&
       identity.color === "black" && Boolean(automatedSeat(input.room, "white")),
   };
 
@@ -120,6 +122,8 @@ export function createMatchSession(input = {}) {
     transport,
     controllerByColor,
     identity,
+    hasGame,
+    started,
     phase,
     currentPlayer,
     player,
@@ -134,6 +138,7 @@ export function createMatchSession(input = {}) {
 export function shouldProtectOnlineAITurn(session, controlsAI = false) {
   return Boolean(
     controlsAI &&
+      session?.started !== false &&
       session?.transport === MATCH_TRANSPORT_ONLINE &&
       session.phase === "play" &&
       session.controllerByColor?.[session.currentPlayer] === MATCH_CONTROLLER_AI,
@@ -157,6 +162,7 @@ export function routeMatchAction(session, action, payload = {}, options = {}) {
     : MATCH_CONTROLLER_HUMAN;
   if (actor === MATCH_CONTROLLER_AI) {
     if (
+      session.started === false ||
       ![MATCH_ACTION_PLAY, MATCH_ACTION_PASS].includes(action) ||
       session.phase !== "play" ||
       session.controllerByColor?.[session.currentPlayer] !== MATCH_CONTROLLER_AI

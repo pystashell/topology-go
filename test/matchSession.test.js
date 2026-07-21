@@ -57,6 +57,54 @@ test("local and online sessions expose the same action capability vocabulary", (
   assert.equal(online.capabilities.play, true);
 });
 
+test("an unstarted lobby exposes no game actions even with a preview engine", () => {
+  const session = createMatchSession({
+    transport: MATCH_TRANSPORT_LOCAL,
+    controllerByColor: { black: "human", white: "human" },
+    phase: "play",
+    currentPlayer: "black",
+    hasGame: false,
+    started: false,
+    undoAvailable: true,
+  });
+
+  assert.equal(session.hasGame, false);
+  assert.equal(session.started, false);
+  for (const capability of Object.values(session.capabilities)) {
+    assert.equal(capability, false);
+  }
+  assert.deepEqual(
+    routeMatchAction(session, "play", { row: 0, col: 0 }),
+    { allowed: false, reason: "MATCH_ACTION_UNAVAILABLE" },
+  );
+  assert.deepEqual(
+    routeMatchAction(session, "play", { row: 0, col: 0 }, { actor: "ai" }),
+    { allowed: false, reason: "AI_ACTION_UNAVAILABLE" },
+  );
+});
+
+test("an allocated online board remains actionless until the invitation is accepted", () => {
+  const session = createMatchSession({
+    transport: MATCH_TRANSPORT_ONLINE,
+    controllerByColor: { black: "human", white: "human" },
+    identity: { role: "player", color: "black" },
+    phase: "play",
+    currentPlayer: "black",
+    hasGame: true,
+    started: false,
+    connected: true,
+    roomReady: true,
+    bothSeats: true,
+    undoAvailable: true,
+  });
+
+  assert.equal(session.hasGame, true);
+  assert.equal(session.started, false);
+  for (const capability of Object.values(session.capabilities)) {
+    assert.equal(capability, false);
+  }
+});
+
 test("AI-controlled turns disable human play without changing transport", () => {
   const session = createMatchSession({
     transport: MATCH_TRANSPORT_ONLINE,

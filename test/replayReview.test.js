@@ -118,6 +118,12 @@ test("display candidates expose bounded ranks, metrics, and rectangular PV label
   );
 });
 
+test("AI review labels cover extended columns on 30x20 boards", () => {
+  assert.equal(formatReviewMove({ type: "play", row: 19, col: 25 }, 20), "AA1");
+  assert.equal(formatReviewMove({ type: "play", row: 0, col: 29 }, 20), "AE20");
+  assert.equal(formatReviewMove({ type: "play", row: 0, col: 30 }, 20), "—");
+});
+
 test("candidate interaction state restores a pin after hover and drops stale lines", () => {
   const normalized = normalizeReviewCandidates({ candidates });
   assert.deepEqual(normalized[0].variation, [normalized[0].move]);

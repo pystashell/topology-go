@@ -1,4 +1,12 @@
-export const COORDINATE_LETTERS = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
+import {
+  formatGoColumn,
+  GO_COLUMN_LABELS,
+  MAX_BOARD_DIMENSION,
+  MIN_BOARD_DIMENSION,
+  parseGoColumn,
+} from "../game/boardDimensions.js";
+
+export const COORDINATE_LETTERS = GO_COLUMN_LABELS;
 
 export const CHAT_TEXT_MAX_CODE_POINTS = 300;
 export const CHAT_TEXT_MAX_BYTES = 1_500;
@@ -35,7 +43,9 @@ function isRecord(value) {
 }
 
 function isBoardSize(value) {
-  return Number.isInteger(value) && value >= 3 && value <= 25;
+  return Number.isInteger(value) &&
+    value >= MIN_BOARD_DIMENSION &&
+    value <= MAX_BOARD_DIMENSION;
 }
 
 function boardDimensions(value, widthOverride) {
@@ -66,16 +76,16 @@ export function formatBoardCoordinate(row, col, heightOrBoard, widthOverride) {
   ) {
     return "";
   }
-  const letter = COORDINATE_LETTERS[col];
+  const letter = formatGoColumn(col);
   return letter ? `${letter}${dimensions.height - row}` : "";
 }
 
 export function parseBoardCoordinate(value, heightOrBoard, widthOverride) {
   const dimensions = boardDimensions(heightOrBoard, widthOverride);
   if (!dimensions || typeof value !== "string") return null;
-  const match = value.trim().toUpperCase().match(/^([A-HJ-Z])\s*(\d{1,2})$/u);
+  const match = value.trim().toUpperCase().match(/^([A-HJ-Z]{1,2})\s*(\d{1,2})$/u);
   if (!match) return null;
-  const col = COORDINATE_LETTERS.indexOf(match[1]);
+  const col = parseGoColumn(match[1]);
   const number = Number(match[2]);
   if (
     col < 0 || col >= dimensions.width ||
@@ -97,7 +107,7 @@ export function extractBoardCoordinates(text, board, limit = CHAT_POINT_LIMIT) {
   // Chinese prose commonly attaches a coordinate directly to surrounding
   // characters ("看D4这里"). Only block ASCII word/number prefixes so
   // ordinary Latin tokens such as "BAD4" are not mistaken for board points.
-  const pattern = /(^|[^A-Z0-9])([A-HJ-Z]\s*\d{1,2})(?![A-Z0-9])/giu;
+  const pattern = /(^|[^A-Z0-9])([A-HJ-Z]{1,2}\s*\d{1,2})(?![A-Z0-9])/giu;
   for (const match of text.matchAll(pattern)) {
     const point = parseBoardCoordinate(match[2], dimensions);
     if (!point) continue;

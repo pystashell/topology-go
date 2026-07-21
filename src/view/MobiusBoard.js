@@ -1,6 +1,7 @@
 import * as THREE from "three";
 
 import { TorusBoard } from "./TorusBoard.js";
+import { translateText } from "../i18n.js";
 import {
   MOBIUS_TAU,
   MobiusBoundaryCurve,
@@ -34,7 +35,18 @@ export class MobiusBoard extends TorusBoard {
     super(container, options);
     this.renderer.domElement.setAttribute(
       "aria-label",
-      "左右反向相接、上下保留一圈边界的三维莫比乌斯围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+      translateText(
+        "左右反向相接、上下保留一圈边界的三维莫比乌斯围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+      ),
+    );
+  }
+
+  refreshLanguage() {
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      translateText(
+        "左右反向相接、上下保留一圈边界的三维莫比乌斯围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+      ),
     );
   }
 
@@ -172,7 +184,7 @@ export class MobiusBoard extends TorusBoard {
 
     // Picking works from the closest visible surface hit, then selects the
     // nearest canonical grid point. This avoids ambiguous inverse parameters
-    // at the reversed seam and is bounded by the app's 25x25 board maximum.
+    // at the reversed seam and is bounded by the app's 30x30 board maximum.
     this.canonicalPoints = [];
     for (let row = 0; row < this.height; row += 1) {
       for (let col = 0; col < this.width; col += 1) {

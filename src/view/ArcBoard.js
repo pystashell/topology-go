@@ -4,6 +4,7 @@ import {
   pointerGestureRoles,
   preventBoardContextMenu,
 } from "./pointerGestures.js";
+import { translateText } from "../i18n.js";
 
 const ARC_ANGLE = (Math.PI * 2) / 3;
 const CELL = 1;
@@ -144,7 +145,9 @@ export class ArcBoard {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.setAttribute(
       "aria-label",
-      "竹筒围棋的弧面视图。左键点击落子；右键或触屏单指横向拖动棋盘，滚轮或双指缩放。",
+      translateText(
+        "竹筒围棋的弧面视图。左键点击落子；右键或触屏单指横向拖动棋盘，滚轮或双指缩放。",
+      ),
     );
     this.container.appendChild(this.renderer.domElement);
 
@@ -198,6 +201,15 @@ export class ArcBoard {
 
     this.rebuild(boardWidth, boardHeight);
     this.animate();
+  }
+
+  refreshLanguage() {
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      translateText(
+        "竹筒围棋的弧面视图。左键点击落子；右键或触屏单指横向拖动棋盘，滚轮或双指缩放。",
+      ),
+    );
   }
 
   rebuild(width, height = width) {

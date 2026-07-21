@@ -16,6 +16,7 @@ import {
   createPlayerViewLighting,
   updatePlayerViewLighting,
 } from "./playerViewLighting.js";
+import { translateText } from "../i18n.js";
 
 const CELL = 1;
 const DRAG_THRESHOLD = 6;
@@ -153,7 +154,9 @@ export class TorusBoard {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.setAttribute(
       "aria-label",
-      "上下左右均首尾相接的三维甜甜圈围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+      translateText(
+        "上下左右均首尾相接的三维甜甜圈围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+      ),
     );
     this.container.appendChild(this.renderer.domElement);
 
@@ -200,6 +203,15 @@ export class TorusBoard {
 
     this.rebuild(boardWidth, boardHeight);
     this.animate();
+  }
+
+  refreshLanguage() {
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      translateText(
+        "上下左右均首尾相接的三维甜甜圈围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+      ),
+    );
   }
 
   rebuild(width, height = width) {

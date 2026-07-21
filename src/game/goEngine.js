@@ -1,4 +1,8 @@
 import { mobiusPointFromCover } from "./mobiusTopology.js";
+import {
+  MAX_BOARD_DIMENSION,
+  MIN_BOARD_DIMENSION,
+} from "./boardDimensions.js";
 
 /**
  * Pure Go rules for periodically connected boards.
@@ -25,7 +29,7 @@ export const TOPOLOGY_MOBIUS = "mobius";
 
 // Undo snapshots contain a complete board so that captures, scoring transitions
 // and persistence restore exactly. Keeping only the latest 32 moves bounds the
-// Durable Object value size even on a dense 25x25 board.
+// Durable Object value size even on a dense maximum-size board.
 export const UNDO_HISTORY_LIMIT = 32;
 export const REPLAY_VERSION = 1;
 
@@ -326,13 +330,13 @@ export class GoEngine {
     if (
       !Number.isInteger(resolvedWidth) ||
       !Number.isInteger(resolvedHeight) ||
-      resolvedWidth < 3 ||
-      resolvedHeight < 3 ||
-      resolvedWidth > 25 ||
-      resolvedHeight > 25
+      resolvedWidth < MIN_BOARD_DIMENSION ||
+      resolvedHeight < MIN_BOARD_DIMENSION ||
+      resolvedWidth > MAX_BOARD_DIMENSION ||
+      resolvedHeight > MAX_BOARD_DIMENSION
     ) {
       throw new RangeError(
-        "Board width and height must be integers from 3 to 25",
+        `Board width and height must be integers from ${MIN_BOARD_DIMENSION} to ${MAX_BOARD_DIMENSION}`,
       );
     }
     if (
