@@ -121,7 +121,7 @@ test("AI-controlled turns disable human play without changing transport", () => 
   assert.equal(session.capabilities.resign, true);
 });
 
-test("finished local AI and online hosts can start the next game immediately", () => {
+test("finished local games and online hosts can start identical or configured next games", () => {
   const local = createMatchSession({
     transport: MATCH_TRANSPORT_LOCAL,
     controllerByColor: { black: MATCH_CONTROLLER_HUMAN, white: MATCH_CONTROLLER_AI },

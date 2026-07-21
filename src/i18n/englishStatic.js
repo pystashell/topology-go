@@ -204,9 +204,12 @@ export const ENGLISH_STATIC = Object.freeze({
   "白方领地": "White territory",
   "未定或公气": "Unsettled or neutral",
   "当前在线房间": "Current online room",
+  "沿用上一局": "Previous game",
   "设置并发起下一局": "Configure and start the next game",
   "房间成员和聊天记录都会保留。": "Room members and chat history will be kept.",
   "使用当前设置开始下一局": "Start next game with these settings",
+  "已沿用上一局设置；可以直接开始，也可以先调整棋盘。":
+    "The previous game's settings are prefilled. Start now or adjust the board first.",
   "点击棋盘交叉点落子": "Click an intersection to play",
   "点目规则": "Scoring rules",
   "甜甜圈": "Torus",
@@ -306,7 +309,8 @@ export const ENGLISH_STATIC = Object.freeze({
   "19 × 19 · 竹筒 · 中国规则 · 不计时":
     "19 × 19 · Cylinder · Chinese rules · No clock",
   "直接进行下一局": "Start Next Game Now",
-  "返回房间调整设置": "Return to Room and Adjust Settings",
+  "调整下一局设置": "Adjust Next-Game Settings",
+  "退出房间": "Leave Room",
   "重新开始": "Start over",
   "重置弧面": "Reset curved view",
   "长考 · 45 分钟 + 5×60 秒": "Long · 45 minutes + 5×60 seconds",

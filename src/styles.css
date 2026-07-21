@@ -1241,19 +1241,19 @@ summary:focus-visible {
 }
 
 .direct-rematch-button,
-.return-to-lobby-button {
+.adjust-next-game-button {
   width: 100%;
   min-height: 48px;
 }
 
-.return-to-lobby-button {
+.adjust-next-game-button {
   border-color: rgba(215, 169, 91, 0.52);
   color: var(--accent-strong);
   background: rgba(215, 169, 91, 0.08);
   font-weight: 650;
 }
 
-.return-to-lobby-button:hover {
+.adjust-next-game-button:hover {
   border-color: var(--accent);
   color: #f8e9cc;
   background: rgba(215, 169, 91, 0.14);
@@ -1765,7 +1765,7 @@ select:disabled {
   background: transparent;
 }
 
-.room-rematch-setup {
+.next-game-setup {
   display: grid;
   gap: 11px;
   margin-bottom: 16px;
@@ -1775,22 +1775,22 @@ select:disabled {
   background: rgba(215, 169, 91, 0.075);
 }
 
-.room-rematch-setup > div {
+.next-game-setup > div {
   display: grid;
   gap: 4px;
 }
 
-.room-rematch-setup strong {
+.next-game-setup strong {
   font-size: 13px;
 }
 
-.room-rematch-setup small {
+.next-game-setup small {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.5;
 }
 
-.room-rematch-setup .primary-button {
+.next-game-setup .primary-button {
   width: 100%;
   min-height: 42px;
 }
@@ -2364,7 +2364,7 @@ select:disabled {
   }
 
   .settings .section-heading,
-  .settings .room-rematch-setup,
+  .settings .next-game-setup,
   .settings .field-group,
   .settings .dimension-fields {
     grid-column: 1 / -1;

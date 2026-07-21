@@ -296,8 +296,8 @@
             <button id="direct-rematch" class="primary-button direct-rematch-button" type="button">
               直接进行下一局
             </button>
-            <button id="return-to-lobby" class="secondary-button return-to-lobby-button" type="button">
-              返回房间调整设置
+            <button id="adjust-next-game" class="secondary-button adjust-next-game-button" type="button">
+              调整下一局设置
             </button>
           </section>
 
@@ -441,13 +441,13 @@
               <span id="board-topology">19 路 · 竹筒</span>
             </div>
 
-            <section id="room-rematch-setup" class="room-rematch-setup" aria-live="polite" hidden>
+            <section id="next-game-setup" class="next-game-setup" aria-live="polite" hidden>
               <div>
-                <span class="eyebrow">当前在线房间</span>
+                <span id="next-game-context" class="eyebrow">沿用上一局</span>
                 <strong>设置并发起下一局</strong>
-                <small id="room-rematch-hint">房间成员和聊天记录都会保留。</small>
+                <small id="next-game-hint">已沿用上一局设置；可以直接开始，也可以先调整棋盘。</small>
               </div>
-              <button id="start-room-rematch" class="primary-button" type="button">
+              <button id="confirm-next-game" class="primary-button" type="button">
                 使用当前设置开始下一局
               </button>
             </section>
