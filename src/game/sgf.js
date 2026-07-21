@@ -391,6 +391,9 @@ export function exportSgf(input, options = {}) {
         throw new SgfError(`Event ${index} has an invalid scoring rule`, "INVALID_RULE");
       }
       nodes.push(`;${property(SGF_EXTENSION_PROPERTIES.finishScoring, rule)}`);
+    } else if (event.type === "resign") {
+      // Standard SGF stores resignation in the root RE property rather than as
+      // a move node. `resultToSgf` has already encoded it as B+R or W+R.
     } else if (["confirm_score", "score_confirmation"].includes(event.type)) {
       nodes.push(
         `;${property(

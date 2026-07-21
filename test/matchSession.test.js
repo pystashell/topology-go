@@ -1,0 +1,244 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  MATCH_CONTROLLER_AI,
+  MATCH_CONTROLLER_HUMAN,
+  MATCH_TRANSPORT_LOCAL,
+  MATCH_TRANSPORT_ONLINE,
+  automatedSeat,
+  controllersFromRoom,
+  createMatchSession,
+  isHumanOnlineMatch,
+  routeMatchAction,
+  shouldProtectOnlineAITurn,
+} from "../src/game/matchSession.js";
+
+const AI_WHITE = {
+  id: "ai-white",
+  name: "KataGo b10",
+  role: "ai",
+  color: "white",
+  automated: true,
+  modelId: "b10",
+  controllerId: "black-player",
+};
+
+test("room seats project into independent transport and controller axes", () => {
+  const room = { players: [{ id: "black-player", role: "player", color: "black" }, AI_WHITE] };
+  assert.equal(automatedSeat(room, "white"), AI_WHITE);
+  assert.deepEqual(controllersFromRoom(room), {
+    black: MATCH_CONTROLLER_HUMAN,
+    white: MATCH_CONTROLLER_AI,
+  });
+});
+
+test("local and online sessions expose the same action capability vocabulary", () => {
+  const local = createMatchSession({
+    transport: MATCH_TRANSPORT_LOCAL,
+    controllerByColor: { black: "human", white: "human" },
+    phase: "play",
+    currentPlayer: "black",
+    undoAvailable: true,
+  });
+  const online = createMatchSession({
+    transport: MATCH_TRANSPORT_ONLINE,
+    controllerByColor: { black: "human", white: "human" },
+    identity: { role: "player", color: "black" },
+    phase: "play",
+    currentPlayer: "black",
+    connected: true,
+    roomReady: true,
+    bothSeats: true,
+    undoAvailable: true,
+  });
+  assert.deepEqual(Object.keys(local.capabilities), Object.keys(online.capabilities));
+  assert.equal(local.capabilities.play, true);
+  assert.equal(online.capabilities.play, true);
+});
+
+test("AI-controlled turns disable human play without changing transport", () => {
+  const session = createMatchSession({
+    transport: MATCH_TRANSPORT_ONLINE,
+    controllerByColor: { black: "human", white: "ai" },
+    identity: { role: "player", color: "black" },
+    phase: "play",
+    currentPlayer: "white",
+    connected: true,
+    roomReady: true,
+    bothSeats: true,
+  });
+  assert.equal(session.transport, MATCH_TRANSPORT_ONLINE);
+  assert.equal(session.capabilities.play, false);
+  assert.equal(session.capabilities.resign, true);
+});
+
+test("online AI undo routes directly while human online undo negotiates", () => {
+  const base = {
+    transport: MATCH_TRANSPORT_ONLINE,
+    identity: { role: "player", color: "black" },
+    phase: "play",
+    currentPlayer: "black",
+    connected: true,
+    roomReady: true,
+    bothSeats: true,
+    undoAvailable: true,
+  };
+  const ai = createMatchSession({
+    ...base,
+    controllerByColor: { black: "human", white: "ai" },
+  });
+  const human = createMatchSession({
+    ...base,
+    controllerByColor: { black: "human", white: "human" },
+  });
+  assert.equal(routeMatchAction(ai, "undo").command, "direct_undo_ai_round");
+  assert.equal(routeMatchAction(human, "undo").command, "request_undo");
+  assert.equal(isHumanOnlineMatch(ai), false);
+  assert.equal(isHumanOnlineMatch(human), true);
+});
+
+test("AI actor uses the same play and pass actions with transport-specific adapters", () => {
+  const base = {
+    controllerByColor: { black: "human", white: "ai" },
+    phase: "play",
+    currentPlayer: "white",
+  };
+  const local = createMatchSession({ transport: MATCH_TRANSPORT_LOCAL, ...base });
+  const online = createMatchSession({
+    transport: MATCH_TRANSPORT_ONLINE,
+    identity: { role: "player", color: "black" },
+    connected: true,
+    roomReady: true,
+    bothSeats: true,
+    ...base,
+  });
+  assert.deepEqual(
+    routeMatchAction(local, "play", { row: 2, col: 3 }, { actor: "ai" }),
+    {
+      allowed: true,
+      target: MATCH_TRANSPORT_LOCAL,
+      operation: "play",
+      payload: { row: 2, col: 3 },
+      actor: "ai",
+    },
+  );
+  assert.equal(
+    routeMatchAction(online, "play", {}, { actor: "ai" }).command,
+    "ai_play",
+  );
+  assert.equal(
+    routeMatchAction(online, "pass", {}, { actor: "ai" }).command,
+    "ai_pass",
+  );
+  assert.equal(
+    routeMatchAction(online, "undo", {}, { actor: "ai" }).allowed,
+    false,
+  );
+});
+
+test("spectators remain read-only while all sidebar features can remain visible", () => {
+  const session = createMatchSession({
+    transport: MATCH_TRANSPORT_ONLINE,
+    controllerByColor: { black: "human", white: "ai" },
+    identity: { role: "spectator", color: null },
+    phase: "play",
+    currentPlayer: "black",
+    connected: true,
+    roomReady: true,
+    bothSeats: true,
+    undoAvailable: true,
+  });
+  for (const action of ["play", "pass", "undo", "resign", "new_game"]) {
+    assert.equal(session.capabilities[action], false);
+  }
+});
+
+test("an online black host may attach an empty seat or reconfigure an automated seat", () => {
+  const base = {
+    transport: MATCH_TRANSPORT_ONLINE,
+    controllerByColor: { black: "human", white: "human" },
+    identity: { role: "player", color: "black" },
+    phase: "play",
+    connected: true,
+    roomReady: true,
+    bothSeats: false,
+  };
+  const allowed = createMatchSession({
+    ...base,
+    whiteSeat: null,
+    room: { players: [] },
+  });
+  const occupied = createMatchSession({
+    ...base,
+    whiteSeat: AI_WHITE,
+    room: { players: [AI_WHITE] },
+  });
+  const humanWhite = { id: "white-player", role: "player", color: "white" };
+  const humanOccupied = createMatchSession({
+    ...base,
+    whiteSeat: humanWhite,
+    room: { players: [humanWhite] },
+  });
+  assert.equal(allowed.capabilities.attach_ai, true);
+  assert.equal(occupied.capabilities.attach_ai, true);
+  assert.equal(occupied.capabilities.detach_ai, true);
+  assert.equal(humanOccupied.capabilities.attach_ai, false);
+  assert.equal(humanOccupied.capabilities.detach_ai, false);
+});
+
+test("a pending negotiated undo locks shared play and pass capabilities", () => {
+  const session = createMatchSession({
+    transport: MATCH_TRANSPORT_ONLINE,
+    controllerByColor: { black: "human", white: "human" },
+    identity: { role: "player", color: "white" },
+    phase: "play",
+    currentPlayer: "white",
+    connected: true,
+    roomReady: true,
+    bothSeats: true,
+    undoAvailable: true,
+    undoRequest: { requesterColor: "black" },
+  });
+  assert.equal(session.capabilities.play, false);
+  assert.equal(session.capabilities.pass, false);
+  assert.equal(session.capabilities.undo, false);
+  assert.equal(session.capabilities.resign, true);
+});
+
+test("a connected room stays read-only until this connection receives a fresh state", () => {
+  const session = createMatchSession({
+    transport: MATCH_TRANSPORT_ONLINE,
+    controllerByColor: { black: "human", white: "human" },
+    identity: { role: "player", color: "black" },
+    phase: "play",
+    currentPlayer: "black",
+    connected: true,
+    roomReady: false,
+    bothSeats: true,
+    undoAvailable: true,
+  });
+  assert.equal(session.onlineReady, false);
+  for (const action of ["play", "pass", "undo", "resign", "new_game"]) {
+    assert.equal(session.capabilities[action], false);
+  }
+});
+
+test("the browser controlling an online AI must not enter replay or analysis on its turn", () => {
+  const session = createMatchSession({
+    transport: MATCH_TRANSPORT_ONLINE,
+    controllerByColor: { black: "human", white: "ai" },
+    identity: { role: "player", color: "black" },
+    phase: "play",
+    currentPlayer: "white",
+    connected: true,
+    roomReady: true,
+    bothSeats: true,
+  });
+  assert.equal(shouldProtectOnlineAITurn(session, true), true);
+  assert.equal(shouldProtectOnlineAITurn(session, false), false);
+  assert.equal(
+    shouldProtectOnlineAITurn({ ...session, currentPlayer: "black" }, true),
+    false,
+  );
+});

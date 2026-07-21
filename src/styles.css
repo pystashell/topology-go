@@ -978,6 +978,26 @@ summary:focus-visible {
   font-size: 10px;
 }
 
+.room-ai-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 8px;
+}
+
+.room-ai-actions .secondary-button {
+  min-height: 32px;
+  font-size: 10px;
+}
+
+.room-ai-actions small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
 .text-button {
   padding: 6px 4px;
   border: 0;
@@ -1130,6 +1150,10 @@ summary:focus-visible {
 
 .play-actions {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.play-actions.with-resign {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .play-actions.scoring-actions {
@@ -1575,6 +1599,18 @@ summary:focus-visible {
   filter: brightness(1.06);
 }
 
+.danger-button {
+  border-color: rgba(240, 140, 126, 0.5);
+  color: #ffb0a5;
+  background: rgba(92, 32, 27, 0.32);
+}
+
+.danger-button:hover {
+  border-color: var(--danger);
+  color: #ffe0dc;
+  background: rgba(126, 43, 35, 0.48);
+}
+
 button:disabled,
 input:disabled,
 select:disabled {
@@ -1886,6 +1922,37 @@ select:disabled {
   gap: 7px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.online-board-summary {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 3px 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(215, 169, 91, 0.28);
+  border-radius: 10px;
+  background: rgba(215, 169, 91, 0.06);
+}
+
+.online-board-summary span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.online-board-summary strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #f3e4c6;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.online-board-summary .text-button {
+  color: var(--accent-strong);
+  font-size: 10px;
 }
 
 .dialog-field input,

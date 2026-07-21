@@ -2,6 +2,11 @@ import {
   mobiusPointFromCover,
   mobiusPointInCopy,
 } from "../game/mobiusTopology.js";
+import {
+  invalidatePendingTapOnAdditionalPointer,
+  pointerGestureRoles,
+  preventBoardContextMenu,
+} from "./pointerGestures.js";
 
 const TAU = Math.PI * 2;
 const DRAG_THRESHOLD = 6;
@@ -70,7 +75,7 @@ export class FlatBoard {
     this.canvas = document.createElement("canvas");
     this.canvas.setAttribute(
       "aria-label",
-      "竹筒围棋的平面展开视图。左右两侧首尾相接，可横向拖动改变展开起点。",
+      "竹筒围棋的平面展开视图。左键点击落子；右键或触屏单指横向拖动改变展开起点。",
     );
     this.context = this.canvas.getContext("2d");
     this.container.appendChild(this.canvas);
@@ -79,6 +84,7 @@ export class FlatBoard {
     this.handlePointerMove = (event) => this.pointerMove(event);
     this.handlePointerUp = (event) => this.pointerUp(event);
     this.handlePointerCancel = (event) => this.pointerCancel(event);
+    this.handleContextMenu = (event) => preventBoardContextMenu(event);
     this.handlePointerLeave = () => {
       if (!this.pointerState) this.setHoveredPoint(null);
     };
@@ -88,6 +94,7 @@ export class FlatBoard {
     this.canvas.addEventListener("pointerup", this.handlePointerUp);
     this.canvas.addEventListener("pointercancel", this.handlePointerCancel);
     this.canvas.addEventListener("pointerleave", this.handlePointerLeave);
+    this.canvas.addEventListener("contextmenu", this.handleContextMenu);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.container);
@@ -109,10 +116,10 @@ export class FlatBoard {
     this.canvas.setAttribute(
       "aria-label",
       this.wrapRows
-        ? "甜甜圈围棋的平面展开视图。上下、左右分别首尾相接，可向任意方向拖动改变展开起点。"
+        ? "甜甜圈围棋的平面展开视图。左键点击落子；右键或触屏单指向任意方向拖动改变展开起点。"
         : this.isMobius
-          ? "莫比乌斯围棋的平面展开视图。左右反向相接，横向滑过一圈后棋盘会上下翻转。"
-        : "竹筒围棋的平面展开视图。左右两侧首尾相接，可横向拖动改变展开起点。",
+          ? "莫比乌斯围棋的平面展开视图。左键点击落子；右键或触屏单指横向滑过一圈后棋盘会上下翻转。"
+        : "竹筒围棋的平面展开视图。左键点击落子；右键或触屏单指横向拖动改变展开起点。",
     );
     this.board = Array.from({ length: height }, () => Array(width).fill(null));
     this.currentPlayer = "black";
@@ -383,14 +390,20 @@ export class FlatBoard {
   }
 
   pointerDown(event) {
-    if (
-      !this.active ||
-      event.isPrimary === false ||
-      this.pointerState ||
-      (event.pointerType === "mouse" && event.button !== 0)
-    ) {
+    const guardedPointer = invalidatePendingTapOnAdditionalPointer(
+      this.pointerState,
+      event,
+    );
+    if (guardedPointer !== this.pointerState) {
+      this.pointerState = guardedPointer;
+      this.setHoveredPoint(null);
       return;
     }
+    const roles = pointerGestureRoles(event);
+    if (!this.active || !roles || this.pointerState) {
+      return;
+    }
+    if (event.pointerType === "mouse" && roles.canDrag) event.preventDefault();
     this.cancelSnap();
     this.pointerState = {
       id: event.pointerId,
@@ -398,6 +411,8 @@ export class FlatBoard {
       startY: event.clientY,
       startColumnOffset: this.offsetColumns,
       startRowOffset: this.offsetRows,
+      canDrag: roles.canDrag,
+      canPlace: roles.canPlace,
       moved: false,
       cancelClick: false,
     };
@@ -413,12 +428,12 @@ export class FlatBoard {
       if (Math.hypot(deltaX, deltaY) > DRAG_THRESHOLD) {
         pointer.cancelClick = true;
       }
-      if (
+      if (pointer.canDrag && (
         (this.wrapRows && Math.hypot(deltaX, deltaY) > DRAG_THRESHOLD) ||
         (!this.wrapRows &&
           Math.abs(deltaX) > DRAG_THRESHOLD &&
           Math.abs(deltaX) > Math.abs(deltaY))
-      ) {
+      )) {
         pointer.moved = true;
       }
       if (pointer.moved) {
@@ -450,7 +465,9 @@ export class FlatBoard {
     const crossedThreshold = Math.hypot(deltaX, deltaY) > DRAG_THRESHOLD;
     const horizontalDrag =
       Math.abs(deltaX) > DRAG_THRESHOLD && Math.abs(deltaX) > Math.abs(deltaY);
-    const moved = pointer.moved || (this.wrapRows ? crossedThreshold : horizontalDrag);
+    const moved = pointer.canDrag && (
+      pointer.moved || (this.wrapRows ? crossedThreshold : horizontalDrag)
+    );
     this.pointerState = null;
     this.container.classList.remove("dragging");
     if (this.canvas.hasPointerCapture?.(event.pointerId)) {
@@ -475,7 +492,7 @@ export class FlatBoard {
       this.snapToGrid();
       return;
     }
-    if (pointer.cancelClick || crossedThreshold) return;
+    if (!pointer.canPlace || pointer.cancelClick || crossedThreshold) return;
     const point = this.hitPoint(event.clientX, event.clientY);
     if (point && this.onPoint) this.onPoint(point);
   }
@@ -1127,7 +1144,7 @@ export class FlatBoard {
     context.fillStyle = "rgba(228, 233, 229, 0.82)";
     if (this.viewportWidth >= 560) {
       context.fillText(
-        "← 左右首尾相接 · 拖动改变展开起点 →",
+        "← 左右首尾相接 · 右键/触摸拖动改变展开起点 →",
         (left + right) / 2,
         top - 30,
       );
@@ -1296,7 +1313,7 @@ export class FlatBoard {
     context.fillStyle = "rgba(228, 233, 229, 0.84)";
     if (this.viewportWidth >= 560) {
       context.fillText(
-        "↔ 左右相接 · ↕ 上下相接 · 任意方向拖动",
+        "↔ 左右相接 · ↕ 上下相接 · 右键/触摸任意方向拖动",
         (left + right) / 2,
         top - 30,
       );
@@ -1388,6 +1405,7 @@ export class FlatBoard {
     this.canvas.removeEventListener("pointerup", this.handlePointerUp);
     this.canvas.removeEventListener("pointercancel", this.handlePointerCancel);
     this.canvas.removeEventListener("pointerleave", this.handlePointerLeave);
+    this.canvas.removeEventListener("contextmenu", this.handleContextMenu);
     this.canvas.remove();
   }
 }

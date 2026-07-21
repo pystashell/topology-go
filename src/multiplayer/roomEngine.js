@@ -51,6 +51,13 @@ const VALID_TOPOLOGIES = new Set([
   TOPOLOGY_TORUS,
   TOPOLOGY_MOBIUS,
 ]);
+const VALID_AI_MODELS = new Set(["b10", "b18"]);
+const AUTOMATED_WHITE_ID_PREFIX = "__ai_white__";
+// This is a deliberately unreachable credential hash, not a usable token.
+// Persisting the AI as an ordinary white player keeps older releases able to
+// read the room while the current release never authenticates this member.
+const AUTOMATED_TOKEN_HASH = "f".repeat(64);
+const FINGERPRINT_PATTERN = /^(?:pos|terminal)-v1-[a-f0-9]{16}-[a-z0-9]+$/;
 
 const GAME_ERROR_MESSAGES = Object.freeze({
   game_not_playing: "当前阶段不能落子或停一手。",
@@ -182,6 +189,18 @@ function normalizeTopology(value) {
   return topology;
 }
 
+function normalizeAIModelId(value, persisted = false) {
+  const modelId = value ?? "b10";
+  if (typeof modelId !== "string" || !VALID_AI_MODELS.has(modelId)) {
+    throw new RoomEngineError(
+      persisted ? "持久化 AI 席位无效。" : "AI 模型无效。",
+      persisted ? 500 : 400,
+      persisted ? "BAD_ROOM_STATE" : "BAD_REQUEST",
+    );
+  }
+  return modelId;
+}
+
 function normalizeRole(value) {
   if (!isRoomRole(value)) {
     throw new RoomEngineError("房间身份无效。", 400, "BAD_REQUEST");
@@ -247,6 +266,136 @@ function snapshotReplay(game) {
     base: serializeGame(game),
     events: [],
   };
+}
+
+function fingerprint(prefix, value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of bytes) {
+    hash ^= BigInt(byte);
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return [
+    prefix,
+    "v1",
+    hash.toString(16).padStart(16, "0"),
+    bytes.length.toString(36),
+  ].join("-");
+}
+
+function positionToken(game, roomState) {
+  const state = game.getState();
+  const automated = roomState.members.find(
+    (member) => member.role === "player" && member.automated === true,
+  );
+  return fingerprint("pos", {
+    positionEpoch: roomState.positionEpoch,
+    width: state.width ?? state.size,
+    height: state.height ?? state.size,
+    komi: state.komi,
+    scoringRule: state.scoringRule,
+    topology: state.topology ?? TOPOLOGY_CYLINDER,
+    currentPlayer: state.currentPlayer,
+    phase: state.phase,
+    consecutivePasses: state.consecutivePasses,
+    board: state.board,
+    captures: state.captures,
+    deadStones: state.deadStones,
+    lastMove: state.lastMove,
+    positionHistory: [...(game.positionHistory ?? [])].sort(),
+    automatedSeat: automated
+      ? {
+          playerId: automated.playerId,
+          controllerId: automated.controllerId,
+          modelId: automated.modelId,
+        }
+      : null,
+  });
+}
+
+function compatibleTerminalFingerprint(game) {
+  return fingerprint("terminal", serializeGame(game));
+}
+
+function publicResignationResult(outcome) {
+  if (!outcome) return null;
+  return {
+    winner: outcome.winner,
+    loser: outcome.loser,
+    margin: 0,
+    reason: "resign",
+    resignation: true,
+  };
+}
+
+function validStoredLastMove(lastMove) {
+  if (lastMove === null) return true;
+  if (!lastMove || typeof lastMove !== "object" || Array.isArray(lastMove)) {
+    return false;
+  }
+  if (!VALID_COLORS.has(lastMove.color)) return false;
+  if (lastMove.type === "pass") return true;
+  return lastMove.type === "play" &&
+    Number.isInteger(lastMove.row) &&
+    Number.isInteger(lastMove.col) &&
+    Array.isArray(lastMove.captured) &&
+    lastMove.captured.every((point) =>
+      point &&
+      typeof point === "object" &&
+      Number.isInteger(point.row) &&
+      Number.isInteger(point.col));
+}
+
+function validResignationOutcome(outcome) {
+  return outcome === null || (
+    outcome &&
+    typeof outcome === "object" &&
+    !Array.isArray(outcome) &&
+    outcome.reason === "resign" &&
+    outcome.resignation === true &&
+    VALID_COLORS.has(outcome.winner) &&
+    VALID_COLORS.has(outcome.loser) &&
+    outcome.winner !== outcome.loser &&
+    VALID_COLORS.has(outcome.currentPlayer) &&
+    Number.isInteger(outcome.consecutivePasses) &&
+    outcome.consecutivePasses >= 0 &&
+    outcome.consecutivePasses <= 1 &&
+    Number.isFinite(outcome.finishedAt) &&
+    Number.isSafeInteger(outcome.replayEventCount) &&
+    outcome.replayEventCount >= 0 &&
+    validStoredLastMove(outcome.lastMove) &&
+    (
+      outcome.roomRevision === undefined ||
+      (Number.isSafeInteger(outcome.roomRevision) && outcome.roomRevision >= 1)
+    ) &&
+    (
+      outcome.terminalFingerprint === undefined ||
+      (
+        typeof outcome.terminalFingerprint === "string" &&
+        FINGERPRINT_PATTERN.test(outcome.terminalFingerprint) &&
+        outcome.terminalFingerprint.startsWith("terminal-v1-")
+      )
+    )
+  );
+}
+
+function assertResignationPersistence(state, game) {
+  const outcome = state.resignationOutcome;
+  if (!outcome) return;
+
+  // rc.2 ignores the optional resignation field. It can therefore replace the
+  // game with a new play, scoring, or finished position while preserving stale
+  // metadata. Only the exact synthetic terminal written by the resign action
+  // may activate that metadata; every other combination is a rollback-created
+  // stale value and must be discarded rather than overlaid on the new game.
+  const compatibleTerminal =
+    typeof outcome.terminalFingerprint === "string" &&
+    outcome.roomRevision === state.revision &&
+    game.phase === PHASE_FINISHED &&
+    game.result?.reason !== "resign" &&
+    !state.timeControl?.outcome &&
+    compatibleTerminalFingerprint(game) === outcome.terminalFingerprint;
+  if (!compatibleTerminal) state.resignationOutcome = null;
 }
 
 function restoreGame(value) {
@@ -341,6 +490,8 @@ function validateSerializedState(state) {
     state.revision < 1 ||
     (state.moveCount !== undefined &&
       (!Number.isSafeInteger(state.moveCount) || state.moveCount < 0)) ||
+    (state.positionEpoch !== undefined &&
+      (!Number.isSafeInteger(state.positionEpoch) || state.positionEpoch < 1)) ||
     !Array.isArray(state.members) ||
     !Array.isArray(state.receipts) ||
     !state.game
@@ -353,6 +504,7 @@ function validateSerializedState(state) {
   }
 
   const colors = new Set();
+  let automatedPlayers = 0;
   let spectators = 0;
   for (const member of state.members) {
     normalizePlayerId(member.playerId);
@@ -367,6 +519,23 @@ function validateSerializedState(state) {
         );
       }
       colors.add(member.color);
+      if (member.automated === true) {
+        automatedPlayers += 1;
+        if (
+          member.color !== WHITE ||
+          member.tokenHash !== AUTOMATED_TOKEN_HASH ||
+          typeof member.controllerId !== "string" ||
+          !member.controllerId ||
+          member.controllerId.length > 128
+        ) {
+          throw new RoomEngineError(
+            "持久化 AI 席位无效。",
+            500,
+            "BAD_ROOM_STATE",
+          );
+        }
+        normalizeAIModelId(member.modelId, true);
+      }
     } else if (member.role === "spectator" && member.color === null) {
       spectators += 1;
     } else {
@@ -376,6 +545,13 @@ function validateSerializedState(state) {
         "BAD_ROOM_STATE",
       );
     }
+  }
+  if (automatedPlayers > 1) {
+    throw new RoomEngineError(
+      "持久化 AI 席位无效。",
+      500,
+      "BAD_ROOM_STATE",
+    );
   }
   if (spectators > MAX_SPECTATORS) {
     throw new RoomEngineError(
@@ -425,6 +601,16 @@ function validateSerializedState(state) {
         "BAD_ROOM_STATE",
       );
     }
+  }
+  if (
+    state.resignationOutcome !== undefined &&
+    !validResignationOutcome(state.resignationOutcome)
+  ) {
+    throw new RoomEngineError(
+      "持久化认输状态无效。",
+      500,
+      "BAD_ROOM_STATE",
+    );
   }
 }
 
@@ -481,8 +667,10 @@ export class RoomEngine {
       code,
       revision: 1,
       moveCount: 0,
+      positionEpoch: 1,
       scoreConfirmations: [],
       undoRequest: null,
+      resignationOutcome: null,
       timeControl,
       chatSequence: 0,
       chatMessages: [],
@@ -527,8 +715,10 @@ export class RoomEngine {
     }
     validateSerializedState(state);
     state.moveCount ??= 0;
+    state.positionEpoch ??= 1;
     state.scoreConfirmations ??= [];
     state.undoRequest ??= null;
+    state.resignationOutcome ??= null;
     state.timeControl = persistedRoomTimeControl(state.timeControl);
     state.chatMessages = trimStoredChatHistory(state.chatMessages);
     const latestChatSequence = state.chatMessages.reduce(
@@ -586,7 +776,23 @@ export class RoomEngine {
         );
       }
     }
+    const automatedPlayer = state.members.find(
+      (member) => member.role === "player" && member.automated === true,
+    );
+    const blackController = state.members.find(
+      (member) =>
+        member.role === "player" &&
+        member.automated !== true &&
+        member.color === BLACK,
+    );
+    if (automatedPlayer && blackController) {
+      // An older release can release and refill the black seat while retaining
+      // the unknown automation metadata on white. The current black host owns
+      // the browser-side controller after the room is upgraded again.
+      automatedPlayer.controllerId = blackController.playerId;
+    }
     const room = new RoomEngine(state, restoreGame(state.game));
+    assertResignationPersistence(state, room.game);
     room.assertTimeControlConsistency();
     return room;
   }
@@ -606,10 +812,19 @@ export class RoomEngine {
       .map((member) => ({
         id: member.playerId,
         name: member.name,
-        role: member.role,
+        role: member.automated === true ? "ai" : member.role,
         color: member.color,
-        online: this.isOnline(member.playerId),
+        online: member.automated === true
+          ? this.isOnline(member.controllerId)
+          : this.isOnline(member.playerId),
         lastSeenAt: member.lastSeenAt,
+        ...(member.automated === true
+          ? {
+              automated: true,
+              modelId: member.modelId,
+              controllerId: member.controllerId,
+            }
+          : {}),
       }));
     const spectators = this.state.members
       .filter((member) => member.role === "spectator")
@@ -628,6 +843,9 @@ export class RoomEngine {
       }));
     const timeControl = snapshotTimeControl(this.state.timeControl, now);
     const game = clone(this.game.getState());
+    const resignationResult = publicResignationResult(
+      this.state.resignationOutcome,
+    );
     if (timeControl?.outcome) {
       game.phase = PHASE_FINISHED;
       game.result = {
@@ -637,18 +855,35 @@ export class RoomEngine {
         reason: "timeout",
         finishedAt: timeControl.outcome.finishedAt,
       };
+    } else if (resignationResult) {
+      game.phase = PHASE_FINISHED;
+      game.result = resignationResult;
+      game.currentPlayer = this.state.resignationOutcome.currentPlayer;
+      game.consecutivePasses = this.state.resignationOutcome.consecutivePasses;
+      game.lastMove = clone(this.state.resignationOutcome.lastMove);
     }
     game.moveCount = this.state.moveCount;
     const replay = snapshotReplay(this.game);
-    if (timeControl?.outcome) replay.outcome = clone(timeControl.outcome);
+    if (timeControl?.outcome) {
+      replay.outcome = clone(timeControl.outcome);
+    } else if (resignationResult) {
+      replay.events = replay.events.slice(
+        0,
+        this.state.resignationOutcome.replayEventCount,
+      );
+      replay.outcome = resignationResult;
+    }
     return {
       code: this.state.code,
       revision: this.state.revision,
       version: this.state.revision,
+      positionToken: positionToken(this.game, this.state),
       moveCount: this.state.moveCount,
       replay,
       undoAvailable:
         !timeControl?.outcome &&
+        !resignationResult &&
+        this.game.phase === PHASE_PLAY &&
         typeof this.game.canUndo === "function" &&
         this.game.canUndo(),
       scoreConfirmations: clone(this.state.scoreConfirmations),
@@ -757,6 +992,10 @@ export class RoomEngine {
       chatBucket: freshChatBucket(CHAT_MEMBER_BURST, now),
     };
     this.state.members.push(member);
+    if (effectiveRole === "player" && color === BLACK) {
+      const automatedPlayer = this.automatedPlayer();
+      if (automatedPlayer) automatedPlayer.controllerId = member.playerId;
+    }
     this.syncTimeControlRunning(now);
     this.commit(now);
     return {
@@ -1022,7 +1261,16 @@ export class RoomEngine {
     if (action === "leave") return this.leave({ playerId, now });
 
     this.requirePlayer(member);
-    if (this.state.timeControl?.outcome && action !== "new_game") {
+    const managesSeatsOrStartsGame =
+      action === "attach_ai" || action === "detach_ai" || action === "new_game";
+    if (this.state.resignationOutcome && !managesSeatsOrStartsGame) {
+      throw new RoomEngineError(
+        "本局已经因认输结束。",
+        409,
+        "GAME_FINISHED",
+      );
+    }
+    if (this.state.timeControl?.outcome && !managesSeatsOrStartsGame) {
       const { loser, winner } = this.state.timeControl.outcome;
       throw new RoomEngineError(
         `${loser === BLACK ? "黑方" : "白方"}已经超时，${winner === BLACK ? "黑方" : "白方"}获胜。`,
@@ -1033,7 +1281,82 @@ export class RoomEngine {
     this.syncTimeControlRunning(now);
     let move;
 
-    if (action === "play") {
+    if (action === "attach_ai") {
+      this.requireHost(member);
+      const modelId = normalizeAIModelId(payload.modelId);
+      const existingAutomated = this.automatedPlayer();
+      if (!existingAutomated && this.nextOpenColor() !== WHITE) {
+        throw new RoomEngineError(
+          "白方座位已经有人，不能再接入 AI。",
+          409,
+          "AI_SEAT_UNAVAILABLE",
+        );
+      }
+      if (existingAutomated) {
+        const previousModelId = existingAutomated.modelId;
+        existingAutomated.name = `KataGo ${modelId} AI`;
+        existingAutomated.controllerId = member.playerId;
+        existingAutomated.modelId = modelId;
+        existingAutomated.lastSeenAt = now;
+        move = {
+          ok: true,
+          type: "ai_updated",
+          color: WHITE,
+          modelId,
+          previousModelId,
+          controllerId: member.playerId,
+        };
+      } else {
+        const automatedId = `${AUTOMATED_WHITE_ID_PREFIX}:${this.state.code}`;
+        if (this.member(automatedId)) {
+          throw new RoomEngineError(
+            "AI 席位标识发生冲突。",
+            409,
+            "AI_SEAT_UNAVAILABLE",
+          );
+        }
+        const automated = {
+          playerId: automatedId,
+          name: `KataGo ${modelId} AI`,
+          tokenHash: AUTOMATED_TOKEN_HASH,
+          role: "player",
+          color: WHITE,
+          automated: true,
+          controllerId: member.playerId,
+          modelId,
+          joinedAt: now,
+          lastSeenAt: now,
+          lastSequence: 0,
+          chatBucket: freshChatBucket(CHAT_MEMBER_BURST, now),
+        };
+        this.state.members.push(automated);
+        move = {
+          ok: true,
+          type: "ai_attached",
+          color: WHITE,
+          modelId,
+          controllerId: member.playerId,
+        };
+      }
+    } else if (action === "detach_ai") {
+      const automated = this.requireAutomatedPlayer(member);
+      this.state.members = this.state.members.filter(
+        (candidate) => candidate.playerId !== automated.playerId,
+      );
+      this.state.receipts = this.state.receipts.filter(
+        (receipt) => receipt.playerId !== automated.playerId,
+      );
+      this.state.scoreConfirmations = this.state.scoreConfirmations.filter(
+        (color) => color !== automated.color,
+      );
+      this.state.undoRequest = null;
+      move = {
+        ok: true,
+        type: "ai_detached",
+        color: automated.color,
+        modelId: automated.modelId,
+      };
+    } else if (action === "play") {
       this.assertNoUndoRequest();
       this.requireBothPlayers();
       this.assertTurn(member);
@@ -1045,6 +1368,131 @@ export class RoomEngine {
       this.requireBothPlayers();
       this.assertTurn(member);
       move = this.game.pass();
+    } else if (action === "ai_play") {
+      this.assertNoUndoRequest();
+      const automated = this.requireAutomatedPlayer(member);
+      this.requireBothPlayers();
+      this.assertFreshPosition(payload);
+      this.assertAutomatedTurn(automated);
+      const row = validateCoordinate(payload.row, "行");
+      const col = validateCoordinate(payload.col, "列");
+      move = this.game.play(row, col);
+    } else if (action === "ai_pass") {
+      this.assertNoUndoRequest();
+      const automated = this.requireAutomatedPlayer(member);
+      this.requireBothPlayers();
+      this.assertFreshPosition(payload);
+      this.assertAutomatedTurn(automated);
+      move = this.game.pass();
+    } else if (action === "direct_undo_ai_round") {
+      this.assertNoUndoRequest();
+      this.requireAutomatedPlayer(member);
+      this.assertFreshPosition(payload);
+      if (this.game.phase !== PHASE_PLAY) {
+        throw new RoomEngineError(
+          "只有对弈阶段可以撤回人机回合。",
+          409,
+          "UNDO_UNAVAILABLE",
+        );
+      }
+      if (!this.game.canUndo()) {
+        throw new RoomEngineError(
+          "当前没有可以撤回的人机棋步。",
+          409,
+          "UNDO_UNAVAILABLE",
+        );
+      }
+
+      const previousGame = serializeGame(this.game);
+      const previousTimeControl = clone(this.state.timeControl);
+      const previousMoveCount = this.state.moveCount;
+      if (
+        this.state.timeControl &&
+        !this.state.timeControl.outcome &&
+        this.state.timeControl.activeColor !== null
+      ) {
+        this.state.timeControl = pauseTimeControl(this.state.timeControl, now);
+      }
+
+      const undoneMoves = [];
+      let humanDecisionUndone = false;
+      while (this.game.canUndo()) {
+        const undone = this.game.undo();
+        if (!undone.ok) break;
+        undoneMoves.push(undone.move);
+        this.state.moveCount = Math.max(0, this.state.moveCount - 1);
+        if (undone.move.color === member.color) {
+          humanDecisionUndone = true;
+          break;
+        }
+      }
+      if (!humanDecisionUndone) {
+        this.game = restoreGame(previousGame);
+        this.state.timeControl = previousTimeControl;
+        this.state.moveCount = previousMoveCount;
+        throw new RoomEngineError(
+          "没有找到可以撤回的人类决策。",
+          409,
+          "UNDO_UNAVAILABLE",
+        );
+      }
+      move = {
+        ok: true,
+        type: "ai_round_undone",
+        color: member.color,
+        undoneCount: undoneMoves.length,
+        undoneMoves: clone(undoneMoves),
+        currentPlayer: this.game.currentPlayer,
+        phase: this.game.phase,
+      };
+    } else if (action === "resign") {
+      this.requireBothPlayers();
+      if (this.game.phase !== PHASE_PLAY) {
+        throw new RoomEngineError(
+          "只有对弈阶段可以认输。",
+          409,
+          "ILLEGAL_MOVE",
+        );
+      }
+      const replayEventCount = snapshotReplay(this.game).events.length;
+      const lastMove = clone(this.game.lastMove);
+      const currentPlayer = this.game.currentPlayer;
+      const consecutivePasses = this.game.consecutivePasses;
+      const loser = member.color;
+      const winner = loser === BLACK ? WHITE : BLACK;
+      while (this.game.phase === PHASE_PLAY) {
+        const pass = this.game.pass();
+        if (!pass.ok) break;
+      }
+      const compatibleFinish = this.game.finishScoring();
+      if (!compatibleFinish.ok) {
+        throw new RoomEngineError(
+          "当前无法记录认输结果。",
+          409,
+          "ILLEGAL_MOVE",
+        );
+      }
+      const terminalFingerprint = compatibleTerminalFingerprint(this.game);
+      this.state.resignationOutcome = {
+        winner,
+        loser,
+        reason: "resign",
+        resignation: true,
+        currentPlayer,
+        consecutivePasses,
+        finishedAt: now,
+        replayEventCount,
+        lastMove,
+        terminalFingerprint,
+        roomRevision: this.state.revision + 1,
+      };
+      move = {
+        ok: true,
+        type: "resign",
+        color: loser,
+        ...publicResignationResult(this.state.resignationOutcome),
+        phase: PHASE_FINISHED,
+      };
     } else if (action === "toggle_dead") {
       const row = validateCoordinate(payload.row, "行");
       const col = validateCoordinate(payload.col, "列");
@@ -1055,6 +1503,17 @@ export class RoomEngine {
       } else {
         if (!this.state.scoreConfirmations.includes(member.color)) {
           this.state.scoreConfirmations.push(member.color);
+        }
+        const automated = this.automatedPlayer();
+        if (
+          automated &&
+          automated.controllerId === member.playerId &&
+          !this.state.scoreConfirmations.includes(automated.color)
+        ) {
+          // There is no remote AI process to click a confirmation button. The
+          // human controller's single confirmation represents both local
+          // seats, matching local human-vs-AI scoring and avoiding deadlock.
+          this.state.scoreConfirmations.push(automated.color);
         }
         const bothPlayersConfirmed = [BLACK, WHITE].every((color) =>
           this.state.scoreConfirmations.includes(color),
@@ -1080,6 +1539,13 @@ export class RoomEngine {
       move = this.game.resumePlay(this.game.currentPlayer);
     } else if (action === "request_undo") {
       this.requireBothPlayers();
+      if (this.automatedPlayer()) {
+        throw new RoomEngineError(
+          "AI 对局请直接撤回上一轮，不需要发送申请。",
+          409,
+          "AI_UNDO_IS_DIRECT",
+        );
+      }
       if (
         !Number.isSafeInteger(payload.expectedMoveCount) ||
         payload.expectedMoveCount !== this.state.moveCount
@@ -1250,6 +1716,7 @@ export class RoomEngine {
         ),
       });
       this.game = newGame;
+      this.state.resignationOutcome = null;
       this.state.timeControl = freshRoomTimeControl(requestedTimeControl, now);
       this.state.moveCount = 0;
       this.state.undoRequest = null;
@@ -1267,11 +1734,30 @@ export class RoomEngine {
       );
     }
 
+    const invalidatesAIPosition =
+      action === "play" ||
+      action === "pass" ||
+      action === "ai_play" ||
+      action === "ai_pass" ||
+      action === "attach_ai" ||
+      action === "detach_ai" ||
+      action === "direct_undo_ai_round" ||
+      action === "resign" ||
+      action === "toggle_dead" ||
+      action === "finish_scoring" ||
+      action === "resume_play" ||
+      action === "new_game" ||
+      (action === "respond_undo" && move.type === "undo_accepted");
+
     this.updateTimeControlAfterAction(action, now);
 
     if (
       action === "play" ||
       action === "pass" ||
+      action === "ai_play" ||
+      action === "ai_pass" ||
+      action === "direct_undo_ai_round" ||
+      action === "resign" ||
       action === "toggle_dead" ||
       action === "resume_play" ||
       action === "new_game"
@@ -1279,14 +1765,25 @@ export class RoomEngine {
       this.state.scoreConfirmations = [];
     }
 
-    if (action === "resume_play" || action === "new_game") {
+    if (
+      action === "direct_undo_ai_round" ||
+      action === "resign" ||
+      action === "resume_play" ||
+      action === "new_game"
+    ) {
       this.state.undoRequest = null;
     }
 
-    if (action === "play" || action === "pass") {
+    if (
+      action === "play" ||
+      action === "pass" ||
+      action === "ai_play" ||
+      action === "ai_pass"
+    ) {
       this.state.moveCount += 1;
     }
 
+    if (invalidatesAIPosition) this.bumpPositionEpoch();
     member.lastSeenAt = now;
     this.commit(now);
     return {
@@ -1396,7 +1893,7 @@ export class RoomEngine {
     if (now >= this.state.expiresAt) {
       this.state.expiredAt = now;
       this.state.updatedAt = now;
-      this.state.revision += 1;
+      this.incrementRevision();
       return {
         changed: true,
         expired: true,
@@ -1428,7 +1925,7 @@ export class RoomEngine {
       // Membership maintenance gets a revision so clients can order the new
       // presence snapshot, but it is not user activity and must not prolong
       // the room's 24-hour TTL.
-      this.state.revision += 1;
+      this.incrementRevision();
       this.state.updatedAt = now;
       return {
         changed: true,
@@ -1469,6 +1966,21 @@ export class RoomEngine {
     );
   }
 
+  automatedPlayer() {
+    return this.state.members.find(
+      (member) => member.role === "player" && member.automated === true,
+    ) ?? null;
+  }
+
+  hostPlayer() {
+    return this.state.members.find(
+      (member) =>
+        member.role === "player" &&
+        member.automated !== true &&
+        member.color === BLACK,
+    ) ?? null;
+  }
+
   requireMember(playerId) {
     const member = this.member(playerId);
     if (!member) {
@@ -1482,11 +1994,67 @@ export class RoomEngine {
   }
 
   requirePlayer(member) {
-    if (member.role !== "player" || !VALID_COLORS.has(member.color)) {
+    if (
+      member.role !== "player" ||
+      member.automated === true ||
+      !VALID_COLORS.has(member.color)
+    ) {
       throw new RoomEngineError(
         "旁观者不能操作棋局。",
         403,
         "FORBIDDEN",
+      );
+    }
+  }
+
+  requireHost(member) {
+    this.requirePlayer(member);
+    if (member.color !== BLACK || this.hostPlayer()?.playerId !== member.playerId) {
+      throw new RoomEngineError(
+        "只有黑方房主可以管理 AI 对手。",
+        403,
+        "FORBIDDEN",
+      );
+    }
+  }
+
+  requireAutomatedPlayer(member) {
+    this.requireHost(member);
+    const automated = this.automatedPlayer();
+    if (!automated || automated.controllerId !== member.playerId) {
+      throw new RoomEngineError(
+        "当前房间没有由你控制的 AI 对手。",
+        409,
+        "AI_NOT_ATTACHED",
+      );
+    }
+    return automated;
+  }
+
+  assertFreshPosition(payload) {
+    if (
+      !Number.isSafeInteger(payload.expectedMoveCount) ||
+      payload.expectedMoveCount !== this.state.moveCount ||
+      typeof payload.expectedPositionToken !== "string" ||
+      payload.expectedPositionToken !== positionToken(this.game, this.state)
+    ) {
+      throw new RoomEngineError(
+        "AI 思考期间棋局已经变化，请按最新局面重新计算。",
+        409,
+        "STALE_GAME_STATE",
+      );
+    }
+  }
+
+  assertAutomatedTurn(automated) {
+    if (
+      this.game.phase !== PHASE_PLAY ||
+      this.game.currentPlayer !== automated.color
+    ) {
+      throw new RoomEngineError(
+        "当前不是 AI 的回合。",
+        409,
+        "NOT_AI_TURN",
       );
     }
   }
@@ -1549,7 +2117,12 @@ export class RoomEngine {
 
   updateTimeControlAfterAction(action, now) {
     if (!this.state.timeControl) return;
-    if (action === "play" || action === "pass") {
+    if (
+      action === "play" ||
+      action === "pass" ||
+      action === "ai_play" ||
+      action === "ai_pass"
+    ) {
       const nextColor = this.shouldTimeControlRun()
         ? this.game.currentPlayer
         : null;
@@ -1698,8 +2271,27 @@ export class RoomEngine {
     this.state.expiresAt = now + ROOM_TTL_MS;
   }
 
+  bumpPositionEpoch() {
+    if (this.state.positionEpoch >= Number.MAX_SAFE_INTEGER) {
+      throw new RoomEngineError(
+        "棋局版本已经超出安全范围。",
+        500,
+        "BAD_ROOM_STATE",
+      );
+    }
+    this.state.positionEpoch += 1;
+  }
+
+  incrementRevision() {
+    const nextRevision = this.state.revision + 1;
+    if (this.state.resignationOutcome) {
+      this.state.resignationOutcome.roomRevision = nextRevision;
+    }
+    this.state.revision = nextRevision;
+  }
+
   commit(now) {
-    this.state.revision += 1;
+    this.incrementRevision();
     this.state.updatedAt = now;
     this.state.expiresAt = now + ROOM_TTL_MS;
   }

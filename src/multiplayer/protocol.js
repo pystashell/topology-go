@@ -7,6 +7,12 @@ export const ROOM_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{6}$/;
 export const ROOM_ACTIONS = Object.freeze([
   "play",
   "pass",
+  "resign",
+  "attach_ai",
+  "detach_ai",
+  "ai_play",
+  "ai_pass",
+  "direct_undo_ai_round",
   "toggle_dead",
   "finish_scoring",
   "resume_play",

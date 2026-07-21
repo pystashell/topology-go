@@ -34,7 +34,7 @@ export class MobiusBoard extends TorusBoard {
     super(container, options);
     this.renderer.domElement.setAttribute(
       "aria-label",
-      "左右反向相接、上下保留一圈边界的三维莫比乌斯围棋棋盘。拖动旋转，滚轮或双指缩放。",
+      "左右反向相接、上下保留一圈边界的三维莫比乌斯围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
     );
   }
 

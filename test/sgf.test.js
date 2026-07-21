@@ -80,6 +80,24 @@ test("timeout outcomes use the standard SGF time-forfeit result", () => {
   assert.equal(importSgf(sgf).metadata.result, "W+T");
 });
 
+test("resignation exports as the standard SGF result without a private move", () => {
+  const game = new GoEngine({ size: 9 });
+  assert.equal(game.play(2, 2).ok, true);
+  assert.equal(game.resign(WHITE).ok, true);
+
+  const exported = exportSgf({
+    replay: game.getReplayState(),
+    metadata: { result: game.result },
+  });
+  assert.match(exported.sgf, /RE\[B\+R\]/u);
+  assert.doesNotMatch(exported.sgf, /X[A-Z]+\[resign\]/u);
+  assert.equal(
+    exported.warnings.some((warning) => warning.code === "SKIPPED_EVENT"),
+    false,
+  );
+  assert.equal(importSgf(exported.sgf).metadata.result, "B+R");
+});
+
 test("rectangular SZ uses width:height and preserves authoritative dimensions", () => {
   const replay = {
     version: 1,

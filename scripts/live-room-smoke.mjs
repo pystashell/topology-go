@@ -44,6 +44,19 @@ function isRestoredAfterWhiteUndo({ room }) {
   );
 }
 
+function isFinishedByBlackResignation({ room }) {
+  return (
+    room?.game?.phase === "finished" &&
+    room?.game?.result?.reason === "resign" &&
+    room?.game?.result?.loser === "black" &&
+    room?.game?.result?.winner === "white" &&
+    room?.timeControl?.running === false &&
+    room?.timeControl?.activeColor === null &&
+    room?.undoRequest === null &&
+    room?.undoAvailable === false
+  );
+}
+
 function requireCondition(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -60,6 +73,8 @@ async function leaveQuietly(client) {
 const black = makeClient();
 const white = makeClient();
 const spectator = makeClient();
+const aiHost = makeClient();
+const aiSpectator = makeClient();
 
 try {
   const legacyResponse = await fetch(new URL("/api/rooms", target), {
@@ -148,6 +163,16 @@ try {
   requireCondition(
     spectatorWriteRejected,
     "Spectator was able to issue a game-changing command",
+  );
+  let spectatorResignRejected = false;
+  try {
+    await spectator.command("resign");
+  } catch (error) {
+    spectatorResignRejected = ["FORBIDDEN", "NOT_A_PLAYER", "SPECTATOR_READ_ONLY"].includes(error?.code);
+  }
+  requireCondition(
+    spectatorResignRejected,
+    "Spectator was able to resign on behalf of a player",
   );
   requireCondition(
     created.room?.game?.topology === "mobius" &&
@@ -290,6 +315,159 @@ try {
     "Black and white clients disagree about the chat history",
   );
 
+  const blackSawResignation = waitFor(
+    black,
+    "state",
+    isFinishedByBlackResignation,
+    "black resignation on sender client",
+  );
+  const whiteSawResignation = waitFor(
+    white,
+    "state",
+    isFinishedByBlackResignation,
+    "black resignation on white client",
+  );
+  const spectatorSawResignation = waitFor(
+    spectator,
+    "state",
+    isFinishedByBlackResignation,
+    "black resignation on spectator client",
+  );
+  await black.command("resign");
+  const resignedStates = await Promise.all([
+    blackSawResignation,
+    whiteSawResignation,
+    spectatorSawResignation,
+  ]);
+  requireCondition(
+    resignedStates.every(({ room }) =>
+      room.replay?.outcome?.reason === "resign" &&
+      room.replay.outcome.loser === "black" &&
+      room.replay.outcome.winner === "white"),
+    "Resignation was not persisted in every client's replay",
+  );
+
+  const aiHostConnected = waitFor(
+    aiHost,
+    "connection",
+    ({ status }) => status === "connected",
+    "online AI host WebSocket connection",
+  );
+  const aiCreated = await aiHost.createRoom({
+    name: "Smoke AI Host",
+    width: 9,
+    height: 7,
+    komi: 6.5,
+    scoringRule: "chinese",
+    topology: "torus",
+    mainTimeSeconds: 60,
+    byoYomiPeriods: 2,
+    byoYomiSeconds: 10,
+  });
+  await aiHostConnected;
+  requireCondition(
+    aiCreated.room?.game?.width === 9 && aiCreated.room?.game?.height === 7,
+    "Rectangular online room dimensions were not preserved",
+  );
+
+  const aiAttachedState = waitFor(
+    aiHost,
+    "state",
+    ({ room }) =>
+      room?.players?.some((player) =>
+        player?.color === "white" && player?.automated === true) &&
+      room?.timeControl?.running === true &&
+      room?.timeControl?.activeColor === "black",
+    "AI white seat on host client",
+  );
+  await aiHost.command("attach_ai", { modelId: "b10" });
+  const aiAttached = await aiAttachedState;
+  requireCondition(
+    aiAttached.room.players.find((player) => player.color === "white")?.role === "ai",
+    "Attached AI was not exposed as the white controller",
+  );
+
+  const aiSpectatorConnected = waitFor(
+    aiSpectator,
+    "connection",
+    ({ status }) => status === "connected",
+    "online AI spectator WebSocket connection",
+  );
+  const aiWatched = await aiSpectator.joinRoom(aiCreated.roomCode, {
+    name: "Smoke AI Spectator",
+    role: "spectator",
+  });
+  await aiSpectatorConnected;
+  requireCondition(
+    aiWatched.session?.role === "spectator" &&
+      aiWatched.room?.players?.some((player) => player?.automated === true),
+    "Spectator could not observe the online AI seat",
+  );
+
+  const hostSawHumanMove = waitFor(
+    aiHost,
+    "state",
+    ({ room }) =>
+      room?.moveCount === 1 &&
+      room?.game?.board?.[3]?.[3] === "black" &&
+      room?.game?.currentPlayer === "white",
+    "human move before online AI response",
+  );
+  await aiHost.command("play", { row: 3, col: 3 });
+  const afterHuman = await hostSawHumanMove;
+  const aiMoveExpectation = {
+    expectedMoveCount: afterHuman.room.moveCount,
+    expectedPositionToken: afterHuman.room.positionToken,
+  };
+
+  const hostSawAI = waitFor(
+    aiHost,
+    "state",
+    ({ room }) =>
+      room?.moveCount === 2 &&
+      room?.game?.board?.[3]?.[4] === "white" &&
+      room?.game?.currentPlayer === "black",
+    "online AI response on host client",
+  );
+  const spectatorSawAI = waitFor(
+    aiSpectator,
+    "state",
+    ({ room }) =>
+      room?.moveCount === 2 && room?.game?.board?.[3]?.[4] === "white",
+    "online AI response on spectator client",
+  );
+  await aiHost.command("ai_play", {
+    row: 3,
+    col: 4,
+    ...aiMoveExpectation,
+  });
+  const [afterAI] = await Promise.all([hostSawAI, spectatorSawAI]);
+
+  const hostSawDirectUndo = waitFor(
+    aiHost,
+    "state",
+    ({ room }) =>
+      room?.moveCount === 0 &&
+      room?.game?.board?.[3]?.[3] === null &&
+      room?.game?.board?.[3]?.[4] === null &&
+      room?.game?.currentPlayer === "black",
+    "direct online AI round undo",
+  );
+  const spectatorSawDirectUndo = waitFor(
+    aiSpectator,
+    "state",
+    ({ room }) =>
+      room?.moveCount === 0 &&
+      room?.game?.board?.[3]?.[3] === null &&
+      room?.game?.board?.[3]?.[4] === null,
+    "direct online AI round undo on spectator client",
+  );
+  await aiHost.command("direct_undo_ai_round", {
+    expectedMoveCount: afterAI.room.moveCount,
+    expectedPositionToken: afterAI.room.positionToken,
+  });
+  await Promise.all([hostSawDirectUndo, spectatorSawDirectUndo]);
+
   console.log(
     JSON.stringify({
       ok: true,
@@ -315,10 +493,23 @@ try {
       synchronized: true,
       clockStartedAfterBothSeats: true,
       spectatorReadOnly: spectatorWriteRejected,
+      spectatorCannotResign: spectatorResignRejected,
       spectatorSynchronized: spectator.room?.game?.board?.[0]?.[0] === "black",
+      resignationSynchronized: true,
+      resignedColor: "black",
+      resignationWinner: "white",
+      clockStoppedAfterResignation: true,
+      onlineAISeat: true,
+      onlineAIModel: "b10",
+      onlineAIHostBrowserController: true,
+      onlineAISpectatorSynchronized: true,
+      onlineAIDirectUndo: true,
+      rectangularOnlineBoard: "9x7",
     }),
   );
 } finally {
+  await leaveQuietly(aiSpectator);
+  await leaveQuietly(aiHost);
   await leaveQuietly(spectator);
   await leaveQuietly(white);
   await leaveQuietly(black);

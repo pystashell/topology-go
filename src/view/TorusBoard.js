@@ -7,6 +7,15 @@ import {
   torusGridFrame,
   torusGridPointFromCartesian,
 } from "./torusGeometry.js";
+import {
+  invalidatePendingTapOnAdditionalPointer,
+  pointerGestureRoles,
+  preventBoardContextMenu,
+} from "./pointerGestures.js";
+import {
+  createPlayerViewLighting,
+  updatePlayerViewLighting,
+} from "./playerViewLighting.js";
 
 const CELL = 1;
 const DRAG_THRESHOLD = 6;
@@ -144,7 +153,7 @@ export class TorusBoard {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.setAttribute(
       "aria-label",
-      "上下左右均首尾相接的三维甜甜圈围棋棋盘。拖动旋转，滚轮或双指缩放。",
+      "上下左右均首尾相接的三维甜甜圈围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
     );
     this.container.appendChild(this.renderer.domElement);
 
@@ -157,27 +166,17 @@ export class TorusBoard {
     this.controls.minPolarAngle = 0.08;
     this.controls.maxPolarAngle = Math.PI - 0.08;
     this.controls.autoRotateSpeed = 0.68;
+    this.controls.mouseButtons.LEFT = -1;
+    this.controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
     this.woodTexture = makeWoodTexture(this.renderer);
 
-    this.scene.add(new THREE.HemisphereLight(0xe8f3ed, 0x172019, 1.75));
-    const keyLight = new THREE.DirectionalLight(0xffdfa4, 3.4);
-    keyLight.position.set(9, 12, 16);
-    keyLight.castShadow = true;
-    keyLight.shadow.mapSize.set(1024, 1024);
-    keyLight.shadow.camera.near = 1;
-    keyLight.shadow.camera.far = 90;
-    keyLight.shadow.camera.left = -30;
-    keyLight.shadow.camera.right = 30;
-    keyLight.shadow.camera.top = 30;
-    keyLight.shadow.camera.bottom = -30;
-    this.scene.add(keyLight);
-
-    const fillLight = new THREE.DirectionalLight(0x8fb4a2, 1.55);
-    fillLight.position.set(-12, -6, 7);
-    this.scene.add(fillLight);
+    // MobiusBoard inherits this exact rig. Unlike fixed world-space lighting,
+    // it follows the player's view so every visible playing surface remains
+    // readable after rotation, including the reverse side of the Mobius band.
+    this.playerViewLighting = createPlayerViewLighting(this.scene);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.container);
@@ -186,6 +185,7 @@ export class TorusBoard {
     this.onPointerMove = (event) => this.handlePointerMove(event);
     this.onPointerUp = (event) => this.handlePointerUp(event);
     this.onPointerCancel = (event) => this.handlePointerCancel(event);
+    this.onContextMenu = (event) => preventBoardContextMenu(event);
     this.onPointerLeave = () => {
       if (!this.pointerStart) this.setHoveredPoint(null);
     };
@@ -196,6 +196,7 @@ export class TorusBoard {
     canvas.addEventListener("pointerup", this.onPointerUp);
     canvas.addEventListener("pointercancel", this.onPointerCancel);
     canvas.addEventListener("pointerleave", this.onPointerLeave);
+    canvas.addEventListener("contextmenu", this.onContextMenu);
 
     this.rebuild(boardWidth, boardHeight);
     this.animate();
@@ -637,18 +638,23 @@ export class TorusBoard {
   }
 
   handlePointerDown(event) {
-    if (
-      !this.active ||
-      event.isPrimary === false ||
-      this.pointerStart ||
-      (event.pointerType === "mouse" && event.button !== 0)
-    ) {
+    const guardedPointer = invalidatePendingTapOnAdditionalPointer(
+      this.pointerStart,
+      event,
+    );
+    if (guardedPointer !== this.pointerStart) {
+      this.pointerStart = guardedPointer;
+      this.setHoveredPoint(null);
       return;
     }
+    const roles = pointerGestureRoles(event);
+    if (!this.active || !roles || this.pointerStart) return;
+    if (event.pointerType === "mouse" && roles.canDrag) event.preventDefault();
     this.pointerStart = {
       id: event.pointerId,
       x: event.clientX,
       y: event.clientY,
+      canPlace: roles.canPlace,
     };
     this.renderer.domElement.setPointerCapture?.(event.pointerId);
   }
@@ -670,6 +676,7 @@ export class TorusBoard {
 
   handlePointerUp(event) {
     if (!this.pointerStart || this.pointerStart.id !== event.pointerId) return;
+    const canPlace = this.pointerStart.canPlace;
     const distance = Math.hypot(
       event.clientX - this.pointerStart.x,
       event.clientY - this.pointerStart.y,
@@ -679,7 +686,7 @@ export class TorusBoard {
     if (canvas.hasPointerCapture?.(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
     }
-    if (distance > DRAG_THRESHOLD) return;
+    if (!canPlace || distance > DRAG_THRESHOLD) return;
     const point = this.raycastPoint(event);
     if (point && this.onPoint) this.onPoint(point);
   }
@@ -821,6 +828,12 @@ export class TorusBoard {
     }
     this.animationFrame = requestAnimationFrame(() => this.animate());
     this.controls.update();
+    updatePlayerViewLighting(
+      this.playerViewLighting,
+      this.camera,
+      this.controls.target,
+      this.majorRadius + this.minorRadius,
+    );
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -836,6 +849,7 @@ export class TorusBoard {
     canvas.removeEventListener("pointerup", this.onPointerUp);
     canvas.removeEventListener("pointercancel", this.onPointerCancel);
     canvas.removeEventListener("pointerleave", this.onPointerLeave);
+    canvas.removeEventListener("contextmenu", this.onContextMenu);
     this.controls.dispose();
     disposeObject(this.boardGroup);
     this.woodTexture.dispose();

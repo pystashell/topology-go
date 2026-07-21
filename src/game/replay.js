@@ -48,6 +48,11 @@ function applyReplayEvent(game, event, index) {
     result = game.toggleDead(event.row, event.col);
   } else if (event.type === "finish_scoring") {
     result = game.finishScoring(event.rule);
+  } else if (event.type === "resign") {
+    if (!VALID_COLORS.has(event.color)) {
+      throw new TypeError(`replay.events[${index}] has an invalid color`);
+    }
+    result = game.resign(event.color);
   } else {
     throw new TypeError(
       `Unknown replay event type at replay.events[${index}]: ${event.type}`,
@@ -80,29 +85,49 @@ function createReplayGame(replay) {
   return GoEngine.fromState(replay.base);
 }
 
-function timeoutReplayResult(replay) {
+function replayOutcomeResult(replay) {
   const outcome = replay?.outcome;
   if (outcome === undefined || outcome === null) return null;
   requireReplayObject(outcome, "replay.outcome");
-  if (
-    outcome.reason !== "timeout" ||
-    !VALID_COLORS.has(outcome.winner) ||
-    !VALID_COLORS.has(outcome.loser) ||
-    outcome.winner === outcome.loser ||
-    !Number.isFinite(outcome.finishedAt)
-  ) {
-    throw new TypeError("replay.outcome must be a valid timeout result");
+  if (outcome.reason === "timeout") {
+    if (
+      !VALID_COLORS.has(outcome.winner) ||
+      !VALID_COLORS.has(outcome.loser) ||
+      outcome.winner === outcome.loser ||
+      !Number.isFinite(outcome.finishedAt)
+    ) {
+      throw new TypeError("replay.outcome must be a valid timeout result");
+    }
+    return {
+      winner: outcome.winner,
+      loser: outcome.loser,
+      margin: 0,
+      reason: "timeout",
+      finishedAt: outcome.finishedAt,
+    };
   }
-  return {
-    winner: outcome.winner,
-    loser: outcome.loser,
-    margin: 0,
-    reason: "timeout",
-    finishedAt: outcome.finishedAt,
-  };
+  if (outcome.reason === "resign") {
+    if (
+      !VALID_COLORS.has(outcome.winner) ||
+      !VALID_COLORS.has(outcome.loser) ||
+      outcome.winner === outcome.loser ||
+      (outcome.margin !== undefined && outcome.margin !== 0) ||
+      (outcome.resignation !== undefined && outcome.resignation !== true)
+    ) {
+      throw new TypeError("replay.outcome must be a valid resignation result");
+    }
+    return {
+      winner: outcome.winner,
+      loser: outcome.loser,
+      margin: 0,
+      reason: "resign",
+      resignation: true,
+    };
+  }
+  throw new TypeError("replay.outcome must be a supported terminal result");
 }
 
-function finishReplayFrameByTimeout(frame, result) {
+function finishReplayFrameByOutcome(frame, result) {
   if (!result) return frame;
   return {
     ...frame,
@@ -124,7 +149,7 @@ export function buildReplayFrames(replay) {
   const game = createReplayGame(replay);
   const frames = [game.getState()];
   const steps = [];
-  const timeoutResult = timeoutReplayResult(replay);
+  const outcomeResult = replayOutcomeResult(replay);
 
   replay.events.forEach((event, eventIndex) => {
     const result = applyReplayEvent(game, event, eventIndex);
@@ -147,10 +172,10 @@ export function buildReplayFrames(replay) {
     }
   });
 
-  if (timeoutResult) {
-    frames[frames.length - 1] = finishReplayFrameByTimeout(
+  if (outcomeResult) {
+    frames[frames.length - 1] = finishReplayFrameByOutcome(
       frames[frames.length - 1],
-      timeoutResult,
+      outcomeResult,
     );
   }
 

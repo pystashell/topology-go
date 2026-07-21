@@ -1,5 +1,9 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import {
+  pointerGestureRoles,
+  preventBoardContextMenu,
+} from "./pointerGestures.js";
 
 const ARC_ANGLE = (Math.PI * 2) / 3;
 const CELL = 1;
@@ -138,6 +142,10 @@ export class ArcBoard {
     this.renderer.toneMappingExposure = 1.08;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      "竹筒围棋的弧面视图。左键点击落子；右键或触屏单指横向拖动棋盘，滚轮或双指缩放。",
+    );
     this.container.appendChild(this.renderer.domElement);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -175,6 +183,7 @@ export class ArcBoard {
     this.onPointerMove = (event) => this.handlePointerMove(event);
     this.onPointerUp = (event) => this.handlePointerUp(event);
     this.onPointerCancel = (event) => this.handlePointerCancel(event);
+    this.onContextMenu = (event) => preventBoardContextMenu(event);
     this.onPointerLeave = () => {
       if (!this.pointerState) this.setHoveredPoint(null);
     };
@@ -185,6 +194,7 @@ export class ArcBoard {
     canvas.addEventListener("pointerup", this.onPointerUp);
     canvas.addEventListener("pointercancel", this.onPointerCancel);
     canvas.addEventListener("pointerleave", this.onPointerLeave);
+    canvas.addEventListener("contextmenu", this.onContextMenu);
 
     this.rebuild(boardWidth, boardHeight);
     this.animate();
@@ -773,6 +783,7 @@ export class ArcBoard {
   }
 
   handlePointerDown(event) {
+    if (!this.active) return;
     this.activePointers.add(event.pointerId);
     if (event.isPrimary === false || this.activePointers.size > 1) {
       this.pointerState = null;
@@ -780,13 +791,12 @@ export class ArcBoard {
       this.setHoveredPoint(null);
       return;
     }
-    if (
-      !this.active ||
-      this.pointerState ||
-      (event.pointerType === "mouse" && event.button !== 0)
-    ) {
+    const roles = pointerGestureRoles(event);
+    if (!roles || this.pointerState) {
+      this.activePointers.delete(event.pointerId);
       return;
     }
+    if (event.pointerType === "mouse" && roles.canDrag) event.preventDefault();
     this.cancelSnap();
     this.pointerState = {
       id: event.pointerId,
@@ -794,6 +804,8 @@ export class ArcBoard {
       startY: event.clientY,
       startOffset: this.offsetColumns,
       pixelsPerColumn: this.pixelsPerColumn(),
+      canDrag: roles.canDrag,
+      canPlace: roles.canPlace,
       moved: false,
       cancelClick: false,
     };
@@ -808,7 +820,7 @@ export class ArcBoard {
       if (Math.hypot(deltaX, deltaY) > DRAG_THRESHOLD) {
         pointer.cancelClick = true;
       }
-      if (
+      if (pointer.canDrag &&
         Math.abs(deltaX) > DRAG_THRESHOLD &&
         Math.abs(deltaX) > Math.abs(deltaY)
       ) {
@@ -840,7 +852,7 @@ export class ArcBoard {
     const crossedThreshold = Math.hypot(deltaX, deltaY) > DRAG_THRESHOLD;
     const horizontalDrag =
       Math.abs(deltaX) > DRAG_THRESHOLD && Math.abs(deltaX) > Math.abs(deltaY);
-    const moved = pointer.moved || horizontalDrag;
+    const moved = pointer.canDrag && (pointer.moved || horizontalDrag);
     this.pointerState = null;
     this.container.classList.remove("dragging");
     const canvas = this.renderer.domElement;
@@ -859,7 +871,7 @@ export class ArcBoard {
       if (!this.autoSlide) this.snapToColumn();
       return;
     }
-    if (pointer.cancelClick || crossedThreshold) return;
+    if (!pointer.canPlace || pointer.cancelClick || crossedThreshold) return;
     const point = this.raycastPoint(event);
     if (point && this.onPoint) this.onPoint(point);
   }
@@ -1077,6 +1089,7 @@ export class ArcBoard {
     canvas.removeEventListener("pointerup", this.onPointerUp);
     canvas.removeEventListener("pointercancel", this.onPointerCancel);
     canvas.removeEventListener("pointerleave", this.onPointerLeave);
+    canvas.removeEventListener("contextmenu", this.onContextMenu);
     this.controls.dispose();
     disposeObject(this.boardGroup);
     this.disposeStoneAssets();

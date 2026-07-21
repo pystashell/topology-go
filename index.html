@@ -67,11 +67,11 @@
             </button>
           </div>
           <div class="gesture-hint" aria-hidden="true">
-            <span id="gesture-primary">横向拖动</span>
+            <span id="gesture-primary">右键横向拖动</span>
             <i></i>
             <span id="gesture-secondary">弧面循环 · 滚轮缩放</span>
             <i></i>
-            <span>点击落子</span>
+            <span id="gesture-place">左键点击落子</span>
           </div>
           <div id="coordinate-hint" class="coordinate-hint" aria-live="polite"></div>
         </section>
@@ -105,6 +105,11 @@
               <div class="room-actions">
                 <button id="copy-room-link" class="secondary-button" type="button">复制邀请链接</button>
                 <button id="leave-room" class="text-button" type="button">退出</button>
+              </div>
+              <div class="room-ai-actions">
+                <button id="attach-room-ai" class="secondary-button" type="button" hidden>让 AI 接替白方</button>
+                <button id="detach-room-ai" class="text-button" type="button" hidden>移除在线 AI</button>
+                <small>在线 AI 由房主页面运行；服务器只验证棋步并同步给观众。</small>
               </div>
               <div class="seat-list" aria-label="房间座位">
                 <div>
@@ -203,7 +208,7 @@
             </div>
 
             <div id="chat-messages" class="chat-messages" role="log" aria-live="polite" aria-relevant="additions">
-              <p id="chat-empty" class="chat-empty">还没有消息，先和对手打个招呼吧。</p>
+              <p id="chat-empty" class="chat-empty">聊天需要进入联机房间；本地棋局的其他功能仍然完整可用。</p>
             </div>
 
             <form id="chat-form" class="chat-composer">
@@ -263,6 +268,7 @@
           <section id="play-controls" class="primary-actions play-actions" aria-label="对局操作">
             <button id="pass-button" class="primary-button" type="button">停一手</button>
             <button id="undo-button" class="secondary-button" type="button">悔棋</button>
+            <button id="resign-button" class="secondary-button danger-button" type="button">认输</button>
             <button id="new-game-button" class="secondary-button" type="button">新棋盘</button>
           </section>
 
@@ -501,7 +507,7 @@
             <summary id="rules-summary">竹筒表面规则说明</summary>
             <ul id="cylinder-rules">
               <li>同一行最左与最右的棋点相邻。</li>
-              <li>平面与弧面视图横向拖动只会改变展开起点，不会改变棋子在局面中的位置。</li>
+              <li>桌面端右键横向拖动平面与弧面，触屏则用单指拖动；这些操作只改变展开起点，不改变棋子位置。</li>
               <li>弧面视图把完整一圈弯向玩家，左右边缘仍然相邻。</li>
               <li>上下两圈仍是棋盘边界，没有传统棋盘的四个角。</li>
               <li>禁自杀并采用位置超级劫，禁止重复任何旧局面。</li>
@@ -510,7 +516,7 @@
             <ul id="torus-rules" hidden>
               <li>同一行最左与最右相邻，同一列最上与最下也相邻。</li>
               <li>每一个棋点都有四个方向，没有边、角和一线。</li>
-              <li>平面视图可向上下左右或斜向拖动，改变两个方向的展开起点。</li>
+              <li>桌面端右键、触屏单指可向上下左右或斜向拖动平面，改变两个方向的展开起点。</li>
               <li>立体视图就是甜甜圈；数学上叫环面，内圈格子会比外圈更密。</li>
               <li>禁自杀并采用位置超级劫，提子、连通与点目都跨越四条接缝计算。</li>
               <li>双方连续停一手后进入点目，可先标记死子。</li>
@@ -518,7 +524,7 @@
             <ul id="mobius-rules" hidden>
               <li>最左与最右反向相接：左侧第 1 行连接右侧末行，左侧第 2 行连接右侧倒数第 2 行。</li>
               <li>上下仍是同一圈棋盘边界，因此边界点有三口气；原来的四个角不再是角。</li>
-              <li>平面视图可横向拖动；滑过完整一圈后棋盘会上下翻转，再滑一圈才恢复方向。</li>
+              <li>桌面端右键、触屏单指可横向拖动平面；滑过完整一圈后棋盘会上下翻转，再滑一圈才恢复方向。</li>
               <li>立体视图是一条只有一个面的莫比乌斯带，可旋转观察棋子如何跨越扭转接缝。</li>
               <li>禁自杀并采用位置超级劫，提子、连通、AI 判断与点目都按反向接缝计算。</li>
               <li>双方连续停一手后进入点目，可先标记死子；复盘可在平面与立体视图间切换。</li>
@@ -540,6 +546,12 @@
         <span class="eyebrow">在线对局</span>
         <h2>邀请朋友加入 3D 棋局</h2>
         <p>创建房间后分享链接；也可以明确选择“仅观战”，不会占用黑白座位。</p>
+
+        <section class="online-board-summary" aria-label="即将创建的棋盘">
+          <span>创建房间将使用</span>
+          <strong id="online-board-summary">19 × 19 · 竹筒 · 中国规则</strong>
+          <button id="online-modify-settings" class="text-button" type="button">修改棋盘设置</button>
+        </section>
 
         <label class="dialog-field" for="player-name">
           <span>你的名字</span>
@@ -573,9 +585,9 @@
 
     <dialog id="ai-dialog" class="game-dialog ai-dialog">
       <form id="ai-form">
-        <span class="eyebrow">本机 AI 对手</span>
-        <h2>让人类或 KataGo 下一盘</h2>
-        <p>模型会在浏览器后台观察全盘，再按当前棋盘的接缝规则搜索落点。无需账号或第三方 API，服务器不承担推理。</p>
+        <span id="ai-dialog-eyebrow" class="eyebrow">本机 AI 对手</span>
+        <h2 id="ai-dialog-title">让人类或 KataGo 下一盘</h2>
+        <p id="ai-dialog-intro">模型会在浏览器后台观察全盘，再按当前棋盘的接缝规则搜索落点。无需账号或第三方 API，服务器不承担推理。</p>
 
         <label class="dialog-field" for="ai-match-mode">
           <span>对局方式</span>
@@ -623,6 +635,18 @@
         <div class="dialog-actions">
           <button value="cancel" class="secondary-button">取消</button>
           <button id="confirm-new-game" value="confirm" class="primary-button">开始新局</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="resign-dialog" class="game-dialog">
+      <form method="dialog">
+        <span class="eyebrow">结束对局</span>
+        <h2>确定要认输吗？</h2>
+        <p id="resign-summary">认输后对手立即获胜，本局不能再继续。</p>
+        <div class="dialog-actions">
+          <button value="cancel" class="secondary-button">取消</button>
+          <button id="confirm-resign" value="confirm" class="secondary-button danger-button">确认认输</button>
         </div>
       </form>
     </dialog>

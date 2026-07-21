@@ -73,6 +73,67 @@ test("undo room actions pass through the WebSocket command whitelist", () => {
   }
 });
 
+test("resignation is a reconnect-safe room command", () => {
+  assert.ok(ROOM_ACTIONS.includes("resign"));
+  assert.deepEqual(
+    normalizeCommandMessage({
+      v: 2,
+      type: "command",
+      id: "resign-1",
+      sequence: 3,
+      action: "resign",
+      payload: {},
+    }),
+    {
+      id: "resign-1",
+      sequence: 3,
+      action: "resign",
+      payload: {},
+    },
+  );
+});
+
+test("online AI seat commands pass through the reconnect-safe whitelist", () => {
+  const commands = [
+    ["attach_ai", { modelId: "b10" }],
+    ["detach_ai", {}],
+    ["ai_play", {
+      row: 3,
+      col: 4,
+      expectedMoveCount: 1,
+      expectedPositionToken: "pos-v1-0123456789abcdef-1",
+    }],
+    ["ai_pass", {
+      expectedMoveCount: 1,
+      expectedPositionToken: "pos-v1-0123456789abcdef-1",
+    }],
+    ["direct_undo_ai_round", {
+      expectedMoveCount: 2,
+      expectedPositionToken: "pos-v1-fedcba9876543210-2",
+    }],
+  ];
+
+  for (const [action, payload] of commands) {
+    assert.ok(ROOM_ACTIONS.includes(action));
+    assert.deepEqual(
+      normalizeCommandMessage({
+        v: 2,
+        type: "command",
+        id: `online-ai-${action}`,
+        sequence: 4,
+        action,
+        payload,
+      }),
+      {
+        id: `online-ai-${action}`,
+        sequence: 4,
+        action,
+        payload,
+      },
+    );
+  }
+});
+
 test("chat is whitelisted and requires a reconnect-safe command sequence", () => {
   assert.ok(ROOM_ACTIONS.includes("chat"));
   assert.deepEqual(

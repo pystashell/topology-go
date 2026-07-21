@@ -5,6 +5,7 @@ import {
   BLACK,
   EMPTY,
   GoEngine,
+  PHASE_FINISHED,
   PHASE_PLAY,
   PHASE_SCORING,
   REPLAY_VERSION,
@@ -44,6 +45,62 @@ test("a public timeout outcome finishes only the final replay frame", () => {
   assert.throws(
     () => buildReplayFrames({ ...replay, outcome: { reason: "timeout" } }),
     /valid timeout result/u,
+  );
+});
+
+test("a resignation is restored only on the final replay frame", () => {
+  const game = new GoEngine({ size: 9 });
+  assert.equal(game.play(2, 2).ok, true);
+  assert.equal(game.play(3, 3).ok, true);
+  assert.equal(game.resign(WHITE).ok, true);
+
+  const replay = game.getReplayState();
+  const { frames, steps } = buildReplayFrames(replay);
+  assert.equal(steps.length, 2);
+  assert.equal(frames.length, 3);
+  assert.equal(frames[1].phase, PHASE_PLAY);
+  assert.equal(frames.at(-1).phase, PHASE_FINISHED);
+  assert.deepEqual(frames.at(-1).result, game.result);
+
+  const beforeResignation = buildReplayStateAtStep(replay, 1);
+  assert.equal(beforeResignation.phase, PHASE_PLAY);
+  assert.equal(beforeResignation.result, null);
+  const finalState = buildReplayStateAtStep(replay, steps.length);
+  assert.equal(finalState.phase, PHASE_FINISHED);
+  assert.deepEqual(finalState.result, game.result);
+});
+
+test("a public resignation outcome finishes the final frame without a fake move", () => {
+  const game = new GoEngine({ size: 9 });
+  assert.equal(game.play(2, 2).ok, true);
+  assert.equal(game.play(3, 3).ok, true);
+  const replay = game.getReplayState();
+  replay.outcome = {
+    reason: "resign",
+    winner: BLACK,
+    loser: WHITE,
+    margin: 0,
+    resignation: true,
+  };
+
+  const { frames, steps } = buildReplayFrames(replay);
+  assert.equal(steps.length, 2);
+  assert.equal(frames.length, 3);
+  assert.equal(frames[1].phase, PHASE_PLAY);
+  assert.equal(frames.at(-1).phase, PHASE_FINISHED);
+  assert.deepEqual(frames.at(-1).result, {
+    winner: BLACK,
+    loser: WHITE,
+    margin: 0,
+    reason: "resign",
+    resignation: true,
+  });
+  assert.throws(
+    () => buildReplayFrames({
+      ...replay,
+      outcome: { ...replay.outcome, winner: WHITE },
+    }),
+    /valid resignation result/u,
   );
 });
 

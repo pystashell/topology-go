@@ -755,6 +755,48 @@ test("restoring a game preserves positional superko history", () => {
   assert.equal(restored.currentPlayer, WHITE);
 });
 
+test("resignation finishes the game, survives persistence and cannot be undone", () => {
+  const game = new GoEngine({ size: 9 });
+  assert.equal(game.play(2, 2).ok, true);
+  assert.equal(game.play(3, 3).ok, true);
+
+  const resigned = game.resign(WHITE);
+  assert.deepEqual(resigned, {
+    ok: true,
+    type: "resign",
+    color: WHITE,
+    winner: BLACK,
+    loser: WHITE,
+    margin: 0,
+    reason: "resign",
+    resignation: true,
+    phase: PHASE_FINISHED,
+  });
+  assert.equal(game.phase, PHASE_FINISHED);
+  assert.deepEqual(game.result, {
+    winner: BLACK,
+    loser: WHITE,
+    margin: 0,
+    reason: "resign",
+    resignation: true,
+  });
+  assert.equal(game.play(4, 4).reason, MOVE_ERRORS.GAME_NOT_PLAYING);
+  assert.equal(game.pass().reason, MOVE_ERRORS.GAME_NOT_PLAYING);
+
+  const restored = GoEngine.fromState(JSON.parse(game.serialize()));
+  assert.deepEqual(restored.getState(), game.getState());
+  assert.deepEqual(restored.getReplayState(), game.getReplayState());
+  assert.equal(restored.canUndo(), false);
+  assert.equal(restored.undo().reason, MOVE_ERRORS.NOTHING_TO_UNDO);
+
+  const corrupted = game.exportState();
+  corrupted.result.winner = WHITE;
+  assert.throws(
+    () => GoEngine.fromState(corrupted),
+    /valid resignation result/u,
+  );
+});
+
 test("scoring, dead stones and a finished result survive restoration", () => {
   const game = new GoEngine({
     size: 5,

@@ -254,6 +254,14 @@ function copyReplayEvent(event, width, height, index) {
     return { type: "pass", color: event.color };
   }
 
+  if (event.type === "resign") {
+    requireOwnProperty(event, "color", label);
+    if (!VALID_COLORS.has(event.color)) {
+      throw new TypeError(`Unknown replay resignation color: ${event.color}`);
+    }
+    return { type: "resign", color: event.color };
+  }
+
   if (event.type === "resume_play") {
     requireOwnProperty(event, "nextPlayer", label);
     if (!VALID_COLORS.has(event.nextPlayer)) {
@@ -455,9 +463,15 @@ export class GoEngine {
     ) {
       throw new RangeError("consecutivePasses must be an integer from 0 to 2");
     }
+    const isResignation = snapshot.phase === PHASE_FINISHED &&
+      snapshot.result !== null &&
+      typeof snapshot.result === "object" &&
+      !Array.isArray(snapshot.result) &&
+      snapshot.result.reason === "resign";
     if (
       (snapshot.phase === PHASE_PLAY && snapshot.consecutivePasses === 2) ||
-      (snapshot.phase !== PHASE_PLAY && snapshot.consecutivePasses !== 2)
+      (isResignation && snapshot.consecutivePasses === 2) ||
+      (snapshot.phase !== PHASE_PLAY && !isResignation && snapshot.consecutivePasses !== 2)
     ) {
       throw new RangeError("consecutivePasses is inconsistent with the phase");
     }
@@ -534,11 +548,31 @@ export class GoEngine {
     if (snapshot.phase === PHASE_FINISHED) {
       requirePlainObject(snapshot.result, "result");
       const result = cloneSerializable(snapshot.result, "result");
-      const expectedResult = game.score(result.rule);
-      if (!sameSerializableValue(result, expectedResult)) {
-        throw new TypeError("result is inconsistent with the restored position");
+      if (result.reason === "resign") {
+        if (
+          !VALID_COLORS.has(result.winner) ||
+          !VALID_COLORS.has(result.loser) ||
+          result.winner === result.loser ||
+          result.winner !== oppositeColor(result.loser) ||
+          result.margin !== 0 ||
+          (result.resignation !== undefined && result.resignation !== true)
+        ) {
+          throw new TypeError("result is not a valid resignation result");
+        }
+        game.result = {
+          winner: result.winner,
+          loser: result.loser,
+          margin: 0,
+          reason: "resign",
+          resignation: true,
+        };
+      } else {
+        const expectedResult = game.score(result.rule);
+        if (!sameSerializableValue(result, expectedResult)) {
+          throw new TypeError("result is inconsistent with the restored position");
+        }
+        game.result = result;
       }
-      game.result = result;
     } else {
       if (snapshot.result !== null) {
         throw new TypeError("result must be null until scoring is finished");
@@ -674,8 +708,10 @@ export class GoEngine {
         result = replayGame.resumePlay(event.nextPlayer);
       } else if (event.type === "toggle_dead") {
         result = replayGame.toggleDead(event.row, event.col);
-      } else {
+      } else if (event.type === "finish_scoring") {
         result = replayGame.finishScoring(event.rule);
+      } else {
+        result = replayGame.resign(event.color);
       }
       if (!result.ok) {
         throw new TypeError(
@@ -1246,9 +1282,39 @@ export class GoEngine {
     return this.pass();
   }
 
+  /** End an active game immediately because one color resigns. */
+  resign(color = this.currentPlayer) {
+    if (this.phase !== PHASE_PLAY) {
+      return this.#failure(MOVE_ERRORS.GAME_NOT_PLAYING);
+    }
+    if (!VALID_COLORS.has(color)) {
+      throw new TypeError(`Unknown player color: ${color}`);
+    }
+
+    const winner = oppositeColor(color);
+    this.phase = PHASE_FINISHED;
+    this.result = {
+      winner,
+      loser: color,
+      margin: 0,
+      reason: "resign",
+      resignation: true,
+    };
+    this.replay.events.push({ type: "resign", color });
+    return {
+      ok: true,
+      type: "resign",
+      color,
+      ...this.result,
+      phase: this.phase,
+    };
+  }
+
   /** Whether at least one successful play or pass can be taken back. */
   canUndo() {
-    return this.undoHistory.length > 0;
+    return !(
+      this.phase === PHASE_FINISHED && this.result?.reason === "resign"
+    ) && this.undoHistory.length > 0;
   }
 
   /**

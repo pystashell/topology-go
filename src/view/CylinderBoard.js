@@ -1,5 +1,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import {
+  invalidatePendingTapOnAdditionalPointer,
+  pointerGestureRoles,
+  preventBoardContextMenu,
+} from "./pointerGestures.js";
 
 const TAU = Math.PI * 2;
 const CELL = 1;
@@ -107,6 +112,10 @@ export class CylinderBoard {
     this.renderer.toneMappingExposure = 1.05;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      "左右相接的三维竹筒围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+    );
     this.container.appendChild(this.renderer.domElement);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -118,6 +127,8 @@ export class CylinderBoard {
     this.controls.minPolarAngle = 0.42;
     this.controls.maxPolarAngle = Math.PI - 0.42;
     this.controls.autoRotateSpeed = 0.72;
+    this.controls.mouseButtons.LEFT = -1;
+    this.controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
@@ -143,18 +154,22 @@ export class CylinderBoard {
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.container);
 
-    this.onPointerDown = (event) => {
-      this.pointerStart = { x: event.clientX, y: event.clientY };
-    };
+    this.onPointerDown = (event) => this.handlePointerDown(event);
     this.onPointerMove = (event) => this.handlePointerMove(event);
     this.onPointerUp = (event) => this.handlePointerUp(event);
-    this.onPointerLeave = () => this.setHoveredPoint(null);
+    this.onPointerCancel = (event) => this.handlePointerCancel(event);
+    this.onContextMenu = (event) => preventBoardContextMenu(event);
+    this.onPointerLeave = () => {
+      if (!this.pointerStart) this.setHoveredPoint(null);
+    };
 
     const canvas = this.renderer.domElement;
     canvas.addEventListener("pointerdown", this.onPointerDown);
     canvas.addEventListener("pointermove", this.onPointerMove);
     canvas.addEventListener("pointerup", this.onPointerUp);
+    canvas.addEventListener("pointercancel", this.onPointerCancel);
     canvas.addEventListener("pointerleave", this.onPointerLeave);
+    canvas.addEventListener("contextmenu", this.onContextMenu);
 
     this.rebuild(boardWidth, boardHeight);
     this.animate();
@@ -613,8 +628,31 @@ export class CylinderBoard {
     return { row, col };
   }
 
+  handlePointerDown(event) {
+    const guardedPointer = invalidatePendingTapOnAdditionalPointer(
+      this.pointerStart,
+      event,
+    );
+    if (guardedPointer !== this.pointerStart) {
+      this.pointerStart = guardedPointer;
+      this.setHoveredPoint(null);
+      return;
+    }
+    const roles = pointerGestureRoles(event);
+    if (!this.active || !roles || this.pointerStart) return;
+    if (event.pointerType === "mouse" && roles.canDrag) event.preventDefault();
+    this.pointerStart = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      canPlace: roles.canPlace,
+    };
+    this.renderer.domElement.setPointerCapture?.(event.pointerId);
+  }
+
   handlePointerMove(event) {
-    if (this.pointerStart) {
+    if (!this.active) return;
+    if (this.pointerStart?.id === event.pointerId) {
       const distance = Math.hypot(
         event.clientX - this.pointerStart.x,
         event.clientY - this.pointerStart.y,
@@ -628,15 +666,26 @@ export class CylinderBoard {
   }
 
   handlePointerUp(event) {
-    if (!this.pointerStart) return;
+    if (!this.pointerStart || this.pointerStart.id !== event.pointerId) return;
+    const canPlace = this.pointerStart.canPlace;
     const distance = Math.hypot(
       event.clientX - this.pointerStart.x,
       event.clientY - this.pointerStart.y,
     );
     this.pointerStart = null;
-    if (distance > 6) return;
+    const canvas = this.renderer.domElement;
+    if (canvas.hasPointerCapture?.(event.pointerId)) {
+      canvas.releasePointerCapture(event.pointerId);
+    }
+    if (!canPlace || distance > 6) return;
     const point = this.raycastPoint(event);
     if (point && this.onPoint) this.onPoint(point);
+  }
+
+  handlePointerCancel(event) {
+    if (!this.pointerStart || this.pointerStart.id !== event.pointerId) return;
+    this.pointerStart = null;
+    this.setHoveredPoint(null);
   }
 
   setHoveredPoint(point) {
@@ -760,7 +809,9 @@ export class CylinderBoard {
     canvas.removeEventListener("pointerdown", this.onPointerDown);
     canvas.removeEventListener("pointermove", this.onPointerMove);
     canvas.removeEventListener("pointerup", this.onPointerUp);
+    canvas.removeEventListener("pointercancel", this.onPointerCancel);
     canvas.removeEventListener("pointerleave", this.onPointerLeave);
+    canvas.removeEventListener("contextmenu", this.onContextMenu);
     this.controls.dispose();
     disposeObject(this.boardGroup);
     this.woodTexture.dispose();
