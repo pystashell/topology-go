@@ -5,6 +5,13 @@ import {
   preventBoardContextMenu,
 } from "./pointerGestures.js";
 import { translateText } from "../i18n.js";
+import {
+  createTerritoryMarkerLayer,
+  disposeTerritoryMarkerLayer,
+  territoryPointsForPosition,
+  territoryPointsSignature,
+  updateTerritoryMarkerLayer,
+} from "./territoryMarkers.js";
 
 const ARC_ANGLE = (Math.PI * 2) / 3;
 const CELL = 1;
@@ -116,6 +123,9 @@ export class ArcBoard {
     this.analysisVariation = [];
     this.referencePoint = null;
     this.deadKeys = new Set();
+    this.territoryPoints = [];
+    this.territorySignature = "";
+    this.territoryGroup = null;
     this.offsetColumns = 0;
     this.pointerState = null;
     this.activePointers = new Set();
@@ -249,6 +259,9 @@ export class ArcBoard {
       disposeObject(this.boardGroup);
       this.disposeStoneAssets();
     }
+    this.territoryPoints = [];
+    this.territorySignature = "";
+    this.territoryGroup = null;
     this.boardGroup = new THREE.Group();
     this.boardGroup.position.z = -this.depthCenter;
     this.scene.add(this.boardGroup);
@@ -518,6 +531,9 @@ export class ArcBoard {
     for (const marker of this.markersGroup?.children || []) {
       this.positionMarker(marker, marker.userData.row, marker.userData.col);
     }
+    updateTerritoryMarkerLayer(this.territoryGroup, {
+      frameAt: (row, col) => this.frame(row, col, 0),
+    });
     this.refreshHover();
   }
 
@@ -553,6 +569,7 @@ export class ArcBoard {
     phase,
     lastMove,
     deadStones = [],
+    territoryRegions = [],
     analysisMove = null,
     analysisCandidates = [],
     analysisVariation = [],
@@ -584,6 +601,7 @@ export class ArcBoard {
         ? { row: referencePoint.row, col: referencePoint.col }
         : null;
     this.deadKeys = new Set(deadStones.map(({ row, col }) => `${row},${col}`));
+    this.syncTerritoryMarkers(territoryRegions, deadStones);
 
     while (this.stonesGroup.children.length > 0) {
       this.stonesGroup.remove(this.stonesGroup.children[0]);
@@ -655,6 +673,29 @@ export class ArcBoard {
       );
     }
     this.refreshHover();
+  }
+
+  syncTerritoryMarkers(territoryRegions, deadStones) {
+    const points = territoryPointsForPosition({
+      territoryRegions,
+      phase: this.phase,
+      width: this.width,
+      height: this.height,
+      board: this.board,
+      deadStones,
+    });
+    const signature = territoryPointsSignature(points);
+    if (signature === this.territorySignature) return;
+
+    disposeTerritoryMarkerLayer(this.territoryGroup);
+    this.territoryPoints = points;
+    this.territorySignature = signature;
+    this.territoryGroup = createTerritoryMarkerLayer(points, {
+      frameAt: (row, col) => this.frame(row, col, 0),
+      radius: 0.2,
+      surfaceOffset: 0.058,
+    });
+    if (this.territoryGroup) this.boardGroup.add(this.territoryGroup);
   }
 
   positionStone(stone, row, col) {

@@ -243,60 +243,6 @@ summary:focus-visible {
   display: block;
 }
 
-.lobby-overlay {
-  position: absolute;
-  z-index: 4;
-  top: 50%;
-  left: 50%;
-  width: min(420px, calc(100% - 36px));
-  max-height: calc(100% - 24px);
-  overflow-y: auto;
-  display: grid;
-  justify-items: center;
-  gap: 10px;
-  padding: 24px;
-  transform: translate(-50%, -50%);
-  border: 1px solid rgba(215, 169, 91, 0.4);
-  border-radius: 18px;
-  text-align: center;
-  background:
-    linear-gradient(150deg, rgba(255, 255, 255, 0.065), transparent 60%),
-    rgba(12, 20, 17, 0.91);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
-  backdrop-filter: blur(18px);
-}
-
-.lobby-overlay h1 {
-  margin: 0;
-  font-size: clamp(22px, 3vw, 30px);
-  font-weight: 650;
-}
-
-.lobby-overlay p {
-  max-width: 34em;
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.lobby-overlay > strong {
-  padding: 7px 11px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 999px;
-  color: #f3e4c6;
-  background: rgba(255, 255, 255, 0.04);
-  font-size: 11px;
-  font-weight: 550;
-}
-
-.lobby-overlay-action {
-  width: min(250px, 100%);
-  min-height: 50px;
-  margin-top: 3px;
-  font-size: 14px;
-}
-
 #flat-scene {
   cursor: grab;
   touch-action: pan-y;
@@ -1765,6 +1711,76 @@ select:disabled {
   border-top: 1px solid var(--line);
 }
 
+.scoring-legend {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 10px 0 12px;
+}
+
+.scoring-legend span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.territory-swatch {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+
+.territory-swatch.black {
+  border: 1px solid rgba(247, 224, 177, 0.72);
+  background: #111513;
+}
+
+.territory-swatch.white {
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  background: #f1eee6;
+}
+
+.territory-swatch.neutral {
+  border: 1px dashed rgba(202, 214, 208, 0.54);
+  background: transparent;
+}
+
+.room-rematch-setup {
+  display: grid;
+  gap: 11px;
+  margin-bottom: 16px;
+  padding: 13px;
+  border: 1px solid rgba(215, 169, 91, 0.38);
+  border-radius: 12px;
+  background: rgba(215, 169, 91, 0.075);
+}
+
+.room-rematch-setup > div {
+  display: grid;
+  gap: 4px;
+}
+
+.room-rematch-setup strong {
+  font-size: 13px;
+}
+
+.room-rematch-setup small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.room-rematch-setup .primary-button {
+  width: 100%;
+  min-height: 42px;
+}
+
 .undo-request-panel {
   margin-top: 12px;
   padding: 12px;
@@ -2334,6 +2350,7 @@ select:disabled {
   }
 
   .settings .section-heading,
+  .settings .room-rematch-setup,
   .settings .field-group,
   .settings .dimension-fields {
     grid-column: 1 / -1;
@@ -2435,11 +2452,6 @@ select:disabled {
 
   .room-main-actions {
     grid-template-columns: 1fr;
-  }
-
-  .lobby-overlay {
-    width: min(420px, calc(100% - 24px));
-    padding: 20px 16px;
   }
 
   .invite-choice-grid {

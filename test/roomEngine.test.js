@@ -1132,6 +1132,152 @@ test("supports pass, scoring controls, resume and a black-controlled new game", 
   assert.equal(fresh.room.moveCount, 0);
 });
 
+test("a finished online room starts a configured rematch without losing seats, spectators, or chat", () => {
+  const room = createRoom(1_000);
+  joinWhite(room, 1_100);
+  room.join({
+    name: "观众",
+    role: "spectator",
+    playerId: "viewer",
+    tokenHash: VIEWER_HASH,
+    now: 1_200,
+  });
+  room.resumeConnection("black-player", "black-socket", 1_300);
+  room.resumeConnection("white-player", "white-socket", 1_300);
+  room.resumeConnection("viewer", "viewer-socket", 1_300);
+
+  room.postChat({
+    playerId: "black-player",
+    sequence: 1,
+    payload: { kind: "text", text: "D4 这一局先下到这里" },
+    now: 1_400,
+  });
+  room.applyAction({
+    playerId: "black-player",
+    action: "play",
+    payload: { row: 5, col: 3 },
+    now: 1_500,
+  });
+  const resigned = room.applyAction({
+    playerId: "white-player",
+    action: "resign",
+    now: 1_600,
+  }).room;
+  assert.equal(resigned.game.phase, "finished");
+  assert.equal(resigned.game.result.reason, "resign");
+
+  const stableMembership = room.serialize().members.map((member) => ({
+    playerId: member.playerId,
+    name: member.name,
+    role: member.role,
+    color: member.color,
+    joinedAt: member.joinedAt,
+    tokenHash: member.tokenHash,
+  }));
+  const beforeUnauthorizedAttempt = room.serialize();
+  assert.throws(
+    () =>
+      room.applyAction({
+        playerId: "white-player",
+        action: "new_game",
+        payload: { width: 30, height: 20, topology: "torus" },
+        now: 1_700,
+      }),
+    (error) => error instanceof RoomEngineError && error.code === "FORBIDDEN",
+  );
+  assert.deepEqual(room.serialize(), beforeUnauthorizedAttempt);
+
+  const rematch = room.applyAction({
+    playerId: "black-player",
+    action: "new_game",
+    payload: {
+      width: 13,
+      height: 9,
+      topology: "torus",
+      scoringRule: "chinese",
+      komi: 7.5,
+      mainTimeSeconds: 600,
+      byoYomiPeriods: 3,
+      byoYomiSeconds: 30,
+    },
+    now: 1_800,
+  }).room;
+
+  assert.equal(rematch.code, resigned.code);
+  assert.equal(rematch.game.phase, "play");
+  assert.equal(rematch.game.result, null);
+  assert.equal(rematch.game.width, 13);
+  assert.equal(rematch.game.height, 9);
+  assert.equal(rematch.game.topology, "torus");
+  assert.equal(rematch.game.scoringRule, "chinese");
+  assert.equal(rematch.game.komi, 7.5);
+  assert.equal(rematch.game.board.flat().every((point) => point === null), true);
+  assert.equal(rematch.moveCount, 0);
+  assert.equal(rematch.undoRequest, null);
+  assert.deepEqual(rematch.scoreConfirmations, []);
+  assert.equal(rematch.replay.outcome, undefined);
+  assert.equal(rematch.timeControl.mainTimeSeconds, 600);
+  assert.equal(rematch.timeControl.byoYomiPeriods, 3);
+  assert.equal(rematch.timeControl.byoYomiSeconds, 30);
+
+  assert.deepEqual(
+    room.serialize().members.map((member) => ({
+      playerId: member.playerId,
+      name: member.name,
+      role: member.role,
+      color: member.color,
+      joinedAt: member.joinedAt,
+      tokenHash: member.tokenHash,
+    })),
+    stableMembership,
+  );
+  assert.deepEqual(
+    rematch.players.map(({ id, name, color, online }) => ({ id, name, color, online })),
+    [
+      { id: "black-player", name: "黑方", color: "black", online: true },
+      { id: "white-player", name: "白方", color: "white", online: true },
+    ],
+  );
+  assert.deepEqual(
+    rematch.spectators.map(({ id, name, online }) => ({ id, name, online })),
+    [{ id: "viewer", name: "观众", online: true }],
+  );
+  assert.equal(rematch.chat.sequence, 1);
+  assert.equal(rematch.chat.messages.length, 1);
+  assert.equal(rematch.chat.messages[0].text, "D4 这一局先下到这里");
+  assert.equal(rematch.chat.messages[0].boardSize, 9);
+  assert.equal(rematch.chat.messages[0].boardTopology, "cylinder");
+
+  const continuedChat = room.postChat({
+    playerId: "white-player",
+    sequence: 1,
+    payload: { kind: "text", text: "新盘看 M9" },
+    now: 1_900,
+  });
+  assert.equal(continuedChat.chatSequence, 2);
+  assert.equal(continuedChat.message.boardWidth, 13);
+  assert.equal(continuedChat.message.boardHeight, 9);
+  assert.equal(continuedChat.message.boardTopology, "torus");
+  assert.deepEqual(continuedChat.message.points, [
+    { row: 0, col: 11, label: "M9" },
+  ]);
+
+  const restored = RoomEngine.restore(room.serialize()).snapshot(2_000);
+  assert.equal(restored.code, rematch.code);
+  assert.equal(restored.game.width, 13);
+  assert.equal(restored.game.height, 9);
+  assert.deepEqual(
+    restored.players.map(({ id, name, color }) => ({ id, name, color })),
+    rematch.players.map(({ id, name, color }) => ({ id, name, color })),
+  );
+  assert.equal(restored.spectators[0].id, "viewer");
+  assert.equal(restored.chat.sequence, 2);
+  assert.deepEqual(
+    restored.chat.messages.map((message) => message.text),
+    ["D4 这一局先下到这里", "新盘看 M9"],
+  );
+});
+
 test("rectangular rooms create, persist, play and start another rectangular game", () => {
   const room = RoomEngine.create({
     code: "REC234",

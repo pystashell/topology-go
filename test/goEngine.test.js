@@ -660,6 +660,110 @@ test("two passes enter scoring; a whole connected group is marked dead", () => {
   assert.equal(finished.winner, BLACK);
 });
 
+test("entering scoring conservatively marks an enclosed one-eye group dead", () => {
+  for (const topology of [
+    TOPOLOGY_CYLINDER,
+    TOPOLOGY_TORUS,
+    TOPOLOGY_MOBIUS,
+  ]) {
+    const game = new GoEngine({
+      size: 5,
+      komi: 0,
+      topology,
+      initialBoard: boardFromRows([
+        ".....",
+        ".BBB.",
+        ".BWB.",
+        ".B.B.",
+        ".BBB.",
+      ]),
+    });
+
+    assert.deepEqual(game.suggestDeadStones(), [{ row: 2, col: 2 }]);
+    assert.equal(game.pass().phase, "play");
+    assert.deepEqual(game.getState().deadStones, []);
+    assert.equal(game.pass().phase, PHASE_SCORING);
+    assert.deepEqual(game.getState().deadStones, [{ row: 2, col: 2 }]);
+
+    const score = game.score();
+    const claimedRegion = score.regions.find((region) =>
+      region.points.some(({ row, col }) => row === 2 && col === 2),
+    );
+    assert.equal(claimedRegion.owner, BLACK);
+    assert.ok(
+      claimedRegion.points.some(({ row, col }) => row === 3 && col === 2),
+    );
+  }
+});
+
+test("automatic dead-stone suggestions leave escapes, capturing races and two eyes alone", () => {
+  const escape = new GoEngine({
+    size: 5,
+    initialBoard: boardFromRows([
+      ".....",
+      ".BBB.",
+      ".BWB.",
+      ".B.B.",
+      ".....",
+    ]),
+  });
+  assert.deepEqual(escape.suggestDeadStones(), []);
+
+  const capturingRace = new GoEngine({
+    size: 5,
+    initialBoard: boardFromRows([
+      "BBBBB",
+      "BBBBB",
+      "BBWBB",
+      "BB.BB",
+      "BBBBB",
+    ]),
+  });
+  assert.deepEqual(capturingRace.suggestDeadStones(), []);
+
+  const twoEyes = new GoEngine({
+    size: 7,
+    initialBoard: boardFromRows([
+      "BBBBBBB",
+      "BWWWWWB",
+      "BW.W.WB",
+      "BWWWWWB",
+      "BBBBBBB",
+      ".......",
+      ".......",
+    ]),
+  });
+  assert.deepEqual(twoEyes.suggestDeadStones(), []);
+
+  twoEyes.pass();
+  twoEyes.pass();
+  assert.deepEqual(twoEyes.getState().deadStones, []);
+});
+
+test("score regions classify black, white and neutral points for every renderer", () => {
+  const game = new GoEngine({
+    size: 5,
+    komi: 0,
+    initialBoard: boardFromRows([
+      "BBBBB",
+      "B.BBB",
+      "BB.WB",
+      "WWWWW",
+      "W.WWW",
+    ]),
+  });
+
+  const regionsByOwner = new Map(
+    game.score().regions.map((region) => [
+      region.owner,
+      region.points.map(({ row, col }) => `${row},${col}`),
+    ]),
+  );
+  assert.deepEqual(regionsByOwner.get(BLACK), ["1,1"]);
+  assert.deepEqual(regionsByOwner.get(WHITE), ["4,1"]);
+  assert.deepEqual(regionsByOwner.get(EMPTY), ["2,2"]);
+});
+
 test("Japanese territory and Chinese area scoring use the same cylindrical regions", () => {
   const game = new GoEngine({
     size: 5,

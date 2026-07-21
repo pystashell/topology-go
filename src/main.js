@@ -171,6 +171,9 @@ const elements = {
   customHeight: $("#custom-height"),
   scoringRule: $("#scoring-rule"),
   komi: $("#komi"),
+  roomRematchSetup: $("#room-rematch-setup"),
+  roomRematchHint: $("#room-rematch-hint"),
+  startRoomRematch: $("#start-room-rematch"),
   timeControlPreset: $("#time-control-preset"),
   customTimeFields: $("#custom-time-fields"),
   mainTimeMinutes: $("#main-time-minutes"),
@@ -216,8 +219,6 @@ const elements = {
   roomMode: $("#room-mode"),
   roomTitle: $("#room-title"),
   offlineOpponentActions: $("#offline-opponent-actions"),
-  lobbyOverlay: $("#lobby-overlay"),
-  lobbySummary: $("#lobby-summary"),
   openInviteButtons: [...document.querySelectorAll("[data-open-invite]")],
   joinInvitation: $("#join-invitation"),
   roomConnected: $("#room-connected"),
@@ -326,6 +327,8 @@ let onlineBusy = false;
 let onlineCommandPending = false;
 let onlineCommandRevision = null;
 let lastAnnouncedRoomRevision = null;
+let onlineRematchSetup = false;
+let rematchPreviewGame = null;
 let chatSending = false;
 let chatPointPicking = false;
 let chatReferencePoint = null;
@@ -549,8 +552,13 @@ function colorName(color) {
   return color === BLACK ? "黑方" : "白方";
 }
 
+function liveDisplayedGame() {
+  return onlineRematchSetup && rematchPreviewGame ? rematchPreviewGame : game;
+}
+
 function displayedTopology() {
-  return replaySession?.frames?.[replaySession.index]?.topology ?? game?.topology;
+  return replaySession?.frames?.[replaySession.index]?.topology ??
+    liveDisplayedGame()?.topology;
 }
 
 function isTorusTopology(topology = displayedTopology()) {
@@ -1025,10 +1033,11 @@ function syncReferenceFocusRotationState() {
 }
 
 function messageMatchesCurrentBoard(message) {
+  const displayedGame = liveDisplayedGame();
   return (
-    Number(message?.boardWidth ?? message?.boardSize) === boardWidth() &&
-    Number(message?.boardHeight ?? message?.boardSize) === boardHeight() &&
-    message?.boardTopology === game?.topology
+    Number(message?.boardWidth ?? message?.boardSize) === boardWidth(displayedGame) &&
+    Number(message?.boardHeight ?? message?.boardSize) === boardHeight(displayedGame) &&
+    message?.boardTopology === displayedGame?.topology
   );
 }
 
@@ -1052,6 +1061,7 @@ function focusChatPoint(
   point,
   { announce = true, moveCamera = true } = {},
 ) {
+  const displayedGame = liveDisplayedGame();
   if (!messageMatchesCurrentBoard(message)) {
     const messageWidth = message.boardWidth ?? message.boardSize;
     const messageHeight = message.boardHeight ?? message.boardSize;
@@ -1065,9 +1075,9 @@ function focusChatPoint(
     !Number.isInteger(point.row) ||
     !Number.isInteger(point.col) ||
     point.row < 0 ||
-    point.row >= boardHeight() ||
+    point.row >= boardHeight(displayedGame) ||
     point.col < 0 ||
-    point.col >= boardWidth()
+    point.col >= boardWidth(displayedGame)
   ) {
     setChatStatus("这条位置引用已经失效。", true);
     return;
@@ -1153,11 +1163,12 @@ function renderChatMessage(message) {
 
 function renderChatHistory() {
   const messages = currentChatMessages();
+  const displayedGame = liveDisplayedGame();
   const key = [
     onlineRoom?.code ?? "",
-    boardWidth(game, ""),
-    boardHeight(game, ""),
-    game?.topology ?? "",
+    boardWidth(displayedGame, ""),
+    boardHeight(displayedGame, ""),
+    displayedGame?.topology ?? "",
     ...messages.map((message) => `${message.id}:${message.sequence}`),
   ].join("|");
   if (key === lastRenderedChatKey) return;
@@ -1984,6 +1995,14 @@ function isLocalLobby() {
   return !hasOnlineSession() && matchLifecycle === MATCH_LIFECYCLE_LOBBY;
 }
 
+function isOnlineRematchSetup() {
+  return Boolean(hasOnlineSession() && onlineRematchSetup);
+}
+
+function isBoardSetupMode() {
+  return isLocalLobby() || isOnlineRematchSetup();
+}
+
 function hasMatchGame() {
   return matchLifecycle !== MATCH_LIFECYCLE_LOBBY;
 }
@@ -1993,6 +2012,7 @@ function hasStartedMatch() {
 }
 
 function syncLifecycleFromCurrentGame() {
+  if (isOnlineRematchSetup()) return;
   if (matchLifecycle === MATCH_LIFECYCLE_LOBBY && !hasOnlineSession()) return;
   if (game?.phase === PHASE_FINISHED || currentTimeoutOutcome()) {
     matchLifecycle = MATCH_LIFECYCLE_FINISHED;
@@ -2637,7 +2657,6 @@ function onlineBoardSummaryText() {
 
 function syncLobbySettingsSummary() {
   const summary = onlineBoardSummaryText();
-  if (elements.lobbySummary) elements.lobbySummary.textContent = summary;
   if (elements.inviteSettingsSummary) elements.inviteSettingsSummary.textContent = summary;
   if (elements.onlineBoardSummary) elements.onlineBoardSummary.textContent = summary;
 }
@@ -2697,6 +2716,7 @@ function updateRoomUI() {
   const active = hasOnlineSession();
   const aiMode = isAIMode();
   const lobby = isLocalLobby();
+  const rematchSetup = isOnlineRematchSetup();
   const waiting = active && !hasStartedMatch();
   const match = currentMatchSession();
   const onlineAi = active ? onlineAISeat() : null;
@@ -2745,9 +2765,10 @@ function updateRoomUI() {
   elements.offlineOpponentActions.hidden = !lobby || reviewing;
   elements.roomConnected.hidden = !active;
   elements.aiConnected.hidden = !aiMode;
-  if (elements.lobbyOverlay) elements.lobbyOverlay.hidden = !lobby || reviewing;
-  if (elements.scoreStrip) elements.scoreStrip.hidden = (lobby || waiting) && !reviewing;
-  elements.clockPanel.hidden = reviewing || [
+  if (elements.scoreStrip) {
+    elements.scoreStrip.hidden = (lobby || waiting || rematchSetup) && !reviewing;
+  }
+  elements.clockPanel.hidden = reviewing || rematchSetup || [
     MATCH_LIFECYCLE_LOBBY,
     MATCH_LIFECYCLE_WAITING,
   ].includes(matchLifecycle);
@@ -2766,8 +2787,8 @@ function updateRoomUI() {
     elements.toggleAiAutoplay.disabled = reviewing || game.phase !== PHASE_PLAY;
     if (game.phase === PHASE_SCORING) {
       elements.aiHint.textContent = isAIvsAI()
-        ? "AI 自对弈已停在点目阶段：请标记死子并确认结果，或恢复对局。"
-        : "点目中：请标记死子并确认结果，或恢复对局。";
+        ? "AI 自对弈已停在点目阶段：系统已预标明确死棋，请核对死活与领地。"
+        : "点目中：系统已预标明确死棋，请核对死活与领地。";
     } else if (isAIvsAI() && aiAutoplayPaused) {
       elements.aiHint.textContent = "AI 自对弈已暂停；可以悔一步、复盘或切换视图。";
     } else if (aiThinking) {
@@ -2821,6 +2842,10 @@ function updateRoomUI() {
       elements.roomHint.textContent = "连接成功，正在同步最新棋局…";
     } else if (!isOnlinePlayer()) {
       elements.roomHint.textContent = "你正在旁观；可切换到“分析”，在本页研究候选与分支。";
+    } else if (rematchSetup) {
+      elements.roomHint.textContent = isOnlineHost()
+        ? "正在当前房间设置下一局；确认后会同步给所有玩家和观众。"
+        : "黑方房主正在设置下一局；聊天和房间成员都会保留。";
     } else if (!black || !white) {
       elements.roomHint.textContent = isOnlineHost()
         ? "把邀请链接发给朋友，或让 KataGo 接替空缺的白方座位。"
@@ -2835,10 +2860,11 @@ function updateRoomUI() {
       } else if (scoreConfirmations.length > 0) {
         elements.roomHint.textContent = `${colorName(scoreConfirmations[0])}已确认；请核对后确认，或继续修改死子。`;
       } else {
-        elements.roomHint.textContent = "点目中：双方可以标记死子，结果需双方确认。";
+        elements.roomHint.textContent = "点目中：系统已预标明确死棋并显示领地；双方核对后确认。";
       }
     } else if (game.phase === PHASE_FINISHED) {
-      elements.roomHint.textContent = "本局已结束；返回我的房间后可以重新设置并邀请下一局。";
+      elements.roomHint.textContent =
+        "本局已结束；黑方可在当前房间设置下一局，成员和聊天记录都会保留。";
     } else {
       elements.roomHint.textContent = isOnlineTurn()
         ? "轮到你了。"
@@ -2866,8 +2892,14 @@ function updateRoomUI() {
   elements.passButton.disabled = !match.capabilities.pass;
   elements.newGameButton.disabled = true;
   if (elements.returnToLobby) {
-    elements.returnToLobby.hidden = reviewing || matchLifecycle !== MATCH_LIFECYCLE_FINISHED;
+    elements.returnToLobby.hidden = reviewing || rematchSetup ||
+      matchLifecycle !== MATCH_LIFECYCLE_FINISHED;
     elements.returnToLobby.disabled = active && onlineBusy;
+    elements.returnToLobby.textContent = active
+      ? isOnlineHost()
+        ? "在当前房间设置下一局"
+        : "留在房间等待下一局"
+      : "返回房间设置新棋局";
   }
   elements.undoButton.textContent = active
     ? match.opponentController === MATCH_CONTROLLER_AI ? "直接悔棋" : "申请悔棋"
@@ -2907,7 +2939,9 @@ function updateRoomUI() {
       ? "确认同意结果"
       : "确认结果";
 
-  const canChangeOnlineSettings = lobby && !undoRequest && !aiThinking;
+  const canChangeOnlineSettings = (
+    lobby || (rematchSetup && isOnlineHost())
+  ) && !undoRequest && !aiThinking;
   elements.customWidth.disabled = !canChangeOnlineSettings;
   elements.customHeight.disabled = !canChangeOnlineSettings;
   elements.scoringRule.disabled = !canChangeOnlineSettings;
@@ -2919,6 +2953,16 @@ function updateRoomUI() {
   for (const button of elements.sizeButtons) button.disabled = !canChangeOnlineSettings;
   for (const button of elements.topologyButtons) {
     button.disabled = !canChangeOnlineSettings;
+  }
+  if (elements.roomRematchSetup) {
+    elements.roomRematchSetup.hidden = !rematchSetup;
+    elements.roomRematchHint.textContent = isOnlineHost()
+      ? "你看到的是下一局预览。开始后，房间号、双方座位、观众和聊天记录都会保留。"
+      : "等待黑方房主发起下一局；你仍可在“聊天”中继续交流。";
+    elements.startRoomRematch.hidden = !isOnlineHost();
+    elements.startRoomRematch.disabled = !(
+      rematchSetup && isOnlineHost() && onlineControlsAvailable
+    );
   }
   elements.changeAiSettings.disabled = reviewing;
   elements.leaveAi.disabled = reviewing;
@@ -3132,7 +3176,7 @@ function announceRoomState(room, previousRoom) {
     setMessage(`${colorName(lastMove.color)}落子${captured}。`);
   } else if (lastMove?.type === "pass") {
     if (room.game.phase === PHASE_SCORING) {
-      setMessage("双方连续停一手，已进入点目。请标记双方死子。");
+      setMessage("双方连续停一手，已进入点目。系统已预标明确死棋并显示黑白领地，请核对。");
     } else {
       setMessage(`${colorName(lastMove.color)}停一手。`);
     }
@@ -3164,9 +3208,24 @@ function applyOnlineRoom(room) {
   }
 
   const previousRoom = onlineRoom;
-  const previousDimensions = { width: boardWidth(), height: boardHeight() };
-  const previousTopology = game?.topology;
+  const previouslyDisplayedGame = liveDisplayedGame();
+  const previousDimensions = {
+    width: boardWidth(previouslyDisplayedGame),
+    height: boardHeight(previouslyDisplayedGame),
+  };
+  const previousTopology = previouslyDisplayedGame?.topology;
   onlineRoom = room;
+  const nextRoundStarted = previousRoom?.game?.phase === PHASE_FINISHED &&
+    room.game.phase === PHASE_PLAY && room.moveCount === 0;
+  const rematchStarted = onlineRematchSetup && room.game.phase !== PHASE_FINISHED;
+  if (rematchStarted) {
+    onlineRematchSetup = false;
+    rematchPreviewGame = null;
+  }
+  if (rematchStarted || nextRoundStarted) {
+    if (isReplaying()) exitReplay({ announce: false });
+    setSidebarTab("game");
+  }
   onlineStateSynchronized = Boolean(
     roomClient.isConnected && room.code === roomClient.roomCode,
   );
@@ -3234,18 +3293,24 @@ function applyOnlineRoom(room) {
     liveAnalysis.manualCandidate = null;
   }
 
-  if (!sameBoardDimensions(previousDimensions, game) || previousTopology !== game.topology) {
+  if (!onlineRematchSetup && (
+    !sameBoardDimensions(previousDimensions, game) || previousTopology !== game.topology
+  )) {
     if (chatReferenceTimer !== null) window.clearTimeout(chatReferenceTimer);
     chatReferenceTimer = null;
     chatReferencePoint = null;
     chatReferenceFocusViews = false;
     rebuildViews(boardWidth(), boardHeight(), game.topology);
   }
-  setPendingDimensions(boardWidth(), boardHeight());
-  setPendingTopology(game.topology);
-  elements.scoringRule.value = game.scoringRule;
-  elements.komi.value = String(game.komi);
-  reflectTimeControlConfig(room.timeControl);
+  if (!onlineRematchSetup) {
+    setPendingDimensions(boardWidth(), boardHeight());
+    setPendingTopology(game.topology);
+    elements.scoringRule.value = game.scoringRule;
+    elements.komi.value = String(game.komi);
+    reflectTimeControlConfig(room.timeControl);
+  }
+  if (rematchStarted || nextRoundStarted) setViewMode(activeViewMode);
+  if (!previousRoom && !onlineRematchSetup) setSidebarTab("game");
   announceRoomState(room, previousRoom);
   if (replayInterruptedForOnlineAI) {
     setMessage("轮到在线 AI 行棋，已自动退出复盘以保持房间对局和计时继续。");
@@ -3401,12 +3466,12 @@ async function dispatchMatchAction(action, payload = {}, options = {}) {
         phase: result.phase,
       })) {
         aiAutoplayPaused = true;
-        setMessage("双方 AI 连续停着，自对弈已暂停在点目阶段。请标记死子后确认结果。");
+        setMessage("双方 AI 连续停着，自对弈已暂停在点目阶段。系统已预标明确死棋，请核对领地。");
       } else {
-        setMessage("AI 也停一手，已进入点目。请标记死子后确认结果。");
+        setMessage("AI 也停一手，已进入点目。系统已预标明确死棋，请核对领地。");
       }
     } else if (result.phase === PHASE_SCORING) {
-      setMessage("双方连续停一手，已进入点目。请先标记双方死子。");
+      setMessage("双方连续停一手，已进入点目。系统已预标明确死棋并显示黑白领地，请核对。");
     } else if (actor === MATCH_CONTROLLER_AI) {
       setMessage(isAIvsAI()
         ? `${colorName(result.color)} AI 停一手，另一方继续判断。`
@@ -3559,15 +3624,22 @@ function getNewGameOptions() {
 
 function resetLobbyPreview({ message = "" } = {}) {
   const options = getNewGameOptions();
-  const previousDimensions = game
-    ? { width: boardWidth(), height: boardHeight() }
+  const onlinePreview = isOnlineRematchSetup();
+  const previousGame = onlinePreview ? rematchPreviewGame : game;
+  const previousDimensions = previousGame
+    ? { width: boardWidth(previousGame), height: boardHeight(previousGame) }
     : null;
-  const previousTopology = game?.topology;
-  game = new GoEngine(options);
-  matchLifecycle = MATCH_LIFECYCLE_LOBBY;
-  localTimeControl = null;
-  moveCount = 0;
-  lastPlayedPoint = null;
+  const previousTopology = previousGame?.topology;
+  const preview = new GoEngine(options);
+  if (onlinePreview) {
+    rematchPreviewGame = preview;
+  } else {
+    game = preview;
+    matchLifecycle = MATCH_LIFECYCLE_LOBBY;
+    localTimeControl = null;
+    moveCount = 0;
+    lastPlayedPoint = null;
+  }
   liveAnalysis = {
     modelId: liveAnalysis.modelId,
     positionKey: null,
@@ -3581,12 +3653,12 @@ function resetLobbyPreview({ message = "" } = {}) {
   elements.coordinateHint.textContent = "";
   if (
     !previousDimensions ||
-    !sameBoardDimensions(previousDimensions, game) ||
-    previousTopology !== game.topology
+    !sameBoardDimensions(previousDimensions, preview) ||
+    previousTopology !== preview.topology
   ) {
     rebuildViews(options.width, options.height, options.topology);
   } else {
-    renderBoardPosition(game.getState(), null);
+    renderBoardPosition(preview.getState(), null);
   }
   setViewMode(activeViewMode);
   syncLobbySettingsSummary();
@@ -3599,19 +3671,27 @@ function returnToLocalLobby(message = "已回到我的房间，可以重新邀�
   cancelReplayAIReview({ terminate: true });
   aiActive = false;
   aiAutoplayPaused = false;
+  onlineRematchSetup = false;
+  rematchPreviewGame = null;
   matchLifecycle = MATCH_LIFECYCLE_LOBBY;
   if (isReplaying()) exitReplay({ announce: false });
-  setSidebarTab("game");
+  setSidebarTab("settings");
   resetLobbyPreview({ message });
 }
 
 async function startNewGame() {
   exitReplay({ announce: false });
   cancelReplayAIReview({ terminate: true });
-  setSidebarTab("game");
   const options = getNewGameOptions();
+  const rematchSetup = isOnlineRematchSetup();
+  if (!rematchSetup) setSidebarTab("game");
   if (hasOnlineSession()) setMessage("正在为房间建立新棋盘…");
-  await dispatchMatchAction(MATCH_ACTION_NEW_GAME, options);
+  const started = await dispatchMatchAction(MATCH_ACTION_NEW_GAME, options);
+  if (started && rematchSetup && !isOnlineRematchSetup()) {
+    setSidebarTab("game");
+    updateUI();
+  }
+  return started;
 }
 
 function hasProgress() {
@@ -3662,6 +3742,24 @@ function updateScoreUI(score) {
   elements.scoreBreakdown.textContent = scoreBreakdown(score);
 }
 
+function territoryRegionsForState(state) {
+  if (state?.phase === PHASE_SCORING) {
+    try {
+      return hydratePublicGame(state).score(state.scoringRule).regions;
+    } catch {
+      return [];
+    }
+  }
+  if (
+    state?.phase === PHASE_FINISHED &&
+    !["resign", "timeout"].includes(state.result?.reason) &&
+    Array.isArray(state.result?.regions)
+  ) {
+    return state.result.regions;
+  }
+  return [];
+}
+
 function renderBoardPosition(
   state,
   lastMove = state.lastMove,
@@ -3677,6 +3775,7 @@ function renderBoardPosition(
     referencePoint,
     analysisCandidates,
     analysisVariation,
+    territoryRegions: territoryRegionsForState(state),
   };
   cylinderView?.setPosition(viewState);
   torusView?.setPosition(viewState);
@@ -4146,15 +4245,39 @@ function updateUI() {
 
   syncLifecycleFromCurrentGame();
   elements.message.setAttribute("aria-live", "polite");
-  const state = game.getState();
-  const timeoutOutcome = currentTimeoutOutcome() ?? (
+  const rematchSetup = isOnlineRematchSetup();
+  const renderedGame = rematchSetup ? rematchPreviewGame ?? game : game;
+  const state = renderedGame.getState();
+  const timeoutOutcome = rematchSetup ? null : currentTimeoutOutcome() ?? (
     state.result?.reason === "timeout" ? state.result : null
   );
   const resignOutcome = state.result?.reason === "resign" ? state.result : null;
-  const renderLastMove = lastPlayedPoint
-    ? { type: "play", ...lastPlayedPoint }
-    : state.lastMove;
+  const renderLastMove = rematchSetup
+    ? null
+    : lastPlayedPoint
+      ? { type: "play", ...lastPlayedPoint }
+      : state.lastMove;
   renderBoardPosition(state, renderLastMove);
+
+  if (rematchSetup) {
+    elements.blackCaptures.textContent = "0";
+    elements.whiteCaptures.textContent = "0";
+    elements.boardTopology.textContent =
+      `${boardDimensionLabel(state)} · ${boardPointCount(state)} 点 · ${topologySurfaceName(state.topology)}`;
+    elements.phaseLabel.textContent = "当前房间 · 下一局设置";
+    elements.turnStone.hidden = true;
+    elements.turnText.textContent = "预览下一局棋盘";
+    elements.moveNumber.textContent = "确认设置后同步开局";
+    elements.playControls.hidden = true;
+    elements.scoringPanel.hidden = true;
+    elements.replayPanel.hidden = true;
+    elements.gesturePlace.textContent = "下一局预览 · 可拖动查看";
+    syncLobbySettingsSummary();
+    syncReplayEntryAvailability();
+    updateRoomUI();
+    syncAIReviewUI();
+    return;
+  }
 
   if (isLocalLobby()) {
     elements.blackCaptures.textContent = "0";
@@ -4275,8 +4398,10 @@ function updateUI() {
 }
 
 function handleBoardPoint({ row, col }) {
-  if (isLocalLobby()) {
-    setMessage("棋局尚未开始；请先邀请 AI、好友或本地对手。", true);
+  if (isBoardSetupMode()) {
+    setMessage(isOnlineRematchSetup()
+      ? "这是下一局的棋盘预览；请先确认设置并发起下一局。"
+      : "棋局尚未开始；请先邀请 AI、好友或本地对手。", true);
     return;
   }
   if (chatPointPicking && hasOnlineSession()) {
@@ -4483,10 +4608,11 @@ function handleHover(point) {
     elements.coordinateHint.textContent = "";
     return;
   }
+  const displayedGame = liveDisplayedGame();
   const letter = COORDINATE_LETTERS[point.col] || String(point.col + 1);
-  const coordinate = `${letter}${boardHeight() - point.row}`;
+  const coordinate = `${letter}${boardHeight(displayedGame) - point.row}`;
   const seamNotes = [];
-  if (point.col === 0 || point.col === boardWidth() - 1) {
+  if (point.col === 0 || point.col === boardWidth(displayedGame) - 1) {
     seamNotes.push(
       isMobiusTopology()
         ? "A列与末列倒序相邻"
@@ -4495,13 +4621,13 @@ function handleHover(point) {
   }
   if (
     isTorusTopology() &&
-    (point.row === 0 || point.row === boardHeight() - 1)
+    (point.row === 0 || point.row === boardHeight(displayedGame) - 1)
   ) {
     seamNotes.push("最上行与最下行相邻");
   }
   if (
     isMobiusTopology() &&
-    (point.row === 0 || point.row === boardHeight() - 1)
+    (point.row === 0 || point.row === boardHeight(displayedGame) - 1)
   ) {
     seamNotes.push("莫比乌斯唯一边界");
   }
@@ -4622,13 +4748,35 @@ elements.resumeGame.addEventListener("click", () => {
   void dispatchMatchAction(MATCH_ACTION_RESUME_PLAY);
 });
 
+function enterOnlineRematchSetup() {
+  if (!hasOnlineSession() || matchLifecycle !== MATCH_LIFECYCLE_FINISHED) return;
+  if (!isOnlineHost()) {
+    setSidebarTab("chat", { focus: true });
+    setMessage("你已留在当前房间；等待黑方房主设置并发起下一局，聊天记录会继续保留。");
+    updateUI();
+    return;
+  }
+  if (isReplaying()) exitReplay({ announce: false });
+  cancelAIThinking();
+  cancelReplayAIReview({ terminate: true });
+  if (chatReferenceTimer !== null) window.clearTimeout(chatReferenceTimer);
+  chatReferenceTimer = null;
+  chatReferencePoint = null;
+  chatReferenceFocusViews = false;
+  setPendingDimensions(boardWidth(), boardHeight());
+  setPendingTopology(game.topology);
+  onlineRematchSetup = true;
+  rematchPreviewGame = new GoEngine(getNewGameOptions());
+  setSidebarTab("settings", { focus: true });
+  resetLobbyPreview({
+    message: "仍在当前在线房间。调整下一局棋盘后点击“使用当前设置开始下一局”；成员和聊天都会保留。",
+  });
+}
+
 elements.returnToLobby?.addEventListener("click", () => {
   if (matchLifecycle !== MATCH_LIFECYCLE_FINISHED) return;
   if (hasOnlineSession()) {
-    void (async () => {
-      await leaveOnlineRoom();
-      if (isLocalLobby()) setSidebarTab("settings", { focus: true });
-    })();
+    enterOnlineRematchSetup();
     return;
   }
   const confirmed = window.confirm(translateText(
@@ -4639,10 +4787,15 @@ elements.returnToLobby?.addEventListener("click", () => {
   setSidebarTab("settings", { focus: true });
 });
 
+elements.startRoomRematch?.addEventListener("click", () => {
+  if (!isOnlineRematchSetup() || !isOnlineHost()) return;
+  void startNewGame();
+});
+
 for (const button of elements.sizeButtons) {
   button.addEventListener("click", () => {
     const size = Number(button.dataset.boardSize);
-    if (!isLocalLobby()) return;
+    if (!isBoardSetupMode()) return;
     setPendingDimensions(size, size);
     resetLobbyPreview();
   });
@@ -4650,7 +4803,7 @@ for (const button of elements.sizeButtons) {
 
 for (const button of elements.topologyButtons) {
   button.addEventListener("click", () => {
-    if (!isLocalLobby()) return;
+    if (!isBoardSetupMode()) return;
     const requestedTopology = button.dataset.boardTopology;
     const nextTopology = [
       TOPOLOGY_CYLINDER,
@@ -4660,12 +4813,6 @@ for (const button of elements.topologyButtons) {
       ? requestedTopology
       : TOPOLOGY_CYLINDER;
     const previewMode = nextTopology === TOPOLOGY_CYLINDER ? "arc" : "3d";
-    if (nextTopology === game.topology) {
-      setPendingTopology(game.topology);
-      activeViewMode = previewMode;
-      setViewMode(previewMode);
-      return;
-    }
     setPendingTopology(nextTopology);
     activeViewMode = previewMode;
     resetLobbyPreview();
@@ -4673,7 +4820,7 @@ for (const button of elements.topologyButtons) {
 }
 
 function commitPendingDimensionInputs() {
-  if (!isLocalLobby()) return;
+  if (!isBoardSetupMode()) return;
   if (lobbyPreviewFrame !== null) {
     window.cancelAnimationFrame(lobbyPreviewFrame);
     lobbyPreviewFrame = null;
@@ -4684,7 +4831,7 @@ function commitPendingDimensionInputs() {
 }
 
 function scheduleLobbyDimensionPreview() {
-  if (!isLocalLobby()) return;
+  if (!isBoardSetupMode()) return;
   const width = Number(elements.customWidth.value);
   const height = Number(elements.customHeight.value);
   const valid = [width, height].every(
@@ -4696,7 +4843,7 @@ function scheduleLobbyDimensionPreview() {
   if (lobbyPreviewFrame !== null) window.cancelAnimationFrame(lobbyPreviewFrame);
   lobbyPreviewFrame = window.requestAnimationFrame(() => {
     lobbyPreviewFrame = null;
-    if (!isLocalLobby()) return;
+    if (!isBoardSetupMode()) return;
     setPendingDimensions(width, height);
     resetLobbyPreview();
   });
@@ -4722,7 +4869,7 @@ for (const input of [
 ]) {
   input.addEventListener("change", () => {
     syncLobbySettingsSummary();
-    if (isLocalLobby() && [elements.scoringRule, elements.komi].includes(input)) {
+    if (isBoardSetupMode() && [elements.scoringRule, elements.komi].includes(input)) {
       resetLobbyPreview();
     }
   });
@@ -4831,7 +4978,7 @@ function setViewMode(mode) {
   elements.resetView.setAttribute("aria-label", viewCopy.resetLabel);
   elements.gesturePrimary.textContent = viewCopy.primaryGesture;
   elements.gestureSecondary.textContent = viewCopy.secondaryGesture;
-  elements.gesturePlace.textContent = isLocalLobby()
+  elements.gesturePlace.textContent = isBoardSetupMode()
     ? "棋盘预览 · 可拖动查看"
     : finePointer ? "左键点击落子" : "轻点落子";
   elements.coordinateHint.textContent = "";
@@ -4978,6 +5125,8 @@ function returnToOffline(message) {
     cancelAIThinking();
   }
   onlineRoom = null;
+  onlineRematchSetup = false;
+  rematchPreviewGame = null;
   onlineStateSynchronized = false;
   onlineCommandPending = false;
   onlineCommandRevision = null;
@@ -4985,6 +5134,7 @@ function returnToOffline(message) {
   resetChatSessionState();
   updateRoomUrl();
   restoreOfflineGame();
+  if (isLocalLobby()) setSidebarTab("settings");
   setMessage(message);
   updateUI();
   maybeStartAITurn();
@@ -5234,7 +5384,7 @@ arcView = new ArcBoard(elements.arcScene, {
   onPoint: handleBoardPoint,
   onHover: handleHover,
 });
-setSidebarTab("game");
+setSidebarTab("settings");
 buildChatPickers();
 syncLanguageControls();
 syncTopologyPresentation();

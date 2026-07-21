@@ -17,6 +17,12 @@ import {
   updatePlayerViewLighting,
 } from "./playerViewLighting.js";
 import { translateText } from "../i18n.js";
+import {
+  createTerritoryMarkerLayer,
+  disposeTerritoryMarkerLayer,
+  territoryPointsForPosition,
+  territoryPointsSignature,
+} from "./territoryMarkers.js";
 
 const CELL = 1;
 const DRAG_THRESHOLD = 6;
@@ -130,6 +136,9 @@ export class TorusBoard {
     this.analysisVariation = [];
     this.referencePoint = null;
     this.deadKeys = new Set();
+    this.territoryPoints = [];
+    this.territorySignature = "";
+    this.territoryGroup = null;
     this.pointerStart = null;
     this.hoveredPoint = null;
     this.movePreviewEnabled = true;
@@ -242,6 +251,9 @@ export class TorusBoard {
       this.scene.remove(this.boardGroup);
       disposeObject(this.boardGroup);
     }
+    this.territoryPoints = [];
+    this.territorySignature = "";
+    this.territoryGroup = null;
     this.boardGroup = new THREE.Group();
     this.scene.add(this.boardGroup);
 
@@ -421,6 +433,7 @@ export class TorusBoard {
     phase,
     lastMove,
     deadStones = [],
+    territoryRegions = [],
     analysisMove = null,
     analysisCandidates = [],
     analysisVariation = [],
@@ -452,6 +465,7 @@ export class TorusBoard {
         ? { row: referencePoint.row, col: referencePoint.col }
         : null;
     this.deadKeys = new Set(deadStones.map(({ row, col }) => `${row},${col}`));
+    this.syncTerritoryMarkers(territoryRegions, deadStones);
 
     while (this.stonesGroup.children.length > 0) {
       this.stonesGroup.remove(this.stonesGroup.children[0]);
@@ -521,6 +535,36 @@ export class TorusBoard {
       );
     }
     this.refreshHover();
+  }
+
+  territoryMarkerOptions() {
+    return {
+      radius: 0.19,
+      surfaceOffset: 0.06,
+      paired: false,
+    };
+  }
+
+  syncTerritoryMarkers(territoryRegions, deadStones) {
+    const points = territoryPointsForPosition({
+      territoryRegions,
+      phase: this.phase,
+      width: this.width,
+      height: this.height,
+      board: this.board,
+      deadStones,
+    });
+    const signature = territoryPointsSignature(points);
+    if (signature === this.territorySignature) return;
+
+    disposeTerritoryMarkerLayer(this.territoryGroup);
+    this.territoryPoints = points;
+    this.territorySignature = signature;
+    this.territoryGroup = createTerritoryMarkerLayer(points, {
+      frameAt: (row, col) => this.frame(row, col, 0),
+      ...this.territoryMarkerOptions(),
+    });
+    if (this.territoryGroup) this.boardGroup.add(this.territoryGroup);
   }
 
   positionStone(stone, row, col) {

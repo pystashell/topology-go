@@ -200,6 +200,30 @@ test("lobby lifecycle and rectangular preview copy is available in English", () 
     "Your turn. · 2 spectators",
   );
   assert.equal(translateText("正在提交认输…"), "Submitting resignation…");
+  assert.equal(
+    translateText("白方胜 · 黑方认输。"),
+    "White wins · Black resigned.",
+  );
+  assert.equal(
+    translateText("黑方胜 · 白方超时。"),
+    "Black wins · White timed out.",
+  );
+  assert.equal(
+    translateText("本局已结束；黑方可在当前房间设置下一局，成员和聊天记录都会保留。"),
+    "This game is over. Black can configure the next game in this room; members and chat history will be kept.",
+  );
+  assert.equal(
+    translateText("系统已保守预标较明确的死棋；点击棋子可修改整块棋的死活判断。"),
+    "Clearly dead groups are pre-marked conservatively. Select a stone to revise its entire group's status.",
+  );
+  assert.equal(
+    translateText("在当前房间设置下一局"),
+    "Configure next game in this room",
+  );
+  assert.equal(
+    translateText("使用当前设置开始下一局"),
+    "Start next game with these settings",
+  );
 });
 
 test("long AI, SGF, replay and scoring status sentences translate before generic patterns", () => {
@@ -249,6 +273,10 @@ test("long AI, SGF, replay and scoring status sentences translate before generic
     ],
     ["点目完成：黑方胜 2.5 目。", "Scoring complete: Black wins by 2.5 points."],
     ["黑方这块棋已标为死子。", "Black's group was marked dead."],
+    [
+      "双方连续停一手，已进入点目。系统已预标明确死棋并显示黑白领地，请核对。",
+      "Both players passed. Clearly dead groups are pre-marked and Black and White territory is shown for review.",
+    ],
     [
       "19 × 19 甜甜圈在线棋盘已准备好，黑方先行。",
       "19 × 19 Torus online board is ready. Black plays first.",

@@ -50,16 +50,6 @@
           <div id="torus-scene" class="view-surface" aria-label="可旋转的3D甜甜圈围棋棋盘" hidden></div>
           <div id="mobius-scene" class="view-surface" aria-label="可旋转的3D莫比乌斯围棋棋盘" hidden></div>
 
-          <section id="lobby-overlay" class="lobby-overlay" aria-labelledby="lobby-overlay-title">
-            <span class="eyebrow">我的房间</span>
-            <h1 id="lobby-overlay-title">棋局尚未开始</h1>
-            <p>先选择对手并确认棋盘规则，准备好之后才会正式开局。</p>
-            <strong id="lobby-summary">19 × 19 · 竹筒 · 中国规则 · 不计时</strong>
-            <button class="primary-button lobby-overlay-action" type="button" data-open-invite>
-              邀请对局
-            </button>
-          </section>
-
           <div
             class="view-switch"
             role="group"
@@ -205,7 +195,7 @@
           </section>
 
           <nav class="sidebar-tabs" role="tablist" aria-label="侧栏功能">
-            <button id="sidebar-tab-game" type="button" role="tab" data-sidebar-tab="game" class="active" aria-selected="true" aria-controls="sidebar-panel-game">
+            <button id="sidebar-tab-game" type="button" role="tab" data-sidebar-tab="game" aria-selected="false" aria-controls="sidebar-panel-game">
               <span aria-hidden="true">●</span><b>对局</b>
             </button>
             <button id="sidebar-tab-analysis" type="button" role="tab" data-sidebar-tab="analysis" aria-selected="false" aria-controls="sidebar-panel-analysis">
@@ -217,16 +207,16 @@
             <button id="sidebar-tab-record" type="button" role="tab" data-sidebar-tab="record" aria-selected="false" aria-controls="sidebar-panel-record">
               <span aria-hidden="true">▶</span><b>棋谱</b>
             </button>
-            <button id="sidebar-tab-settings" type="button" role="tab" data-sidebar-tab="settings" aria-label="棋盘设置" aria-selected="false" aria-controls="sidebar-panel-settings">
+            <button id="sidebar-tab-settings" type="button" role="tab" data-sidebar-tab="settings" class="active" aria-label="棋盘设置" aria-selected="true" aria-controls="sidebar-panel-settings">
               <span aria-hidden="true">⚙</span><b>棋盘设置</b>
             </button>
           </nav>
 
-          <div id="sidebar-panel-game" class="sidebar-panel" data-sidebar-panel="game" role="tabpanel" aria-labelledby="sidebar-tab-game"></div>
+          <div id="sidebar-panel-game" class="sidebar-panel" data-sidebar-panel="game" role="tabpanel" aria-labelledby="sidebar-tab-game" hidden></div>
           <div id="sidebar-panel-analysis" class="sidebar-panel" data-sidebar-panel="analysis" role="tabpanel" aria-labelledby="sidebar-tab-analysis" hidden></div>
           <div id="sidebar-panel-chat" class="sidebar-panel" data-sidebar-panel="chat" role="tabpanel" aria-labelledby="sidebar-tab-chat" hidden></div>
           <div id="sidebar-panel-record" class="sidebar-panel" data-sidebar-panel="record" role="tabpanel" aria-labelledby="sidebar-tab-record" hidden></div>
-          <div id="sidebar-panel-settings" class="sidebar-panel" data-sidebar-panel="settings" role="tabpanel" aria-labelledby="sidebar-tab-settings" hidden></div>
+          <div id="sidebar-panel-settings" class="sidebar-panel" data-sidebar-panel="settings" role="tabpanel" aria-labelledby="sidebar-tab-settings"></div>
 
           <section id="chat-panel" class="chat-panel" aria-label="房间聊天" hidden>
             <div class="chat-heading">
@@ -423,7 +413,12 @@
           </section>
 
           <section id="scoring-panel" class="scoring-panel" hidden>
-            <p>点击棋子可将整块棋标为死子；再次点击可恢复。</p>
+            <p>系统已保守预标较明确的死棋；点击棋子可修改整块棋的死活判断。</p>
+            <div class="scoring-legend" aria-label="点目棋盘标记说明">
+              <span><i class="territory-swatch black" aria-hidden="true"></i>黑方领地</span>
+              <span><i class="territory-swatch white" aria-hidden="true"></i>白方领地</span>
+              <span><i class="territory-swatch neutral" aria-hidden="true"></i>未定或公气</span>
+            </div>
             <div class="live-score" aria-label="当前点目结果">
               <div><span>黑</span><strong id="black-score">0</strong></div>
               <div><span>白</span><strong id="white-score">0</strong></div>
@@ -440,6 +435,17 @@
               <h2 id="settings-title">棋盘设置</h2>
               <span id="board-topology">19 路 · 竹筒</span>
             </div>
+
+            <section id="room-rematch-setup" class="room-rematch-setup" aria-live="polite" hidden>
+              <div>
+                <span class="eyebrow">当前在线房间</span>
+                <strong>设置并发起下一局</strong>
+                <small id="room-rematch-hint">房间成员和聊天记录都会保留。</small>
+              </div>
+              <button id="start-room-rematch" class="primary-button" type="button">
+                使用当前设置开始下一局
+              </button>
+            </section>
 
             <div class="field-group">
               <span class="field-label">棋盘形状</span>

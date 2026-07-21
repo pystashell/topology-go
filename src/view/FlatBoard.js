@@ -9,6 +9,10 @@ import {
   preventBoardContextMenu,
 } from "./pointerGestures.js";
 import { translateText } from "../i18n.js";
+import {
+  TERRITORY_MARKER_STYLES,
+  territoryPointsForPosition,
+} from "./territoryMarkers.js";
 
 const TAU = Math.PI * 2;
 const DRAG_THRESHOLD = 6;
@@ -64,6 +68,7 @@ export class FlatBoard {
     this.analysisVariation = [];
     this.referencePoint = null;
     this.deadKeys = new Set();
+    this.territoryPoints = [];
     this.hoveredPoint = null;
     this.offsetColumns = 0;
     this.offsetRows = 0;
@@ -126,6 +131,7 @@ export class FlatBoard {
     this.analysisVariation = [];
     this.referencePoint = null;
     this.deadKeys.clear();
+    this.territoryPoints = [];
     this.offsetColumns = 0;
     this.offsetRows = 0;
     this.hoveredPoint = null;
@@ -164,6 +170,7 @@ export class FlatBoard {
     phase,
     lastMove,
     deadStones = [],
+    territoryRegions = [],
     analysisMove = null,
     analysisCandidates = [],
     analysisVariation = [],
@@ -200,6 +207,14 @@ export class FlatBoard {
         ? { row: referencePoint.row, col: referencePoint.col }
         : null;
     this.deadKeys = new Set(deadStones.map(({ row, col }) => `${row},${col}`));
+    this.territoryPoints = territoryPointsForPosition({
+      territoryRegions,
+      phase,
+      width: this.width,
+      height: this.height,
+      board,
+      deadStones,
+    });
     this.draw();
   }
 
@@ -621,6 +636,7 @@ export class FlatBoard {
     this.drawBoardSurface(context);
     this.drawGrid(context);
     this.drawStarPoints(context);
+    this.drawTerritory(context);
     this.drawStones(context);
     this.drawHover(context);
     this.drawAnalysisCandidates(context);
@@ -790,6 +806,38 @@ export class FlatBoard {
         }
       }
     }
+  }
+
+  drawTerritory(context) {
+    if (this.territoryPoints.length === 0) return;
+    const radius = clamp(this.cell * 0.19, 2.6, 7.2);
+    context.save();
+    context.beginPath();
+    context.rect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
+    context.clip();
+    context.lineJoin = "round";
+
+    for (const { row, col, owner } of this.territoryPoints) {
+      const style = TERRITORY_MARKER_STYLES[owner];
+      this.forEachLogicalPoint(row, col, radius * 1.4, (x, y) => {
+        context.save();
+        context.translate(x, y);
+        context.rotate(Math.PI / 4);
+        context.strokeStyle = style.stroke;
+        context.lineWidth = clamp(this.cell * 0.16, 2.2, 5);
+        context.strokeRect(-radius, -radius, radius * 2, radius * 2);
+        context.strokeStyle = style.fill;
+        context.lineWidth = clamp(this.cell * 0.075, 1.2, 2.6);
+        context.strokeRect(-radius, -radius, radius * 2, radius * 2);
+        context.restore();
+      });
+    }
+    context.restore();
   }
 
   drawStones(context) {

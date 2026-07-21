@@ -1267,7 +1267,12 @@ export class GoEngine {
     const color = this.currentPlayer;
     this.consecutivePasses += 1;
     this.currentPlayer = oppositeColor(color);
-    if (this.consecutivePasses >= 2) this.phase = PHASE_SCORING;
+    if (this.consecutivePasses >= 2) {
+      this.phase = PHASE_SCORING;
+      for (const stone of this.suggestDeadStones()) {
+        this.deadStones.add(pointKey(stone.row, stone.col));
+      }
+    }
     this.lastMove = { type: "pass", color };
     this.#recordUndo(this.lastMove, undoSnapshot);
     this.#recordReplayMove(this.lastMove);
@@ -1386,6 +1391,98 @@ export class GoEngine {
 
   toggleDeadGroup(row, col) {
     return this.toggleDead(row, col);
+  }
+
+  /**
+   * Return only groups whose death is already forced without reading intent
+   * into an unfinished position.
+   *
+   * The deliberately narrow proof is:
+   * - the group has exactly one liberty;
+   * - even granting the group the next move at that liberty (and ignoring
+   *   superko in its favour), the move is suicide; and
+   * - the opponent can legally fill that liberty and capture the group now.
+   *
+   * This catches enclosed one-eye groups while leaving ordinary atari,
+   * capturing races, ko and seki for the players to decide. The result is a
+   * defensive copy and calling the method never changes game state.
+   *
+   * @returns {Point[]}
+   */
+  suggestDeadStones() {
+    const visited = new Set();
+    const suggested = [];
+
+    for (let row = 0; row < this.height; row += 1) {
+      for (let col = 0; col < this.width; col += 1) {
+        const color = this.board[row][col];
+        const startKey = pointKey(row, col);
+        if (color === EMPTY || visited.has(startKey)) continue;
+
+        const group = this.#collectGroup(row, col);
+        for (const stone of group.stones) {
+          visited.add(pointKey(stone.row, stone.col));
+        }
+        if (group.liberties.length !== 1) continue;
+
+        const liberty = group.liberties[0];
+        // Ignore superko for the defender: allowing an otherwise forbidden
+        // defence can only make this automatic suggestion more conservative.
+        const defence = this.#simulatePlacement(
+          liberty.row,
+          liberty.col,
+          color,
+          { checkSuperko: false },
+        );
+        if (defence.ok) continue;
+
+        const capture = this.#simulatePlacement(
+          liberty.row,
+          liberty.col,
+          oppositeColor(color),
+          { checkSuperko: true },
+        );
+        if (!capture.ok) continue;
+
+        suggested.push(...group.stones.map((stone) => ({ ...stone })));
+      }
+    }
+
+    return suggested;
+  }
+
+  #simulatePlacement(row, col, color, { checkSuperko }) {
+    if (!this.#validPoint(row, col) || this.board[row][col] !== EMPTY) {
+      return { ok: false };
+    }
+
+    const board = copyBoard(this.board);
+    const opponent = oppositeColor(color);
+    board[row][col] = color;
+
+    const checkedOpponentStones = new Set();
+    for (const neighbour of this.neighbors(row, col)) {
+      if (board[neighbour.row][neighbour.col] !== opponent) continue;
+      const neighbourKey = pointKey(neighbour.row, neighbour.col);
+      if (checkedOpponentStones.has(neighbourKey)) continue;
+
+      const group = this.#collectGroup(neighbour.row, neighbour.col, board);
+      for (const stone of group.stones) {
+        checkedOpponentStones.add(pointKey(stone.row, stone.col));
+      }
+      if (group.liberties.length !== 0) continue;
+      for (const stone of group.stones) {
+        board[stone.row][stone.col] = EMPTY;
+      }
+    }
+
+    if (this.#collectGroup(row, col, board).liberties.length === 0) {
+      return { ok: false };
+    }
+    if (checkSuperko && this.positionHistory.has(this.#positionHash(board))) {
+      return { ok: false };
+    }
+    return { ok: true };
   }
 
   isMarkedDead(row, col) {

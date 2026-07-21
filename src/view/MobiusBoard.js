@@ -231,6 +231,16 @@ export class MobiusBoard extends TorusBoard {
     stone.quaternion.setFromUnitVectors(LOCAL_UP, frame.normal);
   }
 
+  territoryMarkerOptions() {
+    return {
+      radius: Math.max(0.068, this.mobiusStoneRadius * 0.58),
+      surfaceOffset: Math.max(0.012, this.mobiusStoneThickness * 0.34),
+      // A Mobius band has two locally visible sides but no global front side.
+      // Mirrored instances keep ownership readable from either camera side.
+      paired: true,
+    };
+  }
+
   addPairedMarker(row, col, distance, makeGeometry, makeMaterial) {
     const frame = this.frame(row, col);
     for (const sign of [-1, 1]) {

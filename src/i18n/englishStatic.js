@@ -197,6 +197,16 @@ export const ENGLISH_STATIC = Object.freeze({
   "每次读秒（秒）": "Seconds per period",
   "点击棋子可将整块棋标为死子；再次点击可恢复。":
     "Click a stone to mark its entire group dead; click again to restore it.",
+  "系统已保守预标较明确的死棋；点击棋子可修改整块棋的死活判断。":
+    "Clearly dead groups are pre-marked conservatively. Select a stone to revise its entire group's status.",
+  "点目棋盘标记说明": "Scoring-board marker legend",
+  "黑方领地": "Black territory",
+  "白方领地": "White territory",
+  "未定或公气": "Unsettled or neutral",
+  "当前在线房间": "Current online room",
+  "设置并发起下一局": "Configure and start the next game",
+  "房间成员和聊天记录都会保留。": "Room members and chat history will be kept.",
+  "使用当前设置开始下一局": "Start next game with these settings",
   "点击棋盘交叉点落子": "Click an intersection to play",
   "点目规则": "Scoring rules",
   "甜甜圈": "Torus",
