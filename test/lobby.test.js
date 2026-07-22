@@ -6,6 +6,10 @@ import {
   lobbySummaryFromRoom,
   pruneLobbyRooms,
 } from "../src/multiplayer/lobby.js";
+import {
+  decodeLobbyBoardPreview,
+  encodeLobbyBoardPreview,
+} from "../src/multiplayer/lobbyPreview.js";
 
 function room(overrides = {}) {
   return {
@@ -40,8 +44,10 @@ function room(overrides = {}) {
 
 test("lobby summaries expose only public room metadata", () => {
   const summary = lobbySummaryFromRoom(room(), 2_100);
+  const emptyBoard = Array.from({ length: 9 }, () => Array(13).fill(null));
   assert.deepEqual(summary, {
     code: "BAM234",
+    revision: 4,
     status: "playing",
     mode: "human-ai",
     roundNumber: 2,
@@ -52,6 +58,8 @@ test("lobby summaries expose only public room metadata", () => {
     komi: 7.5,
     timed: false,
     moveCount: 12,
+    boardPreview: encodeLobbyBoardPreview(emptyBoard, 13, 9),
+    lastMove: null,
     players: [
       { name: "黑方", color: "black", controller: "human", online: true },
       { name: "KataGo", color: "white", controller: "ai", online: true },
@@ -67,6 +75,42 @@ test("lobby summaries expose only public room metadata", () => {
   });
   assert.equal("chat" in summary, false);
   assert.equal("positionToken" in summary, false);
+  assert.equal("replay" in summary, false);
+  assert.deepEqual(decodeLobbyBoardPreview(summary.boardPreview, 13, 9), emptyBoard);
+});
+
+test("lobby summaries encode current stones and only public last-move fields", () => {
+  const board = Array.from({ length: 3 }, () => Array(5).fill(null));
+  board[0][0] = "black";
+  board[1][4] = "white";
+  const summary = lobbySummaryFromRoom(room({
+    game: {
+      width: 5,
+      height: 3,
+      topology: "cylinder",
+      scoringRule: "chinese",
+      komi: 7.5,
+      phase: "play",
+      board,
+      lastMove: {
+        type: "play",
+        color: "white",
+        row: 1,
+        col: 4,
+        captured: [{ row: 1, col: 3 }],
+        privateAnalysis: "never-index-this",
+      },
+    },
+  }));
+  assert.deepEqual(decodeLobbyBoardPreview(summary.boardPreview, 5, 3), board);
+  assert.deepEqual(summary.lastMove, {
+    type: "play",
+    color: "white",
+    row: 1,
+    col: 4,
+  });
+  assert.equal(JSON.stringify(summary).includes("privateAnalysis"), false);
+  assert.equal(JSON.stringify(summary).includes("captured"), false);
 });
 
 test("waiting friend rooms are joinable and filters compose", () => {
@@ -95,6 +139,63 @@ test("waiting friend rooms are joinable and filters compose", () => {
   assert.deepEqual(
     filterLobbyRooms([playing, waiting], { size: "custom" }).map(({ code }) => code),
     ["BAM234"],
+  );
+});
+
+test("pending invitations preview the empty requested board instead of the previous game", () => {
+  const previousBoard = Array.from({ length: 9 }, () => Array(13).fill(null));
+  previousBoard[4][6] = "black";
+  const invited = lobbySummaryFromRoom(room({
+    moveCount: 47,
+    game: {
+      width: 13,
+      height: 9,
+      topology: "mobius",
+      scoringRule: "chinese",
+      komi: 7.5,
+      phase: "finished",
+      board: previousBoard,
+      lastMove: { type: "play", color: "black", row: 4, col: 6 },
+    },
+    players: [
+      { id: "host", name: "Host", color: "black", role: "player", online: true },
+      { id: "friend", name: "Friend", color: "white", role: "player", online: true },
+    ],
+    match: {
+      status: "invited",
+      mode: "friend",
+      roundId: 8,
+      request: {
+        mode: "friend",
+        controllers: {
+          black: { kind: "human", operatorId: "host" },
+          white: { kind: "human", operatorId: "friend" },
+        },
+        settings: {
+          width: 17,
+          height: 11,
+          topology: "torus",
+          scoringRule: "japanese",
+          komi: 6.5,
+          mainTimeSeconds: 300,
+          byoYomiPeriods: 3,
+          byoYomiSeconds: 30,
+        },
+      },
+    },
+  }));
+
+  assert.equal(invited.width, 17);
+  assert.equal(invited.height, 11);
+  assert.equal(invited.topology, "torus");
+  assert.equal(invited.scoringRule, "japanese");
+  assert.equal(invited.komi, 6.5);
+  assert.equal(invited.timed, true);
+  assert.equal(invited.moveCount, 0);
+  assert.equal(invited.lastMove, null);
+  assert.deepEqual(
+    decodeLobbyBoardPreview(invited.boardPreview, 17, 11),
+    Array.from({ length: 11 }, () => Array(17).fill(null)),
   );
 });
 
@@ -155,7 +256,7 @@ test("v2 match controllers derive human, AI, and local seats", () => {
   ]);
 });
 
-test("only friend setup or invitation rooms without a real white controller are joinable", () => {
+test("only friend rooms with a genuinely open white seat are joinable", () => {
   const players = [
     { id: "host", name: "Host", color: "black", role: "player", online: true },
     { id: "friend", name: "Friend", color: "white", role: "player", online: true },
@@ -172,7 +273,7 @@ test("only friend setup or invitation rooms without a real white controller are 
       },
     },
   }));
-  assert.equal(waiting.joinable, true, "a player list alone does not occupy a controller seat");
+  assert.equal(waiting.joinable, false, "a reserved player member occupies the seat too");
 
   const invited = lobbySummaryFromRoom(room({
     players,
@@ -212,7 +313,27 @@ test("only friend setup or invitation rooms without a real white controller are 
       },
     },
   }));
-  assert.equal(playingWithoutWhite.joinable, false);
+  assert.equal(playingWithoutWhite.joinable, true);
+  assert.deepEqual(
+    filterLobbyRooms([waiting, invited, playingWithoutWhite], { status: "joinable" })
+      .map(({ code }) => code),
+    ["BAM234"],
+  );
+
+  const hostless = lobbySummaryFromRoom(room({
+    code: "NOHOST",
+    players: [],
+    match: {
+      status: "setup",
+      mode: "friend",
+      roundId: 0,
+      controllers: {
+        black: { kind: "human", operatorId: null },
+        white: { kind: "human", operatorId: null },
+      },
+    },
+  }));
+  assert.equal(hostless.joinable, false, "the lobby must not advertise a hostless room");
 });
 
 test("lobby pruning drops stale rooms and keeps the newest order", () => {

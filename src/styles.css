@@ -269,6 +269,15 @@ summary:focus-visible {
   min-height: 50px;
 }
 
+.lobby-primary-actions a.secondary-button {
+  grid-column: 1 / -1;
+  min-height: 38px;
+  display: grid;
+  place-items: center;
+  color: #d7e0dc;
+  text-decoration: none;
+}
+
 .lobby-browser {
   margin-top: 26px;
   padding: 24px;
@@ -372,6 +381,51 @@ summary:focus-visible {
   border-color: rgba(215, 169, 91, 0.38);
   background: rgba(255, 255, 255, 0.052);
   transform: translateY(-1px);
+}
+
+.lobby-room-card-body {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(154px, 0.88fr) minmax(0, 1.12fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.lobby-room-preview {
+  width: 100%;
+  min-width: 0;
+  aspect-ratio: 18 / 11;
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid rgba(215, 169, 91, 0.25);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(215, 169, 91, 0.13), transparent 68%),
+    #111a17;
+}
+
+.lobby-room-preview canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.lobby-room-preview-fallback {
+  padding: 16px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: center;
+}
+
+.lobby-room-card-details {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 13px;
 }
 
 .lobby-room-card-header,
@@ -1388,10 +1442,37 @@ summary:focus-visible {
   font-size: 10px;
 }
 
-.seat-list > div > span:last-child {
+.seat-list > div > span[id$="-seat"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.seat-entry-actionable {
+  flex-wrap: wrap;
+}
+
+.seat-entry-actionable > span[id$="-seat"] {
+  min-width: 0;
+  flex: 1;
+}
+
+.room-seat-action {
+  width: 100%;
+  margin: 5px 0 -2px;
+  padding: 5px 7px;
+  border: 1px solid rgba(215, 169, 91, 0.35);
+  border-radius: 7px;
+  color: var(--accent-strong);
+  background: rgba(215, 169, 91, 0.08);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.room-seat-action:hover {
+  border-color: rgba(215, 169, 91, 0.58);
+  color: #fff0cf;
+  background: rgba(215, 169, 91, 0.14);
 }
 
 .seat-list > div.connected-seat {
@@ -2710,6 +2791,10 @@ select:disabled {
     grid-template-columns: 1fr;
   }
 
+  .lobby-room-card-body {
+    grid-template-columns: minmax(142px, 0.9fr) minmax(0, 1.1fr);
+  }
+
   .dimension-fields {
     grid-template-columns: 1fr;
   }
@@ -2848,6 +2933,10 @@ select:disabled {
 }
 
 @media (max-width: 440px) {
+  .lobby-room-card-body {
+    grid-template-columns: 1fr;
+  }
+
   .brand > span:last-child {
     display: none;
   }

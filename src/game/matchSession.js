@@ -134,16 +134,25 @@ export function createMatchSession(input = {}) {
   const canActAsHuman = transport === MATCH_TRANSPORT_ONLINE
     ? onlineHumanTurn
     : localHumanTurn;
-  const undoPending = Boolean(input.undoRequest);
+  const ownUndoPending = Boolean(
+    input.undoRequest &&
+    (
+      input.undoRequest.requesterId === identityId ||
+      (!input.undoRequest.requesterId && input.undoRequest.requesterColor === identity.color)
+    ),
+  );
   const undoAvailable = Boolean(input.undoAvailable) && !input.undoRequest;
   const localAiSelfPlay = transport === MATCH_TRANSPORT_LOCAL &&
     controllerByColor.black === MATCH_CONTROLLER_AI &&
     controllerByColor.white === MATCH_CONTROLLER_AI;
 
   const capabilities = {
-    play: started && interactive && phase === "play" && bothSeats && actionReady && !undoPending &&
+    // A negotiated undo is intentionally non-blocking. The player whose turn
+    // it is may continue normally; the authoritative room then treats that
+    // legal move (or pass) as an implicit decline of the pending request.
+    play: started && interactive && phase === "play" && bothSeats && actionReady && !ownUndoPending &&
       canActAsHuman,
-    pass: started && interactive && phase === "play" && bothSeats && actionReady && !undoPending &&
+    pass: started && interactive && phase === "play" && bothSeats && actionReady && !ownUndoPending &&
       canActAsHuman,
     undo: started && interactive && phase === "play" && bothSeats && actionReady && undoAvailable &&
       (transport === MATCH_TRANSPORT_LOCAL || (player && controlledColors.length > 0)),

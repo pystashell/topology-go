@@ -337,7 +337,7 @@ test("an online black host may attach an empty seat or reconfigure an automated 
   assert.equal(humanOccupied.capabilities.detach_ai, false);
 });
 
-test("a pending negotiated undo locks shared play and pass capabilities", () => {
+test("a pending negotiated undo keeps the opponent's play and pass available", () => {
   const session = createMatchSession({
     transport: MATCH_TRANSPORT_ONLINE,
     controllerByColor: { black: "human", white: "human" },
@@ -349,6 +349,25 @@ test("a pending negotiated undo locks shared play and pass capabilities", () => 
     bothSeats: true,
     undoAvailable: true,
     undoRequest: { requesterColor: "black" },
+  });
+  assert.equal(session.capabilities.play, true);
+  assert.equal(session.capabilities.pass, true);
+  assert.equal(session.capabilities.undo, false);
+  assert.equal(session.capabilities.resign, true);
+});
+
+test("the requester must cancel their own pending undo before continuing", () => {
+  const session = createMatchSession({
+    transport: MATCH_TRANSPORT_ONLINE,
+    controllerByColor: { black: "human", white: "human" },
+    identity: { playerId: "white-player", role: "player", color: "white" },
+    phase: "play",
+    currentPlayer: "white",
+    connected: true,
+    roomReady: true,
+    bothSeats: true,
+    undoAvailable: true,
+    undoRequest: { requesterId: "white-player", requesterColor: "white" },
   });
   assert.equal(session.capabilities.play, false);
   assert.equal(session.capabilities.pass, false);

@@ -402,6 +402,17 @@ export class BadukRoom {
             payload: command.payload,
           });
 
+      if (
+        command.action === "claim_seat" ||
+        command.action === "release_seat"
+      ) {
+        const currentMember = this.engine.member(playerId);
+        if (currentMember) {
+          attachment.identity = this.engine.identityFor(currentMember);
+          socket.serializeAttachment(attachment);
+        }
+      }
+
       if (command.action !== "leave") {
         this.engine.recordCommand({
           playerId,

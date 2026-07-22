@@ -45,6 +45,7 @@
           <div class="lobby-primary-actions">
             <button id="lobby-create-room" class="primary-button" type="button">创建房间</button>
             <button id="lobby-join-room" class="secondary-button" type="button">输入房间号</button>
+            <a class="secondary-button" href="/single">返回单人模式</a>
           </div>
         </section>
 
@@ -59,7 +60,7 @@
 
           <div class="lobby-status-tabs" role="group" aria-label="房间状态">
             <button type="button" data-lobby-status="all" class="active" aria-pressed="true">全部</button>
-            <button type="button" data-lobby-status="invited" aria-pressed="false">等待加入</button>
+            <button type="button" data-lobby-status="joinable" aria-pressed="false">可加入</button>
             <button type="button" data-lobby-status="playing" aria-pressed="false">正在进行</button>
             <button type="button" data-lobby-status="finished" aria-pressed="false">已结束</button>
           </div>
@@ -97,7 +98,7 @@
           </div>
 
           <p id="lobby-status" class="lobby-status" role="status">正在读取公开房间…</p>
-          <div id="lobby-room-list" class="lobby-room-list" aria-live="polite"></div>
+          <div id="lobby-room-list" class="lobby-room-list"></div>
           <div id="lobby-empty" class="lobby-empty" hidden>
             <strong>暂时没有符合条件的房间</strong>
             <span>可以创建一盘新的异形棋局，第一位对手或观众很快就能加入。</span>
@@ -182,7 +183,7 @@
                 <small>选择 AI、好友、本地双人或 AI 自对弈</small>
               </button>
               <button id="join-invitation" class="secondary-button room-main-action" type="button">
-                已有邀请？加入房间
+                进入在线大厅
               </button>
             </div>
 
@@ -212,9 +213,17 @@
                   <span class="stone black small" aria-hidden="true"></span>
                   <span id="black-seat">等待黑方</span>
                 </div>
-                <div>
+                <div class="seat-entry seat-entry-actionable">
                   <span class="stone white small" aria-hidden="true"></span>
                   <span id="white-seat">等待白方</span>
+                  <button
+                    id="opponent-seat-action"
+                    class="text-button room-seat-action"
+                    type="button"
+                    hidden
+                  >
+                    成为白方
+                  </button>
                 </div>
               </div>
               <p id="room-hint" class="room-hint">正在连接房间…</p>
@@ -356,6 +365,18 @@
             <span id="move-number" class="move-number">19 × 19 · 竹筒</span>
           </section>
 
+          <section id="undo-request-panel" class="undo-request-panel" aria-live="assertive" hidden>
+            <div>
+              <span class="eyebrow">联机悔棋</span>
+              <strong id="undo-request-text">对方申请撤回上一手</strong>
+            </div>
+            <div id="undo-response-actions" class="undo-request-actions">
+              <button id="approve-undo" class="primary-button" type="button">同意</button>
+              <button id="decline-undo" class="secondary-button" type="button">拒绝</button>
+            </div>
+            <button id="cancel-undo-request" class="secondary-button" type="button" hidden>取消申请</button>
+          </section>
+
           <div id="message" class="message" role="status" aria-live="polite">
             邀请对手并确认设置后开始对局
           </div>
@@ -491,18 +512,6 @@
               </label>
               <button id="replay-exit" class="text-button replay-exit-button" type="button">退出复盘</button>
             </div>
-          </section>
-
-          <section id="undo-request-panel" class="undo-request-panel" aria-live="polite" hidden>
-            <div>
-              <span class="eyebrow">联机悔棋</span>
-              <strong id="undo-request-text">对方申请撤回上一手</strong>
-            </div>
-            <div id="undo-response-actions" class="undo-request-actions">
-              <button id="approve-undo" class="primary-button" type="button">同意</button>
-              <button id="decline-undo" class="secondary-button" type="button">拒绝</button>
-            </div>
-            <button id="cancel-undo-request" class="secondary-button" type="button" hidden>取消申请</button>
           </section>
 
           <section id="scoring-panel" class="scoring-panel" hidden>
@@ -762,11 +771,11 @@
 
     <dialog id="online-dialog" class="game-dialog online-dialog">
       <form id="online-form">
-        <span class="eyebrow">在线对局</span>
-        <h2>邀请朋友加入 3D 棋局</h2>
-        <p>创建房间后分享链接；也可以明确选择“仅观战”，不会占用黑白座位。</p>
+        <span id="online-dialog-eyebrow" class="eyebrow">在线对局</span>
+        <h2 id="online-dialog-title">进入 3D 棋局</h2>
+        <p id="online-dialog-intro">创建房间，或以玩家、观众身份进入已有房间。</p>
 
-        <section class="online-board-summary" aria-label="即将创建的棋盘">
+        <section id="online-board-summary-section" class="online-board-summary" aria-label="即将创建的棋盘">
           <span>创建房间将使用</span>
           <strong id="online-board-summary">19 × 19 · 竹筒 · 中国规则</strong>
           <button id="online-modify-settings" class="text-button" type="button">修改棋盘设置</button>
@@ -781,9 +790,9 @@
           创建房间
         </button>
 
-        <div class="dialog-divider"><span>或者加入朋友的房间</span></div>
+        <div id="online-join-divider" class="dialog-divider"><span>或者加入朋友的房间</span></div>
 
-        <label class="dialog-field" for="room-code-input">
+        <label id="online-room-code-field" class="dialog-field" for="room-code-input">
           <span>六位房间号</span>
           <input id="room-code-input" class="room-code-input" type="text" maxlength="6" autocomplete="off" autocapitalize="characters" placeholder="ABC123" />
         </label>
@@ -797,7 +806,7 @@
 
         <p id="online-error" class="dialog-error" role="alert" hidden></p>
         <div class="dialog-actions">
-          <button id="cancel-online" class="text-button" type="button">暂不联机</button>
+          <button id="cancel-online" class="text-button" type="button">取消</button>
         </div>
       </form>
     </dialog>

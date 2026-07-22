@@ -112,7 +112,9 @@ export function parseAppRoute(value, baseUrl = "http://localhost/") {
     return {
       mode: "online",
       roomCode,
-      role: role === "spectator" ? "spectator" : "",
+      // A bare room link is a safe public watching link. Only a link emitted
+      // by the lobby's Join action may claim an open player seat.
+      role: role === "player" ? "player" : "spectator",
     };
   }
 

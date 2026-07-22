@@ -98,6 +98,28 @@ test("resignation is a reconnect-safe room command", () => {
   );
 });
 
+test("seat claim and release commands pass through the reconnect-safe whitelist", () => {
+  for (const action of ["claim_seat", "release_seat"]) {
+    assert.ok(ROOM_ACTIONS.includes(action));
+    assert.deepEqual(
+      normalizeCommandMessage({
+        v: 2,
+        type: "command",
+        id: `seat-${action}`,
+        sequence: 2,
+        action,
+        payload: {},
+      }),
+      {
+        id: `seat-${action}`,
+        sequence: 2,
+        action,
+        payload: {},
+      },
+    );
+  }
+});
+
 test("online AI seat commands pass through the reconnect-safe whitelist", () => {
   const commands = [
     ["attach_ai", { modelId: "b10" }],

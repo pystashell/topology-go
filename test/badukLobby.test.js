@@ -57,6 +57,7 @@ test("the directory derives an index entry from a room snapshot", async () => {
 
   assert.equal(response.status, 200);
   assert.equal(instance.rooms.get("ABC123").width, 13);
+  assert.equal(instance.rooms.get("ABC123").revision, 3);
   assert.equal(instance.rooms.get("ABC123").height, 9);
   assert.equal(instance.rooms.get("ABC123").topology, "mobius");
   assert.equal(instance.rooms.get("ABC123").roundNumber, 0);
@@ -106,4 +107,61 @@ test("invalid snapshots are rejected without changing the directory", async () =
   assert.equal(response.status, 400);
   assert.equal(instance.rooms.size, 0);
   assert.equal(writes.length, 0);
+});
+
+test("stale or duplicate room revisions cannot regress an indexed room", async () => {
+  const { instance, writes } = directory();
+  const upsert = (snapshot) => instance.fetch(new Request("https://index/internal/upsert", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(snapshot),
+  }));
+
+  const newest = await upsert(roomSnapshot({
+    revision: 5,
+    moveCount: 9,
+    game: {
+      width: 19,
+      height: 19,
+      topology: "torus",
+      scoringRule: "chinese",
+      komi: 7.5,
+      phase: "play",
+    },
+  }));
+  assert.equal(newest.status, 200);
+
+  const stale = await upsert(roomSnapshot({
+    revision: 4,
+    moveCount: 2,
+    game: {
+      width: 9,
+      height: 9,
+      topology: "cylinder",
+      scoringRule: "japanese",
+      komi: 6.5,
+      phase: "play",
+    },
+  }));
+  assert.deepEqual(await stale.json(), { ok: true, ignored: "stale" });
+
+  const duplicate = await upsert(roomSnapshot({
+    revision: 5,
+    moveCount: 1,
+    game: {
+      width: 13,
+      height: 13,
+      topology: "mobius",
+      scoringRule: "japanese",
+      komi: 6.5,
+      phase: "play",
+    },
+  }));
+  assert.deepEqual(await duplicate.json(), { ok: true, ignored: "stale" });
+
+  const indexed = instance.rooms.get("ABC123");
+  assert.equal(indexed.revision, 5);
+  assert.equal(indexed.width, 19);
+  assert.equal(indexed.moveCount, 9);
+  assert.equal(writes.length, 1, "ignored upserts must not rewrite durable storage");
 });

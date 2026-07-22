@@ -2,13 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { fetchLobbyRooms, LobbyClientError } from "../src/multiplayer/lobbyClient.js";
+import { encodeLobbyBoardPreview } from "../src/multiplayer/lobbyPreview.js";
+
+const emptyBoard = Array.from({ length: 9 }, () => Array(9).fill(null));
 
 const validRoom = {
   code: "BAM234",
+  revision: 3,
   status: "setup",
   mode: "friend",
   width: 9,
   height: 9,
+  topology: "cylinder",
+  boardPreview: encodeLobbyBoardPreview(emptyBoard, 9, 9),
+  lastMove: null,
   updatedAt: 2,
   expiresAt: 99,
 };

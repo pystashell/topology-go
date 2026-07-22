@@ -139,6 +139,14 @@ test("app routes keep the hidden lobby separate from single and online play", ()
     parseAppRoute("https://baduk.example/online/ab12cd?role=spectator"),
     { mode: "online", roomCode: "AB12CD", role: "spectator" },
   );
+  assert.deepEqual(
+    parseAppRoute("https://baduk.example/online/ab12cd?role=player"),
+    { mode: "online", roomCode: "AB12CD", role: "player" },
+  );
+  assert.deepEqual(
+    parseAppRoute("https://baduk.example/online/ab12cd"),
+    { mode: "online", roomCode: "AB12CD", role: "spectator" },
+  );
   assert.deepEqual(parseAppRoute("https://baduk.example/lobby"), {
     mode: "lobby",
     roomCode: "",

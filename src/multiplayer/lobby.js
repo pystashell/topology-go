@@ -1,3 +1,10 @@
+import {
+  encodeLobbyBoardPreview,
+  isLobbyBoardPreview,
+  isLobbyLastMove,
+  publicLobbyLastMove,
+} from "./lobbyPreview.js";
+
 export const LOBBY_STATUS_SETUP = "setup";
 export const LOBBY_STATUS_INVITED = "invited";
 export const LOBBY_STATUS_PLAYING = "playing";
@@ -20,6 +27,7 @@ const VALID_STATUSES = new Set([
   LOBBY_STATUS_FINISHED,
 ]);
 const VALID_MODES = new Set(LOBBY_MATCH_MODES);
+const VALID_TOPOLOGIES = new Set(["cylinder", "torus", "mobius"]);
 
 function finiteTimestamp(value, fallback) {
   return Number.isFinite(value) ? value : fallback;
@@ -92,11 +100,24 @@ function playersFromControllers(room, controllers, mode) {
     .filter(Boolean);
 }
 
-function hasHumanWhiteController(room, controllers) {
+function hasWhiteSeatOccupant(room, controllers) {
   const white = controllers?.white;
   return Boolean(
-    white?.kind === "human" &&
-    humanRoomPlayer(room, white.operatorId),
+    (room?.players ?? []).some((player) => player?.color === "white") ||
+    white?.kind === "ai" ||
+    (typeof white?.operatorId === "string" && white.operatorId.length > 0),
+  );
+}
+
+function hasBlackHumanHost(room, controllers) {
+  const blackController = controllers?.black;
+  if (blackController && blackController.kind !== "human") return false;
+  const operator = humanRoomPlayer(room, blackController?.operatorId);
+  if (operator) return operator.color === "black";
+  return (room?.players ?? []).some((player) =>
+    player?.color === "black" &&
+    player?.automated !== true &&
+    player?.role !== "ai"
   );
 }
 
@@ -144,27 +165,48 @@ export function lobbySummaryFromRoom(room, now = Date.now()) {
       ? match.mode
       : fallbackMode(room);
   const controllers = matchControllers(match, status);
-  const width = Number.isInteger(room.game?.width)
-    ? room.game.width
-    : Number.isInteger(room.game?.size)
-      ? room.game.size
+  const requestedSettings = status === LOBBY_STATUS_INVITED &&
+      match.request?.settings &&
+      typeof match.request.settings === "object"
+    ? match.request.settings
+    : null;
+  const publicGame = requestedSettings ?? room.game;
+  const width = Number.isInteger(publicGame?.width)
+    ? publicGame.width
+    : Number.isInteger(publicGame?.size)
+      ? publicGame.size
       : 19;
-  const height = Number.isInteger(room.game?.height)
-    ? room.game.height
-    : Number.isInteger(room.game?.size)
-      ? room.game.size
+  const height = Number.isInteger(publicGame?.height)
+    ? publicGame.height
+    : Number.isInteger(publicGame?.size)
+      ? publicGame.size
       : 19;
   const players = playersFromControllers(room, controllers, mode) ??
     (room.players ?? []).slice(0, 2).map(publicPlayer);
-  const hasRemoteWhite = controllers
-    ? hasHumanWhiteController(room, controllers)
-    : players.some((player) =>
-        player.color === "white" && player.controller === "human"
-      );
+  const whiteSeatOccupied = hasWhiteSeatOccupant(room, controllers);
+  const blackHostPresent = hasBlackHumanHost(room, controllers);
   const updatedAt = finiteTimestamp(room.updatedAt, now);
+  const emptyBoard = () => Array.from({ length: height }, () => Array(width).fill(null));
+  const board = requestedSettings || room.game.board === undefined
+    ? emptyBoard()
+    : room.game.board;
+  const boardPreview = encodeLobbyBoardPreview(board, width, height);
+  const lastMove = requestedSettings
+    ? null
+    : publicLobbyLastMove(room.game.lastMove, width, height);
+  const timed = requestedSettings
+    ? [
+        requestedSettings.mainTimeSeconds,
+        requestedSettings.byoYomiPeriods,
+        requestedSettings.byoYomiSeconds,
+      ].some((value) => Number.isFinite(value) && value > 0)
+    : Boolean(room.timeControl);
 
   return {
     code: room.code,
+    revision: Number.isSafeInteger(room.revision) && room.revision >= 1
+      ? room.revision
+      : 1,
     status,
     mode,
     roundNumber: Number.isSafeInteger(match.roundId)
@@ -176,19 +218,24 @@ export function lobbySummaryFromRoom(room, now = Date.now()) {
           : status === LOBBY_STATUS_SETUP ? 0 : 1,
     width,
     height,
-    topology: ["cylinder", "torus", "mobius"].includes(room.game?.topology)
-      ? room.game.topology
+    topology: ["cylinder", "torus", "mobius"].includes(publicGame?.topology)
+      ? publicGame.topology
       : "cylinder",
-    scoringRule: room.game?.scoringRule === "japanese" ? "japanese" : "chinese",
-    komi: Number.isFinite(room.game?.komi) ? room.game.komi : 7.5,
-    timed: Boolean(room.timeControl),
-    moveCount: Number.isSafeInteger(room.moveCount) ? room.moveCount : 0,
+    scoringRule: publicGame?.scoringRule === "japanese" ? "japanese" : "chinese",
+    komi: Number.isFinite(publicGame?.komi) ? publicGame.komi : 7.5,
+    timed,
+    moveCount: requestedSettings
+      ? 0
+      : Number.isSafeInteger(room.moveCount) ? room.moveCount : 0,
+    boardPreview,
+    lastMove,
     players,
     spectatorCount: (room.spectators ?? []).filter((spectator) => spectator?.online !== false).length,
-    joinable: mode === "friend" &&
-      [LOBBY_STATUS_SETUP, LOBBY_STATUS_INVITED].includes(status) &&
-      !hasRemoteWhite,
-    watchable: status !== LOBBY_STATUS_SETUP || players.length > 0,
+    // The lobby is only a hint; the room object still arbitrates concurrent
+    // claims atomically. A released white seat may be filled even if an older
+    // round remains in playing/finished state.
+    joinable: mode === "friend" && blackHostPresent && !whiteSeatOccupied,
+    watchable: true,
     createdAt: finiteTimestamp(room.createdAt, updatedAt),
     updatedAt,
     startedAt: finiteTimestamp(match.startedAt, null),
@@ -202,10 +249,15 @@ export function isLobbySummary(value) {
     value &&
     typeof value === "object" &&
     typeof value.code === "string" &&
+    Number.isSafeInteger(value.revision) &&
+    value.revision >= 1 &&
     VALID_STATUSES.has(value.status) &&
     VALID_MODES.has(value.mode) &&
     Number.isInteger(value.width) &&
     Number.isInteger(value.height) &&
+    VALID_TOPOLOGIES.has(value.topology) &&
+    isLobbyBoardPreview(value.boardPreview, value.width, value.height) &&
+    isLobbyLastMove(value.lastMove, value.width, value.height) &&
     Number.isFinite(value.updatedAt),
   );
 }
@@ -236,7 +288,12 @@ export function pruneLobbyRooms(rooms, now = Date.now()) {
 
 export function filterLobbyRooms(rooms, filters = {}) {
   return sortLobbyRooms(rooms.filter((room) => {
-    if (filters.status && filters.status !== "all" && room.status !== filters.status) return false;
+    if (filters.status === "joinable" && room.joinable !== true) return false;
+    if (
+      filters.status &&
+      !["all", "joinable"].includes(filters.status) &&
+      room.status !== filters.status
+    ) return false;
     if (filters.topology && filters.topology !== "all" && room.topology !== filters.topology) return false;
     if (filters.mode && filters.mode !== "all" && room.mode !== filters.mode) return false;
     if (filters.size && filters.size !== "all") {

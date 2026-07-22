@@ -261,6 +261,7 @@ const elements = {
   leaveRoom: $("#leave-room"),
   blackSeat: $("#black-seat"),
   whiteSeat: $("#white-seat"),
+  opponentSeatAction: $("#opponent-seat-action"),
   roomHint: $("#room-hint"),
   gameInvitationPanel: $("#game-invitation-panel"),
   gameInvitationTitle: $("#game-invitation-title"),
@@ -317,6 +318,12 @@ const elements = {
   cancelInvite: $("#cancel-invite"),
   onlineDialog: $("#online-dialog"),
   onlineForm: $("#online-form"),
+  onlineDialogEyebrow: $("#online-dialog-eyebrow"),
+  onlineDialogTitle: $("#online-dialog-title"),
+  onlineDialogIntro: $("#online-dialog-intro"),
+  onlineBoardSummarySection: $("#online-board-summary-section"),
+  onlineJoinDivider: $("#online-join-divider"),
+  onlineRoomCodeField: $("#online-room-code-field"),
   playerName: $("#player-name"),
   roomCodeInput: $("#room-code-input"),
   createRoom: $("#create-room"),
@@ -365,6 +372,10 @@ let lobbyPreviewFrame = null;
 let lobbyRefreshTimer = null;
 let lobbyRefreshController = null;
 let lobbyRooms = [];
+const lobbyRoomCards = new Map();
+const lobbyVisiblePreviews = new Set();
+let lobbyPreviewObserver = null;
+let lobbyPreviewRenderer = null;
 let lobbyStatusFilter = "all";
 let lobbyLoading = false;
 let lobbyModulesPromise = null;
@@ -853,6 +864,7 @@ function refreshLanguageDependentUI() {
     setViewMode(activeViewMode);
     updateUI();
   }
+  if (appRouteMode === "lobby") void renderLobbyRooms();
   applyDocumentTranslations(document);
 }
 
@@ -2780,7 +2792,7 @@ function hydratePublicGame(state) {
 
 function onlineRoomPath(code, role = "") {
   const url = new URL(buildShareUrl(code, window.location.href));
-  if (role === "spectator") url.searchParams.set("role", role);
+  if (["player", "spectator"].includes(role)) url.searchParams.set("role", role);
   return `${url.pathname}${url.search}`;
 }
 
@@ -2797,7 +2809,8 @@ function loadLobbyModules() {
     lobbyModulesPromise = Promise.all([
       import("./multiplayer/lobby.js"),
       import("./multiplayer/lobbyClient.js"),
-    ]).then(([lobby, client]) => ({ ...lobby, ...client }));
+      import("./multiplayer/lobbyPreview.js"),
+    ]).then(([lobby, client, preview]) => ({ ...lobby, ...client, ...preview }));
   }
   return lobbyModulesPromise;
 }
@@ -2841,48 +2854,129 @@ function appendLobbyMetadata(container, text) {
   container.append(item);
 }
 
-function createLobbyRoomCard(room) {
+function drawLobbyRoomPreview(canvas) {
+  const room = canvas?.__lobbyRoomSummary;
+  if (!canvas || !room || typeof lobbyPreviewRenderer !== "function") return;
+  const fallback = canvas.__lobbyPreviewFallback;
+  try {
+    // The CSS presentation remains 18:11. A modest backing buffer keeps the
+    // thumbnail sharp while avoiding hundreds of full-size canvases in a busy
+    // lobby. Off-screen canvases stay at 1x1 until they become visible.
+    if (canvas.width !== 240) canvas.width = 240;
+    if (canvas.height !== 147) canvas.height = 147;
+    const description = lobbyPreviewRenderer(canvas, room, {
+      width: canvas.width,
+      height: canvas.height,
+      locale: getLocale(),
+    });
+    canvas.title = description;
+    canvas.hidden = false;
+    if (fallback) fallback.hidden = true;
+  } catch {
+    canvas.hidden = true;
+    if (fallback) {
+      fallback.hidden = false;
+      fallback.textContent = `${room.width} × ${room.height} 棋盘预览暂不可用`;
+    }
+  }
+}
+
+function ensureLobbyPreviewObserver() {
+  if (lobbyPreviewObserver || typeof window.IntersectionObserver !== "function") return;
+  lobbyPreviewObserver = new window.IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        lobbyVisiblePreviews.add(entry.target);
+        drawLobbyRoomPreview(entry.target);
+      } else {
+        lobbyVisiblePreviews.delete(entry.target);
+      }
+    }
+  }, { rootMargin: "180px 0px" });
+}
+
+function createLobbyRoomCard() {
   const card = document.createElement("article");
   card.className = "lobby-room-card";
-  card.dataset.roomCode = room.code;
 
   const header = document.createElement("div");
   header.className = "lobby-room-card-header";
   const title = document.createElement("strong");
-  title.textContent = `房间 ${room.code}`;
   const status = document.createElement("span");
-  status.className = `lobby-room-status-badge ${room.status}`;
-  status.textContent = lobbyStatusLabel(room.status);
+  status.className = "lobby-room-status-badge";
   header.append(title, status);
 
   const metadata = document.createElement("div");
   metadata.className = "lobby-room-meta";
-  appendLobbyMetadata(metadata, `${room.width} × ${room.height}`);
-  appendLobbyMetadata(metadata, lobbyTopologyLabel(room.topology));
-  appendLobbyMetadata(metadata, lobbyModeLabel(room.mode));
-  if (room.timed) appendLobbyMetadata(metadata, "计时");
-  if (room.roundNumber > 0) appendLobbyMetadata(metadata, `第 ${room.roundNumber} 局`);
 
   const players = document.createElement("div");
   players.className = "lobby-room-players";
-  const black = room.players?.find((player) => player.color === BLACK)?.name || "等待黑方";
-  const white = room.players?.find((player) => player.color === WHITE)?.name || "等待白方";
   const blackName = document.createElement("span");
-  blackName.textContent = black;
   const versus = document.createElement("span");
   versus.className = "versus";
   versus.textContent = "VS";
   const whiteName = document.createElement("span");
-  whiteName.textContent = white;
   players.append(blackName, versus, whiteName);
+
+  const preview = document.createElement("figure");
+  preview.className = "lobby-room-preview";
+  const canvas = document.createElement("canvas");
+  canvas.width = 1;
+  canvas.height = 1;
+  const fallback = document.createElement("span");
+  fallback.className = "lobby-room-preview-fallback";
+  fallback.hidden = true;
+  canvas.__lobbyPreviewFallback = fallback;
+  preview.append(canvas, fallback);
+
+  const details = document.createElement("div");
+  details.className = "lobby-room-card-details";
+  details.append(metadata, players);
+  const body = document.createElement("div");
+  body.className = "lobby-room-card-body";
+  body.append(preview, details);
 
   const footer = document.createElement("div");
   footer.className = "lobby-room-card-footer";
   const activity = document.createElement("small");
-  activity.textContent = `${room.spectatorCount || 0} 人观战 · ${lobbyUpdatedLabel(room.updatedAt)}`;
   const actions = document.createElement("div");
   actions.className = "room-card-actions";
 
+  footer.append(activity, actions);
+  card.append(header, body, footer);
+  card.__lobbyElements = {
+    title,
+    status,
+    metadata,
+    blackName,
+    whiteName,
+    canvas,
+    activity,
+    actions,
+  };
+  return card;
+}
+
+function updateLobbyRoomCard(card, room) {
+  const view = card.__lobbyElements;
+  card.dataset.roomCode = room.code;
+  view.title.textContent = `房间 ${room.code}`;
+  view.status.className = `lobby-room-status-badge ${room.status}`;
+  view.status.textContent = lobbyStatusLabel(room.status);
+
+  view.metadata.replaceChildren();
+  appendLobbyMetadata(view.metadata, `${room.width} × ${room.height}`);
+  appendLobbyMetadata(view.metadata, lobbyTopologyLabel(room.topology));
+  appendLobbyMetadata(view.metadata, lobbyModeLabel(room.mode));
+  if (room.timed) appendLobbyMetadata(view.metadata, "计时");
+  if (room.roundNumber > 0) appendLobbyMetadata(view.metadata, `第 ${room.roundNumber} 局`);
+  appendLobbyMetadata(view.metadata, room.moveCount > 0 ? `${room.moveCount} 手` : "空盘");
+
+  view.blackName.textContent = room.players?.find((player) => player.color === BLACK)?.name || "等待黑方";
+  view.whiteName.textContent = room.players?.find((player) => player.color === WHITE)?.name || "等待白方";
+  view.activity.textContent = `${room.spectatorCount || 0} 人观战 · ${lobbyUpdatedLabel(room.updatedAt)}`;
+
+  view.actions.replaceChildren();
   const resumable = roomClient.hasStoredSession(room.code);
   if (resumable || room.joinable) {
     const join = document.createElement("button");
@@ -2891,7 +2985,7 @@ function createLobbyRoomCard(room) {
     join.dataset.lobbyRoom = room.code;
     join.dataset.lobbyRole = resumable ? "resume" : "player";
     join.textContent = resumable ? "返回房间" : "加入对局";
-    actions.append(join);
+    view.actions.append(join);
   }
   if (!resumable && room.watchable) {
     const watch = document.createElement("button");
@@ -2900,24 +2994,52 @@ function createLobbyRoomCard(room) {
     watch.dataset.lobbyRoom = room.code;
     watch.dataset.lobbyRole = "spectator";
     watch.textContent = "观战";
-    actions.append(watch);
+    view.actions.append(watch);
   }
 
-  footer.append(activity, actions);
-  card.append(header, metadata, players, footer);
-  return card;
+  view.canvas.__lobbyRoomSummary = room;
+  if (lobbyVisiblePreviews.has(view.canvas)) drawLobbyRoomPreview(view.canvas);
+  else if (lobbyPreviewObserver) lobbyPreviewObserver.observe(view.canvas);
+  else {
+    lobbyVisiblePreviews.add(view.canvas);
+    drawLobbyRoomPreview(view.canvas);
+  }
 }
 
 async function renderLobbyRooms() {
   if (appRouteMode !== "lobby") return;
-  const { filterLobbyRooms } = await loadLobbyModules();
+  const { filterLobbyRooms, renderLobbyBoardPreview } = await loadLobbyModules();
+  lobbyPreviewRenderer = renderLobbyBoardPreview;
+  ensureLobbyPreviewObserver();
   const filtered = filterLobbyRooms(lobbyRooms, {
     status: lobbyStatusFilter,
     topology: elements.lobbyTopologyFilter.value,
     size: elements.lobbySizeFilter.value,
     mode: elements.lobbyModeFilter.value,
   });
-  elements.lobbyRoomList.replaceChildren(...filtered.map(createLobbyRoomCard));
+  const visibleCodes = new Set(filtered.map((room) => room.code));
+  for (const [code, card] of lobbyRoomCards) {
+    if (visibleCodes.has(code)) continue;
+    const canvas = card.__lobbyElements?.canvas;
+    if (canvas) {
+      lobbyPreviewObserver?.unobserve(canvas);
+      lobbyVisiblePreviews.delete(canvas);
+    }
+    card.remove();
+    lobbyRoomCards.delete(code);
+  }
+
+  let cursor = elements.lobbyRoomList.firstElementChild;
+  for (const room of filtered) {
+    let card = lobbyRoomCards.get(room.code);
+    if (!card) {
+      card = createLobbyRoomCard();
+      lobbyRoomCards.set(room.code, card);
+    }
+    updateLobbyRoomCard(card, room);
+    if (card !== cursor) elements.lobbyRoomList.insertBefore(card, cursor);
+    cursor = card.nextElementSibling;
+  }
   elements.lobbyEmpty.hidden = filtered.length > 0;
 }
 
@@ -3064,20 +3186,59 @@ function showInviteDialog() {
   }
 }
 
-function showOnlineDialog(roomCode = "") {
+function showOnlineDialog(roomCode = "", { intent = "all" } = {}) {
+  const creating = intent === "create";
+  const entering = ["join", "player", "spectator"].includes(intent);
+  const spectatorOnly = intent === "spectator";
+  const playerOnly = intent === "player";
+
   elements.playerName.value = elements.playerName.value || savedPlayerName();
   if (roomCode) elements.roomCodeInput.value = sanitizeRoomCode(roomCode);
   syncLobbySettingsSummary();
   showOnlineError();
+  elements.onlineDialogEyebrow.textContent = creating
+    ? "创建在线房间"
+    : spectatorOnly
+      ? "进入观战"
+      : playerOnly
+        ? "申请对手席位"
+        : "在线对局";
+  elements.onlineDialogTitle.textContent = creating
+    ? "创建一个 3D 棋局"
+    : spectatorOnly
+      ? `观战房间 ${sanitizeRoomCode(roomCode)}`
+      : playerOnly
+        ? `加入房间 ${sanitizeRoomCode(roomCode)}`
+        : "进入 3D 棋局";
+  elements.onlineDialogIntro.textContent = creating
+    ? "先创建房间；进入后可以在棋盘设置中配置棋局并邀请对手。"
+    : spectatorOnly
+      ? "普通分享链接默认只进入观战，不会占用黑白座位。"
+      : playerOnly
+        ? "大厅确认该房间有空位；服务器仍会在进入时再次核验座位。"
+        : "输入房间号后，可以申请对手席位，也可以只进入观战。";
+  elements.onlineBoardSummarySection.hidden = intent !== "all";
+  elements.createRoom.hidden = entering;
+  elements.onlineJoinDivider.hidden = intent !== "all";
+  elements.onlineRoomCodeField.hidden = creating;
+  elements.joinRoom.hidden = creating || spectatorOnly;
+  elements.watchRoom.hidden = creating || playerOnly;
+  elements.cancelOnline.textContent = appRouteMode === "online" ? "返回大厅" : "取消";
   if (typeof elements.onlineDialog.showModal === "function") {
     if (!elements.onlineDialog.open) elements.onlineDialog.showModal();
   } else {
     elements.onlineDialog.setAttribute("open", "");
   }
   window.setTimeout(() => {
-    const target = elements.playerName.value
-      ? elements.roomCodeInput
-      : elements.playerName;
+    const target = !elements.playerName.value
+      ? elements.playerName
+      : creating
+        ? elements.createRoom
+        : roomCode
+          ? spectatorOnly
+            ? elements.watchRoom
+            : elements.joinRoom
+          : elements.roomCodeInput;
     target.focus();
   }, 0);
 }
@@ -3119,6 +3280,14 @@ function onlineControllerSeat(color) {
   };
 }
 
+function onlineWhiteSeatIsOpen() {
+  if (!onlineRoom || roomSeat(WHITE)) return false;
+  const controller = onlineController(WHITE);
+  return !controller || (
+    controller.kind === MATCH_CONTROLLER_HUMAN && !controller.operatorId
+  );
+}
+
 function onlineInvitationSummary(request = onlineRoom?.match?.request) {
   if (!request?.settings) return "等待被邀请方回应。";
   const settings = request.settings;
@@ -3156,6 +3325,7 @@ function updateRoomUI() {
     CONNECTION_STATUS.CONNECTING,
     CONNECTION_STATUS.RECONNECTING,
   ].includes(roomClient.connectionStatus);
+  const onlineControlsAvailable = onlineReady && connected && !onlineBusy && !onlineCommandPending;
 
   elements.roomStatusDot.classList.toggle("offline", !active && !aiMode);
   elements.roomStatusDot.classList.toggle(
@@ -3263,6 +3433,20 @@ function updateRoomUI() {
     elements.whiteSeat.parentElement.classList.toggle("connected-seat", whiteControllerSeat.online);
     elements.whiteSeat.parentElement.classList.toggle("disconnected-seat", !whiteControllerSeat.online);
 
+    const canClaimWhiteSeat = Boolean(
+      connected && onlineReady && identity.role === "spectator" && onlineWhiteSeatIsOpen(),
+    );
+    const canReleaseWhiteSeat = Boolean(
+      connected && onlineReady && identity.role === "player" && identity.color === WHITE &&
+      [ONLINE_MATCH_SETUP, ONLINE_MATCH_FINISHED].includes(roomMatchStatus),
+    );
+    elements.opponentSeatAction.hidden = !canClaimWhiteSeat && !canReleaseWhiteSeat;
+    elements.opponentSeatAction.dataset.action = canReleaseWhiteSeat ? "release_seat" : "claim_seat";
+    elements.opponentSeatAction.textContent = canReleaseWhiteSeat
+      ? "释放席位，继续旁观"
+      : "成为白方";
+    elements.opponentSeatAction.disabled = !onlineControlsAvailable;
+
     if (!connected) {
       if (roomClient.lastCloseCode === 4408) {
         elements.roomHint.textContent = "这个席位已在另一个窗口打开，本页已停止重连。";
@@ -3321,12 +3505,16 @@ function updateRoomUI() {
           ? "房主发来了对局邀请，请接受或拒绝。"
           : "这盘棋正在等待受邀玩家回应。";
     }
+    if (connected && onlineReady && canClaimWhiteSeat) {
+      elements.roomHint.textContent = "白方席位目前空缺；点击“成为白方”即可加入对局，其他观众仍可继续旁观。";
+    } else if (connected && onlineReady && canReleaseWhiteSeat) {
+      elements.roomHint.textContent = "你当前占用白方席位；如果不参加下一局，可以释放席位并继续旁观。";
+    }
     if (spectatorCount > 0) {
       elements.roomHint.textContent += ` · ${spectatorCount} 人观战`;
     }
   }
 
-  const onlineControlsAvailable = onlineReady && connected && !onlineBusy && !onlineCommandPending;
   const gameRequest = active ? onlineRoom?.match?.request ?? null : null;
   const identityId = identity.playerId ?? identity.id;
   const ownsGameRequest = Boolean(gameRequest?.requestedBy === identityId);
@@ -3437,6 +3625,23 @@ function updateRoomUI() {
   }
   elements.onlineMatchOptions.hidden = !(active && rematchSetup);
   elements.onlineMatchMode.disabled = !canChangeNextGameSettings;
+  const occupiedWhiteMember = active ? roomSeat(WHITE) : null;
+  const invitedHumanWhite = Boolean(
+    occupiedWhiteMember &&
+    occupiedWhiteMember.automated !== true &&
+    occupiedWhiteMember.role !== "ai",
+  );
+  for (const option of elements.onlineMatchMode.options) {
+    option.disabled = Boolean(
+      occupiedWhiteMember && option.value !== ONLINE_MODE_FRIEND,
+    );
+  }
+  if (
+    occupiedWhiteMember &&
+    elements.onlineMatchMode.value !== ONLINE_MODE_FRIEND
+  ) {
+    elements.onlineMatchMode.value = ONLINE_MODE_FRIEND;
+  }
   const selectedOnlineMode = elements.onlineMatchMode.value;
   const onlineModeUsesAI = [ONLINE_MODE_HUMAN_AI, ONLINE_MODE_AI_AI].includes(
     selectedOnlineMode,
@@ -3449,10 +3654,15 @@ function updateRoomUI() {
     elements.nextGameHint.textContent = active
       ? "已沿用上一局设置；可以直接开始，也可以先调整棋盘。房间成员和聊天记录都会保留。"
       : "已沿用上一局设置；可以直接开始，也可以先调整棋盘。";
+    if (active && occupiedWhiteMember && isOnlineHost()) {
+      elements.nextGameHint.textContent +=
+        " 白方席位已经有人使用；如需改为 AI 或同机对局，请先让白方释放席位。";
+    }
     elements.confirmNextGame.hidden = active && !isOnlineHost();
     const canRequestOnlineGame = active && isOnlineHost() && rematchSetup &&
       [ONLINE_MATCH_SETUP, ONLINE_MATCH_FINISHED].includes(roomMatchStatus) &&
-      onlineControlsAvailable;
+      onlineControlsAvailable &&
+      (selectedOnlineMode !== ONLINE_MODE_FRIEND || invitedHumanWhite);
     elements.confirmNextGame.disabled = active
       ? !canRequestOnlineGame
       : !(rematchSetup && match.capabilities.new_game);
@@ -3460,6 +3670,13 @@ function updateRoomUI() {
       elements.confirmNextGame.textContent = selectedOnlineMode === ONLINE_MODE_FRIEND
         ? "使用当前设置发起对局邀请"
         : "使用当前设置开始在线对局";
+      elements.confirmNextGame.title = selectedOnlineMode === ONLINE_MODE_FRIEND && !invitedHumanWhite
+        ? "白方席位为空；请先让对手进入房间并成为白方"
+        : "";
+      if (isOnlineHost() && selectedOnlineMode === ONLINE_MODE_FRIEND && !invitedHumanWhite) {
+        elements.nextGameHint.textContent =
+          "白方席位目前为空。请先让朋友进入房间并成为白方，然后才能发送对局邀请。";
+      }
     }
   }
   elements.changeAiSettings.disabled = reviewing || finished || rematchSetup;
@@ -5913,7 +6130,7 @@ async function leaveOnlineRoom() {
 for (const button of elements.openInviteButtons) {
   button.addEventListener("click", showInviteDialog);
 }
-elements.joinInvitation.addEventListener("click", () => showOnlineDialog());
+elements.joinInvitation.addEventListener("click", () => navigateAppPath("/lobby"));
 elements.cancelInvite.addEventListener("click", closeInviteDialog);
 elements.inviteModifySettings.addEventListener("click", () => {
   closeInviteDialog();
@@ -5934,7 +6151,7 @@ elements.inviteSelfPlay.addEventListener("click", () => {
 });
 elements.inviteFriend.addEventListener("click", () => {
   closeInviteDialog();
-  showOnlineDialog();
+  navigateAppPath("/lobby");
 });
 elements.inviteLocal.addEventListener("click", () => void startLocalTwoPlayerGame());
 for (const button of elements.languageButtons) {
@@ -5963,7 +6180,13 @@ elements.aiReviewModel.addEventListener("change", () => {
   }
   setReplayAnalysisModel(requested);
 });
-elements.cancelOnline.addEventListener("click", closeOnlineDialog);
+elements.cancelOnline.addEventListener("click", () => {
+  if (appRouteMode === "online" && !hasOnlineSession()) {
+    navigateAppPath("/lobby");
+    return;
+  }
+  closeOnlineDialog();
+});
 elements.onlineModifySettings.addEventListener("click", () => {
   closeOnlineDialog();
   setSidebarTab("settings", { focus: true });
@@ -5974,10 +6197,10 @@ elements.createRoom.addEventListener("click", () => void createOnlineRoom());
 elements.joinRoom.addEventListener("click", () => void joinOnlineRoom());
 elements.watchRoom.addEventListener("click", () => void joinOnlineRoom("spectator"));
 elements.lobbyCreateRoom.addEventListener("click", () => {
-  navigateAppPath("/single?connect=create");
+  showOnlineDialog("", { intent: "create" });
 });
 elements.lobbyJoinRoom.addEventListener("click", () => {
-  navigateAppPath("/single?connect=join");
+  showOnlineDialog("", { intent: "join" });
 });
 elements.lobbyRefresh.addEventListener("click", () => void refreshLobby({ announce: true }));
 for (const button of elements.lobbyStatusButtons) {
@@ -6003,13 +6226,33 @@ elements.lobbyRoomList.addEventListener("click", (event) => {
   if (!target) return;
   const code = sanitizeRoomCode(target.dataset.lobbyRoom);
   if (!code) return;
-  const role = target.dataset.lobbyRole === "spectator" ? "spectator" : "";
+  const requestedRole = target.dataset.lobbyRole;
+  const role = requestedRole === "spectator"
+    ? "spectator"
+    : requestedRole === "player"
+      ? "player"
+      : "";
   navigateAppPath(onlineRoomPath(code, role));
 });
 elements.copyRoomLink.addEventListener("click", () => void copyInvitationLink());
 elements.leaveRoom.addEventListener("click", () => void leaveOnlineRoom());
 elements.attachRoomAi.addEventListener("click", showAIDialog);
 elements.detachRoomAi.addEventListener("click", () => void detachOnlineAI());
+elements.opponentSeatAction.addEventListener("click", async () => {
+  const action = elements.opponentSeatAction.dataset.action;
+  if (action === "release_seat") {
+    if (!window.confirm(translateText("释放白方席位后，你会继续留在房间旁观，其他观众可以接替白方。确定继续吗？"))) {
+      return;
+    }
+    if (await sendOnlineCommand("release_seat")) {
+      setMessage("已释放白方席位；你将继续留在房间旁观。", false);
+    }
+    return;
+  }
+  if (action === "claim_seat" && await sendOnlineCommand("claim_seat")) {
+    setMessage("已成为白方；现在可以回应邀请或等待房主发起对局。", false);
+  }
+});
 elements.chatForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const text = elements.chatInput.value;
@@ -6172,8 +6415,13 @@ if (
   initialRoute = {
     mode: "online",
     roomCode: legacyShare.roomCode,
-    role: legacyShare.role,
+    role: legacyShare.role === "player" ? "player" : "spectator",
   };
+}
+
+if (initialRoute.mode === "single" && initialUrl.searchParams.has("connect")) {
+  replaceAppPath("/lobby");
+  initialRoute = { mode: "lobby", roomCode: "", role: "" };
 }
 
 if (initialRoute.mode === "root") {
@@ -6193,14 +6441,13 @@ if (initialRoute.mode === "online" && initialRoute.roomCode.length === 6) {
     setMessage(`正在恢复房间 ${sharedRoomCode}…`);
     updateRoomUI();
   } else {
-    showOnlineDialog(sharedRoomCode);
+    showOnlineDialog(sharedRoomCode, { intent: initialRoute.role });
     if (initialRoute.role === "spectator") {
       setMessage("这是观战入口；填写名字后请选择“进入观战”。");
+    } else {
+      setMessage("这是大厅的玩家入口；填写名字后申请空余的对手席位。");
     }
   }
-} else if (initialRoute.mode === "single" && initialUrl.searchParams.has("connect")) {
-  replaceAppPath("/single");
-  showOnlineDialog();
 }
 
 const unlockGameSounds = () => void gameSounds.unlock();

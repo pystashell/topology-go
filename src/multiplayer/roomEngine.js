@@ -34,6 +34,7 @@ import { isRoomCode, isRoomRole } from "./protocol.js";
 
 export const ROOM_TTL_MS = 24 * 60 * 60 * 1_000;
 export const MAX_SPECTATORS = 32;
+export const PLAYER_RESERVATION_TTL_MS = 60 * 1_000;
 export const SPECTATOR_RESERVATION_TTL_MS = 60 * 1_000;
 export const SPECTATOR_RECONNECT_GRACE_MS = 5 * 60 * 1_000;
 export const SPECTATOR_COMMAND_MEMBER_BURST = 3;
@@ -1079,6 +1080,17 @@ export class RoomEngine {
           SPECTATOR_COMMAND_MEMBER_BURST,
           member.lastSeenAt ?? state.updatedAt,
         );
+      } else if (
+        member.role === "player" &&
+        member.automated !== true &&
+        Object.prototype.hasOwnProperty.call(member, "lastConnectedAt") &&
+        member.lastConnectedAt !== null &&
+        !Number.isFinite(member.lastConnectedAt)
+      ) {
+        // The optional marker only exists on player seats reserved through the
+        // HTTP join endpoint. Legacy players have no marker and therefore keep
+        // their established, reconnect-friendly reservation semantics.
+        member.lastConnectedAt = member.lastSeenAt ?? member.joinedAt;
       }
     }
     const automatedPlayer = state.members.find(
@@ -1098,6 +1110,17 @@ export class RoomEngine {
     }
     const room = new RoomEngine(state, restoreGame(state.game));
     assertResignationPersistence(state, room.game);
+    // Older builds paused the clock while an undo request was pending. Undo
+    // requests are now non-blocking, so resume that persisted clock from the
+    // room's last authoritative timestamp before checking consistency.
+    if (
+      state.undoRequest &&
+      room.state.timeControl &&
+      !room.state.timeControl.outcome &&
+      room.state.timeControl.activeColor === null
+    ) {
+      room.syncTimeControlRunning(state.updatedAt);
+    }
     room.assertTimeControlConsistency();
     return room;
   }
@@ -1303,7 +1326,9 @@ export class RoomEngine {
               now,
             ),
           }
-        : {}),
+        : effectiveRole === "player"
+          ? { lastConnectedAt: null }
+          : {}),
       lastSequence: 0,
       chatBucket: freshChatBucket(CHAT_MEMBER_BURST, now),
     };
@@ -1319,6 +1344,88 @@ export class RoomEngine {
       changed: true,
       revision: this.state.revision,
       identity: this.identityFor(member),
+      room: this.snapshot(now),
+    };
+  }
+
+  claimSeat({ playerId, now: nowInput }) {
+    const now = readNow(nowInput);
+    this.prepare(now);
+    const member = this.requireMember(normalizePlayerId(playerId));
+    if (member.role !== "spectator") {
+      throw new RoomEngineError(
+        "你已经占有一个对局席位。",
+        409,
+        "ALREADY_SEATED",
+      );
+    }
+    if (this.nextOpenColor() !== WHITE) {
+      throw new RoomEngineError(
+        "白方席位已经被其他玩家、AI 或本地对手占用。",
+        409,
+        "SEAT_UNAVAILABLE",
+      );
+    }
+
+    member.role = "player";
+    member.color = WHITE;
+    member.lastSeenAt = now;
+    member.lastConnectedAt = now;
+    delete member.spectatorCommandBucket;
+    this.refreshFriendControllers();
+    this.syncTimeControlRunning(now);
+    this.commit(now);
+    return {
+      changed: true,
+      revision: this.state.revision,
+      identity: this.identityFor(member),
+      move: { ok: true, type: "seat_claimed", color: WHITE },
+      room: this.snapshot(now),
+    };
+  }
+
+  releaseSeat({ playerId, now: nowInput }) {
+    const now = readNow(nowInput);
+    this.prepare(now);
+    const member = this.requireMember(normalizePlayerId(playerId));
+    this.requirePlayer(member);
+    if (member.color !== WHITE) {
+      throw new RoomEngineError(
+        "房主不能释放黑方席位；请退出房间来结束房主身份。",
+        403,
+        "FORBIDDEN",
+      );
+    }
+    this.evictExpiredSpectators(now);
+    if (this.spectatorCount() >= MAX_SPECTATORS) {
+      throw new RoomEngineError(
+        "旁观席已经满了，暂时不能释放白方席位。",
+        409,
+        "SPECTATOR_FULL",
+      );
+    }
+
+    member.role = "spectator";
+    member.color = null;
+    member.joinedAt = now;
+    member.lastSeenAt = now;
+    member.lastConnectedAt = this.isOnline(member.playerId) ? now : null;
+    member.spectatorCommandBucket = freshChatBucket(
+      SPECTATOR_COMMAND_MEMBER_BURST,
+      now,
+    );
+    this.state.scoreConfirmations = this.state.scoreConfirmations.filter(
+      (color) => color !== WHITE,
+    );
+    this.state.undoRequest = null;
+    this.refreshFriendControllers();
+    this.syncTimeControlRunning(now);
+    this.commit(now);
+    return {
+      changed: true,
+      revision: this.state.revision,
+      identity: this.identityFor(member),
+      move: { ok: true, type: "seat_released", color: WHITE },
       room: this.snapshot(now),
     };
   }
@@ -1365,7 +1472,13 @@ export class RoomEngine {
     );
     this.connections.set(normalizedConnectionId, identity.playerId);
     const member = this.requireMember(identity.playerId);
-    if (member.role === "spectator") member.lastConnectedAt = now;
+    if (
+      member.role === "spectator" ||
+      (member.role === "player" &&
+        Object.prototype.hasOwnProperty.call(member, "lastConnectedAt"))
+    ) {
+      member.lastConnectedAt = now;
+    }
     return {
       identity,
       connectionId: normalizedConnectionId,
@@ -1384,7 +1497,11 @@ export class RoomEngine {
     const member = this.requireMember(normalizePlayerId(playerId));
     const normalizedConnectionId = normalizePlayerId(connectionId);
     this.connections.set(normalizedConnectionId, member.playerId);
-    if (member.role === "spectator") {
+    if (
+      member.role === "spectator" ||
+      (member.role === "player" &&
+        Object.prototype.hasOwnProperty.call(member, "lastConnectedAt"))
+    ) {
       member.lastConnectedAt = now;
       member.lastSeenAt = now;
     }
@@ -1577,6 +1694,8 @@ export class RoomEngine {
       };
     }
     if (action === "leave") return this.leave({ playerId, now });
+    if (action === "claim_seat") return this.claimSeat({ playerId, now });
+    if (action === "release_seat") return this.releaseSeat({ playerId, now });
 
     this.requirePlayer(member);
     const managesSeatsOrStartsGame =
@@ -1762,17 +1881,25 @@ export class RoomEngine {
         requestRevision: request.requestRevision,
       };
     } else if (action === "play") {
-      this.assertNoUndoRequest();
+      const pendingUndo = this.pendingUndoForContinuedPlay(member);
       this.requireBothPlayers();
       this.assertControllerTurn(member, "human");
       const row = validateCoordinate(payload.row, "行");
       const col = validateCoordinate(payload.col, "列");
       move = this.game.play(row, col);
+      if (move?.ok && pendingUndo) {
+        this.state.undoRequest = null;
+        move.undoRequestAutoDeclined = true;
+      }
     } else if (action === "pass") {
-      this.assertNoUndoRequest();
+      const pendingUndo = this.pendingUndoForContinuedPlay(member);
       this.requireBothPlayers();
       this.assertControllerTurn(member, "human");
       move = this.game.pass();
+      if (move?.ok && pendingUndo) {
+        this.state.undoRequest = null;
+        move.undoRequestAutoDeclined = true;
+      }
     } else if (action === "ai_play") {
       this.assertNoUndoRequest();
       this.requireBothPlayers();
@@ -2112,6 +2239,13 @@ export class RoomEngine {
             "STALE_UNDO_REQUEST",
           );
         }
+        if (
+          this.state.timeControl &&
+          !this.state.timeControl.outcome &&
+          this.state.timeControl.activeColor !== null
+        ) {
+          this.state.timeControl = pauseTimeControl(this.state.timeControl, now);
+        }
         const undoResult = this.game.undo();
         if (!undoResult?.ok) {
           throw new RoomEngineError(
@@ -2422,6 +2556,11 @@ export class RoomEngine {
       };
     }
     const evictedSpectators = this.evictExpiredSpectators(now);
+    const evictedPlayers = this.evictExpiredPlayerReservations(now);
+    if (evictedPlayers > 0) {
+      this.refreshFriendControllers();
+      this.syncTimeControlRunning(now);
+    }
     const advancedClock = advanceTimeControl(this.state.timeControl, now);
     if (
       advancedClock?.outcome &&
@@ -2441,7 +2580,7 @@ export class RoomEngine {
         nextDueAt: this.nextDueAt(),
       };
     }
-    if (evictedSpectators > 0) {
+    if (evictedSpectators > 0 || evictedPlayers > 0) {
       // Membership maintenance gets a revision so clients can order the new
       // presence snapshot, but it is not user activity and must not prolong
       // the room's 24-hour TTL.
@@ -2450,7 +2589,8 @@ export class RoomEngine {
       return {
         changed: true,
         expired: false,
-        evictedSpectators,
+        ...(evictedSpectators > 0 ? { evictedSpectators } : {}),
+        ...(evictedPlayers > 0 ? { evictedPlayers } : {}),
         revision: this.state.revision,
         room: this.snapshot(now),
         nextDueAt: this.nextDueAt(),
@@ -2473,10 +2613,12 @@ export class RoomEngine {
     if (this.state.expiredAt !== null) return null;
     const clockDueAt = this.timeControlDueAt();
     const spectatorDueAt = this.nextSpectatorCleanupDueAt();
+    const playerReservationDueAt = this.nextPlayerReservationCleanupDueAt();
     return Math.min(
       this.state.expiresAt,
       clockDueAt ?? Number.POSITIVE_INFINITY,
       spectatorDueAt ?? Number.POSITIVE_INFINITY,
+      playerReservationDueAt ?? Number.POSITIVE_INFINITY,
     );
   }
 
@@ -2707,6 +2849,16 @@ export class RoomEngine {
       aiModelId: payload.aiModelId ?? "b10",
     });
     if (mode !== MATCH_MODE_FRIEND) {
+      const occupiedWhite = this.state.members.find(
+        (candidate) => candidate.role === "player" && candidate.color === WHITE,
+      );
+      if (occupiedWhite) {
+        throw new RoomEngineError(
+          "白方席位已经有人使用；请先让对方释放席位，再改为 AI 或同机对局。",
+          409,
+          "OPPONENT_SEAT_OCCUPIED",
+        );
+      }
       this.startRound({ settings, mode, controllers, now });
       return {
         ok: true,
@@ -2714,6 +2866,13 @@ export class RoomEngine {
         mode,
         phase: PHASE_PLAY,
       };
+    }
+    if (!this.humanWhitePlayer()) {
+      throw new RoomEngineError(
+        "白方席位目前为空；请先让对手加入房间，再发送对局邀请。",
+        409,
+        "OPPONENT_REQUIRED",
+      );
     }
     const previousStatus = this.state.match?.request?.previousStatus ??
       (this.state.match?.status === MATCH_STATUS_FINISHED
@@ -2862,8 +3021,7 @@ export class RoomEngine {
       !this.state.timeControl.outcome &&
       this.state.match?.status === MATCH_STATUS_PLAYING &&
       this.game.phase === PHASE_PLAY &&
-      this.hasBothPlayers() &&
-      !this.state.undoRequest,
+      this.hasBothPlayers(),
     );
   }
 
@@ -2948,6 +3106,19 @@ export class RoomEngine {
     }
   }
 
+  pendingUndoForContinuedPlay(member) {
+    const request = this.state.undoRequest;
+    if (!request) return null;
+    if (request.requesterId === member.playerId) {
+      throw new RoomEngineError(
+        "请先取消自己的悔棋申请，再继续下棋。",
+        409,
+        "UNDO_PENDING",
+      );
+    }
+    return clone(request);
+  }
+
   requireCurrentUndoRequest(targetMoveCount, requestRevision) {
     const request = this.state.undoRequest;
     if (!request) {
@@ -2979,6 +3150,21 @@ export class RoomEngine {
         .filter((member) => member.role === "player")
         .map((member) => member.color),
     );
+    const matchControllers =
+      this.state.match?.status === MATCH_STATUS_INVITED &&
+      this.state.match.request?.controllers
+        ? this.state.match.request.controllers
+        : this.state.match?.controllers;
+    for (const color of [BLACK, WHITE]) {
+      const controllerValue = matchControllers?.[color];
+      if (
+        controllerValue?.kind === "ai" ||
+        (typeof controllerValue?.operatorId === "string" &&
+          controllerValue.operatorId.length > 0)
+      ) {
+        occupied.add(color);
+      }
+    }
     if (!occupied.has(BLACK)) return BLACK;
     if (!occupied.has(WHITE)) return WHITE;
     return null;
@@ -3014,6 +3200,53 @@ export class RoomEngine {
       this.state.members
         .filter((member) => {
           const expiresAt = this.spectatorExpiryAt(member);
+          return expiresAt !== null && now >= expiresAt;
+        })
+        .map((member) => member.playerId),
+    );
+    if (evictedIds.size === 0) return 0;
+
+    this.state.members = this.state.members.filter(
+      (member) => !evictedIds.has(member.playerId),
+    );
+    this.state.receipts = this.state.receipts.filter(
+      (receipt) => !evictedIds.has(receipt.playerId),
+    );
+    for (const [connectionId, playerId] of this.connections) {
+      if (evictedIds.has(playerId)) this.connections.delete(connectionId);
+    }
+    return evictedIds.size;
+  }
+
+  playerReservationExpiryAt(member) {
+    if (
+      member.role !== "player" ||
+      member.automated === true ||
+      this.isOnline(member.playerId) ||
+      !Object.prototype.hasOwnProperty.call(member, "lastConnectedAt") ||
+      member.lastConnectedAt !== null
+    ) {
+      return null;
+    }
+    return member.joinedAt + PLAYER_RESERVATION_TTL_MS;
+  }
+
+  nextPlayerReservationCleanupDueAt() {
+    let dueAt = null;
+    for (const member of this.state.members) {
+      const candidate = this.playerReservationExpiryAt(member);
+      if (candidate !== null && (dueAt === null || candidate < dueAt)) {
+        dueAt = candidate;
+      }
+    }
+    return dueAt;
+  }
+
+  evictExpiredPlayerReservations(now) {
+    const evictedIds = new Set(
+      this.state.members
+        .filter((member) => {
+          const expiresAt = this.playerReservationExpiryAt(member);
           return expiresAt !== null && now >= expiresAt;
         })
         .map((member) => member.playerId),

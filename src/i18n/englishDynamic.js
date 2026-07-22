@@ -44,7 +44,11 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "刚刚更新": "updated just now",
   "计时": "Timed",
   "返回房间": "Return to room",
+  "返回大厅": "Back to lobby",
   "观战": "Watch",
+  "空盘": "Empty board",
+  "成为白方": "Take the White seat",
+  "释放席位，继续旁观": "Release seat and keep watching",
   "正在读取公开房间…": "Loading public rooms…",
   "暂时无法读取在线大厅。": "The online lobby is temporarily unavailable.",
   "好友对局": "Friend match",
@@ -71,6 +75,14 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "等待受邀玩家回应": "Waiting for the invited player",
   "使用当前设置发起对局邀请": "Send invitation with these settings",
   "使用当前设置开始在线对局": "Start online game with these settings",
+  "白方席位为空；请先让对手进入房间并成为白方":
+    "The White seat is empty. Ask your opponent to enter the room and take White first.",
+  "白方席位目前为空。请先让朋友进入房间并成为白方，然后才能发送对局邀请。":
+    "The White seat is empty. Ask your friend to enter and take White before sending the game invitation.",
+  "白方席位目前为空；请先让对手加入房间，再发送对局邀请。":
+    "The White seat is empty. Ask your opponent to join before sending a game invitation.",
+  "请先取消自己的悔棋申请，再继续下棋。":
+    "Cancel your own undo request before continuing play.",
   "当前邀请仍在等待回应；请先取消邀请再修改。":
     "The current invitation is still awaiting a response. Cancel it before making changes.",
   "当前对局尚未结束，不能发起新棋。":
@@ -105,6 +117,35 @@ export const ENGLISH_DYNAMIC = Object.freeze({
     "This record has no played position available for analysis.",
   "这是观战入口；填写名字后请选择“进入观战”。":
     "This is the spectator entrance. Enter your name, then choose Enter as spectator.",
+  "这是大厅的玩家入口；填写名字后申请空余的对手席位。":
+    "This is the lobby player entrance. Enter your name to request the open opponent seat.",
+  "创建在线房间": "Create online room",
+  "进入观战": "Enter as spectator",
+  "申请对手席位": "Request opponent seat",
+  "创建一个 3D 棋局": "Create a 3D game",
+  "进入 3D 棋局": "Enter a 3D game",
+  "先创建房间；进入后可以在棋盘设置中配置棋局并邀请对手。":
+    "Create the room first. Once inside, configure the board and invite an opponent.",
+  "普通分享链接默认只进入观战，不会占用黑白座位。":
+    "A normal share link opens spectator mode and never takes a player seat.",
+  "大厅确认该房间有空位；服务器仍会在进入时再次核验座位。":
+    "The lobby reports an open seat; the room server verifies it again when you enter.",
+  "输入房间号后，可以申请对手席位，也可以只进入观战。":
+    "Enter a room code to request the opponent seat or watch without taking a seat.",
+  "白方席位目前空缺；点击“成为白方”即可加入对局，其他观众仍可继续旁观。":
+    "The White seat is open. Choose Take the White seat to join; other visitors can keep watching.",
+  "你当前占用白方席位；如果不参加下一局，可以释放席位并继续旁观。":
+    "You currently hold the White seat. Release it to keep watching without joining the next game.",
+  "释放白方席位后，你会继续留在房间旁观，其他观众可以接替白方。确定继续吗？":
+    "After releasing White, you will remain as a spectator and another viewer may take the seat. Continue?",
+  "已释放白方席位；你将继续留在房间旁观。":
+    "White was released. You remain in the room as a spectator.",
+  "已成为白方；现在可以回应邀请或等待房主发起对局。":
+    "You now hold the White seat. Respond to an invitation or wait for the host to start a game.",
+  "白方席位已经有人使用；如需改为 AI 或同机对局，请先让白方释放席位。":
+    "The White seat is occupied. Ask White to release it before switching to AI or same-device play.",
+  "已沿用上一局设置；可以直接开始，也可以先调整棋盘。房间成员和聊天记录都会保留。 白方席位已经有人使用；如需改为 AI 或同机对局，请先让白方释放席位。":
+    "The previous settings are prefilled; start now or adjust the board first. Room members and chat history will remain. The White seat is occupied, so ask White to release it before switching to AI or same-device play.",
   "这是棋谱当前末尾，没有实战下一手可比较。":
     "This is the current end of the record, so there is no next played move to compare.",
   "KataGo 正在房主浏览器中思考；服务器会验证并同步棋步。":
@@ -823,6 +864,7 @@ export const ENGLISH_PATTERNS = Object.freeze([
     replace: "New board: Möbius (left and right connect in reverse; top and bottom remain a boundary) · $1 × $2. The current game progress will be cleared.",
   },
   { pattern: /^第 (\d+) 手$/u, replace: "Move $1" },
+  { pattern: /^(\d+) 手$/u, replace: "$1 moves" },
   { pattern: /^第 (\d+) \/ (\d+) 手$/u, replace: "Move $1 / $2" },
   { pattern: /^复盘 · 第 (\d+) \/ (\d+) 手$/u, replace: "Replay · move $1 / $2" },
   { pattern: /^(\d+) 手 · 对局结束$/u, replace: "$1 moves · game over" },
@@ -860,6 +902,8 @@ export const ENGLISH_PATTERNS = Object.freeze([
   { pattern: /^(.+)已确认；请核对后确认，或继续修改死子。$/u, replace: (_, color) => `${capturedTerm(color)} confirmed. Review and confirm, or keep editing dead stones.` },
   { pattern: /^(.+) · (\d+) 人观战$/u, replace: (_, message, count) => `${capturedPhrase(message)} · ${count} spectators` },
   { pattern: /^房间 ([A-Z0-9]{6}) 已创建，把邀请链接发给朋友吧。$/u, replace: "Room $1 created. Send the invitation link to your friend." },
+  { pattern: /^观战房间 ([A-Z0-9]{4,12})$/u, replace: "Watch room $1" },
+  { pattern: /^加入房间 ([A-Z0-9]{4,12})$/u, replace: "Join room $1" },
   { pattern: /^已加入房间 ([A-Z0-9]{6})，你是(.+)。$/u, replace: (_, code, role) => `Joined room ${code} as ${capturedTerm(role)}.` },
   { pattern: /^已进入房间 ([A-Z0-9]{6})。$/u, replace: "Entered room $1." },
   { pattern: /^正在恢复房间 ([A-Z0-9]{6})…$/u, replace: "Restoring room $1…" },
@@ -869,6 +913,7 @@ export const ENGLISH_PATTERNS = Object.freeze([
   { pattern: /^下一局预览已更新为 (\d+) × (\d+)；确认后会使用这套设置。$/u, replace: "Next-game preview updated to $1 × $2. These settings will be used after confirmation." },
   { pattern: /^(\d+) × (\d+) (.+)棋盘已准备好，黑方先行。$/u, replace: (_, width, height, topology) => `${width} × ${height} ${capturedTerm(topology)} board is ready. Black plays first.` },
   { pattern: /^(\d+) × (\d+) · (\d+) 点 · (.+)$/u, replace: (_, width, height, points, topology) => `${width} × ${height} · ${points} points · ${capturedTerm(topology)}` },
+  { pattern: /^(\d+) × (\d+) 棋盘预览暂不可用$/u, replace: "$1 × $2 board preview is unavailable" },
   { pattern: /^(.+)棋盘规则说明$/u, replace: (_, topology) => `${capturedTerm(topology)} board rules` },
   { pattern: /^📍 (.+) · 查看棋盘$/u, replace: "📍 $1 · Show on board" },
   { pattern: /^📍 (.+) · 上一块棋盘$/u, replace: "📍 $1 · Previous board" },

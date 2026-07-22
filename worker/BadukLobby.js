@@ -47,6 +47,10 @@ export class BadukLobby {
       if (!isLobbySummary(summary)) {
         return jsonResponse({ error: "Invalid public room snapshot." }, 400);
       }
+      const current = this.rooms.get(summary.code);
+      if (current && current.revision >= summary.revision) {
+        return jsonResponse({ ok: true, ignored: "stale" });
+      }
       this.rooms.set(summary.code, summary);
       await this.prune();
       await this.persist();

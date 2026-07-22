@@ -98,6 +98,21 @@ test("setup-first friend rooms persist an invitation until the opponent accepts"
   assert.equal(accepted.timeControl.running, true);
 });
 
+test("a friend invitation stays unavailable until a human opponent occupies white", () => {
+  const room = createSetupRoom();
+  assert.throws(
+    () => request(room, { mode: MATCH_MODE_FRIEND }, 1_100),
+    (error) =>
+      error instanceof RoomEngineError && error.code === "OPPONENT_REQUIRED",
+  );
+  assert.equal(room.snapshot(1_101).match.status, MATCH_STATUS_SETUP);
+
+  joinWhite(room, 1_200);
+  const invited = request(room, { mode: MATCH_MODE_FRIEND }, 1_300).room;
+  assert.equal(invited.match.status, MATCH_STATUS_INVITED);
+  assert.equal(invited.match.request.controllers.white.operatorId, "friend");
+});
+
 test("friend invitations can be declined or cancelled without replacing the game", () => {
   const room = createSetupRoom();
   joinWhite(room);
@@ -201,6 +216,67 @@ test("non-friend online modes start immediately with browser-owned controllers",
     },
     now: 1_300,
   }));
+});
+
+test("AI and local controllers occupy the opponent seat for later HTTP joins", () => {
+  for (const mode of [
+    MATCH_MODE_LOCAL,
+    MATCH_MODE_HUMAN_AI,
+    MATCH_MODE_AI_AI,
+  ]) {
+    const room = createSetupRoom();
+    request(room, { mode }, 1_100);
+    const lateJoin = room.join({
+      name: "Late visitor",
+      role: "player",
+      playerId: `late-${mode}`,
+      tokenHash: WHITE_HASH,
+      now: 1_200,
+    });
+    assert.equal(lateJoin.identity.role, "spectator", mode);
+    assert.equal(lateJoin.identity.color, null, mode);
+    assert.throws(
+      () => room.applyAction({
+        playerId: `late-${mode}`,
+        action: "claim_seat",
+        now: 1_300,
+      }),
+      (error) => error instanceof RoomEngineError && error.code === "SEAT_UNAVAILABLE",
+      mode,
+    );
+  }
+});
+
+test("a seated remote opponent cannot be silently replaced by AI or local control", () => {
+  for (const mode of [
+    MATCH_MODE_LOCAL,
+    MATCH_MODE_HUMAN_AI,
+    MATCH_MODE_AI_AI,
+  ]) {
+    const room = createSetupRoom();
+    joinWhite(room);
+    assert.throws(
+      () => request(room, { mode }, 1_200),
+      (error) =>
+        error instanceof RoomEngineError &&
+        error.code === "OPPONENT_SEAT_OCCUPIED",
+      mode,
+    );
+    assert.equal(room.snapshot(1_201).match.status, MATCH_STATUS_SETUP, mode);
+    assert.equal(room.snapshot(1_201).players.find(({ color }) => color === "white")?.id, "friend");
+  }
+
+  const released = createSetupRoom();
+  joinWhite(released);
+  released.applyAction({
+    playerId: "friend",
+    action: "release_seat",
+    now: 1_200,
+  });
+  assert.equal(
+    request(released, { mode: MATCH_MODE_HUMAN_AI }, 1_300).room.match.controllers.white.kind,
+    "ai",
+  );
 });
 
 test("same-browser local mode directly undoes one move and preserves clock and replay state", () => {

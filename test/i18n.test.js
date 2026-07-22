@@ -236,6 +236,9 @@ test("public lobby and online invitation copy is available in English", () => {
   });
   const cases = [
     ["奇异棋盘在线大厅", "Unusual Board Online Lobby"],
+    ["可加入", "Joinable"],
+    ["返回单人模式", "Back to Single"],
+    ["进入在线大厅", "Enter Online Lobby"],
     ["输入房间号", "Enter room code"],
     ["公开房间", "Public rooms"],
     ["好友对战", "Friend match"],
@@ -253,7 +256,13 @@ test("public lobby and online invitation copy is available in English", () => {
     ["3 人观战 · 4 分钟前", "3 spectators · 4 minutes ago"],
     ["共 12 个公开房间 · 自动刷新", "12 public rooms · auto-refreshing"],
     ["返回房间", "Return to room"],
+    ["返回大厅", "Back to lobby"],
     ["观战", "Watch"],
+    ["空盘", "Empty board"],
+    ["成为白方", "Take the White seat"],
+    ["释放席位，继续旁观", "Release seat and keep watching"],
+    ["42 手", "42 moves"],
+    ["30 × 5 棋盘预览暂不可用", "30 × 5 board preview is unavailable"],
     ["正在读取公开房间…", "Loading public rooms…"],
     ["暂时无法读取在线大厅。", "The online lobby is temporarily unavailable."],
     ["好友对局", "Friend match"],
@@ -289,6 +298,10 @@ test("public lobby and online invitation copy is available in English", () => {
     ["等待受邀玩家回应", "Waiting for the invited player"],
     ["使用当前设置发起对局邀请", "Send invitation with these settings"],
     ["使用当前设置开始在线对局", "Start online game with these settings"],
+    [
+      "白方席位目前为空。请先让朋友进入房间并成为白方，然后才能发送对局邀请。",
+      "The White seat is empty. Ask your friend to enter and take White before sending the game invitation.",
+    ],
     [
       "当前邀请仍在等待回应；请先取消邀请再修改。",
       "The current invitation is still awaiting a response. Cancel it before making changes.",

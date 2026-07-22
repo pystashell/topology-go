@@ -24,6 +24,8 @@ export const ROOM_ACTIONS = Object.freeze([
   "request_game",
   "respond_game",
   "cancel_game_request",
+  "claim_seat",
+  "release_seat",
   "new_game",
   "leave",
   "sync",
