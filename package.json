@@ -30,7 +30,8 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "miniflare": "5.20260930.0-alpha",
     "vite": "^8.1.4",
-    "wrangler": "^4.110.0"
+    "wrangler": "4.145.0"
   }
 }
