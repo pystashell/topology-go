@@ -550,6 +550,7 @@ test("AI pass uses the same stale-position guard and enters scoring", () => {
   const blackConfirmed = room.applyAction({
     playerId: "black-player",
     action: "finish_scoring",
+    payload: { expectedScoringToken: room.scoringToken(), },
     now: 1_500,
   }).room;
   assert.equal(blackConfirmed.game.phase, "scoring");
@@ -558,7 +559,7 @@ test("AI pass uses the same stale-position guard and enters scoring", () => {
   const finished = room.applyAction({
     playerId: "black-player",
     action: "finish_scoring",
-    payload: { color: "white" },
+    payload: { expectedScoringToken: room.scoringToken(), color: "white" },
     now: 1_600,
   }).room;
   assert.equal(finished.game.phase, "finished");
@@ -670,12 +671,13 @@ test("direct AI undo cannot reopen scoring or a finished result", () => {
   room.applyAction({
     playerId: "black-player",
     action: "finish_scoring",
+    payload: { expectedScoringToken: room.scoringToken(), },
     now: 1_500,
   });
   const finished = room.applyAction({
     playerId: "black-player",
     action: "finish_scoring",
-    payload: { color: "white" },
+    payload: { expectedScoringToken: room.scoringToken(), color: "white" },
     now: 1_600,
   }).room;
   assert.equal(finished.game.phase, "finished");
@@ -870,11 +872,13 @@ test("resignation is rejected after play has entered scoring or finished", () =>
   room.applyAction({
     playerId: "black-player",
     action: "finish_scoring",
+    payload: { expectedScoringToken: room.scoringToken(), },
     now: 2_300,
   });
   room.applyAction({
     playerId: "white-player",
     action: "finish_scoring",
+    payload: { expectedScoringToken: room.scoringToken(), },
     now: 2_400,
   });
   assert.equal(room.snapshot(2_401).game.phase, "finished");
@@ -1049,21 +1053,7 @@ test("replay survives room serialization and legacy rooms and engines fall back 
   assert.deepEqual(legacyReplay.base.board, legacyState.game.board);
   assert.equal(legacyReplay.base.currentPlayer, "white");
 
-  // Transitional compatibility for an old engine or a lightweight test
-  // double that predates getReplayState().
-  const oldGameState = structuredClone(legacyState.game);
-  const oldGame = {
-    getState: () => structuredClone(oldGameState),
-    exportState: () => structuredClone(oldGameState),
-    canUndo: () => false,
-  };
-  const oldEngineRoom = new RoomEngine(structuredClone(restored.state), oldGame);
-  const fallback = oldEngineRoom.snapshot(3_004).replay;
-  assert.equal(fallback.version, 1);
-  assert.equal(fallback.complete, false);
-  assert.deepEqual(fallback.events, []);
-  assert.deepEqual(fallback.base.board, oldEngineRoom.snapshot(3_005).game.board);
-  assert.equal(fallback.base.currentPlayer, "white");
+
 });
 
 test("creates, serializes and restores a torus room", () => {
@@ -1507,6 +1497,7 @@ test("requires both colors to confirm before finishing scoring", () => {
   const blackConfirmation = room.applyAction({
     playerId: "black-player",
     action: "finish_scoring",
+    payload: { expectedScoringToken: room.scoringToken(), },
     now: 4_000,
   });
   assert.equal(blackConfirmation.move.type, "score_confirmation");
@@ -1517,6 +1508,7 @@ test("requires both colors to confirm before finishing scoring", () => {
   const repeated = room.applyAction({
     playerId: "black-player",
     action: "finish_scoring",
+    payload: { expectedScoringToken: room.scoringToken(), },
     now: 4_100,
   });
   assert.equal(repeated.room.game.phase, "scoring");
@@ -1525,6 +1517,7 @@ test("requires both colors to confirm before finishing scoring", () => {
   const finished = room.applyAction({
     playerId: "white-player",
     action: "finish_scoring",
+    payload: { expectedScoringToken: room.scoringToken(), },
     now: 5_000,
   });
   assert.equal(finished.move.type, "finish_scoring");
@@ -1547,6 +1540,7 @@ test("changing dead stones clears scoring confirmations", () => {
   room.applyAction({
     playerId: "black-player",
     action: "finish_scoring",
+    payload: { expectedScoringToken: room.scoringToken(), },
     now: 3_300,
   });
 
@@ -1572,6 +1566,7 @@ test("persists score confirmations and restores old states without the field", (
   room.applyAction({
     playerId: "black-player",
     action: "finish_scoring",
+    payload: { expectedScoringToken: room.scoringToken(), },
     now: 4_000,
   });
 
@@ -1580,6 +1575,7 @@ test("persists score confirmations and restores old states without the field", (
   const finished = restored.applyAction({
     playerId: "white-player",
     action: "finish_scoring",
+    payload: { expectedScoringToken: restored.scoringToken(), },
     now: 4_100,
   });
   assert.equal(finished.room.game.phase, "finished");
@@ -1597,6 +1593,7 @@ test("resume, new game, continued play and leaving clear confirmations", () => {
   room.applyAction({
     playerId: "white-player",
     action: "finish_scoring",
+    payload: { expectedScoringToken: room.scoringToken(), },
     now: 4_000,
   });
   assert.deepEqual(room.snapshot(4_001).scoreConfirmations, ["white"]);

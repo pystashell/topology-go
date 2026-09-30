@@ -1,0 +1,42 @@
+{
+  "testedAt": "2026-09-30T20:22:40.911Z",
+  "method": "Terminate the task local Wrangler process tree, restart on the same persisted SQLite directory, then create a fresh client from its saved session. No cloud deployment.",
+  "automaticReconnect": true,
+  "persistedMovesRestored": 2,
+  "roundIdentityPreserved": true,
+  "newClientSessionResumed": true,
+  "subsequentMoveCount": 3,
+  "connectionEvents": [
+    [
+      "creating",
+      "idle",
+      "connecting",
+      "connected",
+      "reconnecting",
+      "reconnecting",
+      "reconnecting",
+      "reconnecting",
+      "reconnecting",
+      "reconnecting",
+      "reconnecting",
+      "reconnecting",
+      "connected",
+      "closed"
+    ],
+    [
+      "joining",
+      "idle",
+      "connecting",
+      "connected",
+      "reconnecting",
+      "reconnecting",
+      "reconnecting",
+      "reconnecting",
+      "reconnecting",
+      "reconnecting",
+      "reconnecting",
+      "reconnecting",
+      "connected"
+    ]
+  ]
+}

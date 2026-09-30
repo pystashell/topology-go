@@ -8,6 +8,8 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "禁入点：落子后这一块棋没有气。": "Suicide is not allowed: this group would have no liberties.",
   "全局同形禁着：不能重复之前出现过的局面。": "Positional superko: a previous board position cannot be repeated.",
   "现在还没有进入点目阶段。": "Scoring has not started yet.",
+  "点目结果已经变化，请核对最新结果后重新确认。": "Scoring has changed. Review the latest result before confirming again.",
+  "房间暂时无法恢复或保存，请稍后重新连接。": "The room cannot be restored or saved right now. Please reconnect later.",
   "点目时请点击棋子来标记死活。": "During scoring, select a stone to mark its group dead or alive.",
   "现在没有可以撤回的棋步。": "There are no moves to undo.",
   "这一手不能下。": "That move is not legal.",
@@ -39,7 +41,7 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "甜甜圈": "Torus",
   "莫比乌斯": "Möbius",
   "中国规则": "Chinese rules",
-  "日本规则": "Japanese rules",
+  "简化领地计分": "Simplified territory scoring",
   "停一手": "Pass",
   "自选点": "Selected point",
   "选": "Pick",
@@ -526,7 +528,7 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "忽略了中盘摆子": "Mid-game setup stones were ignored",
   "忽略了中盘改行棋方": "Mid-game player-to-move changes were ignored",
   "棋谱中存在非交替行棋": "The record contains non-alternating moves",
-  "未知规则已按日本规则解释": "The unknown rules were interpreted as Japanese rules",
+  "未知规则已按简化领地计分解释": "The unknown rules were interpreted as Simplified territory scoring",
   "已按 FF[4] 兼容方式解析": "The record was parsed using FF[4] compatibility",
   "文本已按 UTF-8 读取": "The text was read as UTF-8",
   "已兼容旧式 tt 停着": "Legacy tt pass moves were accepted",
@@ -591,7 +593,7 @@ function capturedPhrase(value) {
 
 export const ENGLISH_PATTERNS = Object.freeze([
   {
-    pattern: /^(\d+) × (\d+) · (竹筒|甜甜圈|莫比乌斯) · (中国规则|日本规则) · (.+)$/u,
+    pattern: /^(\d+) × (\d+) · (竹筒|甜甜圈|莫比乌斯) · (中国规则|简化领地计分) · (.+)$/u,
     replace: (_, width, height, topology, rule, clock) => {
       const clockMatch = /^(\d+) 分钟 \+ (\d+)×(\d+) 秒$/u.exec(clock);
       const translatedClock = clockMatch
@@ -601,7 +603,7 @@ export const ENGLISH_PATTERNS = Object.freeze([
     },
   },
   {
-    pattern: /^(\d+) × (\d+) · (竹筒|甜甜圈|莫比乌斯) · (中国规则|日本规则)$/u,
+    pattern: /^(\d+) × (\d+) · (竹筒|甜甜圈|莫比乌斯) · (中国规则|简化领地计分)$/u,
     replace: (_, width, height, topology, rule) =>
       `${width} × ${height} · ${capturedTerm(topology)} · ${capturedTerm(rule)}`,
   },

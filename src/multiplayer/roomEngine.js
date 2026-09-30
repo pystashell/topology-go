@@ -393,36 +393,11 @@ export async function hashRoomToken(token) {
 }
 
 function serializeGame(game) {
-  if (typeof game.exportState === "function") {
-    return clone(game.exportState());
-  }
-  if (typeof game.serialize === "function") {
-    const serialized = game.serialize();
-    return typeof serialized === "string" ? JSON.parse(serialized) : clone(serialized);
-  }
-
-  // Compatibility with the original engine while exportState lands.  Its
-  // mutable rule fields are public, including the positional-superko set.
-  return {
-    ...clone(game.getState()),
-    positionHistory: [...game.positionHistory],
-  };
+  return game.exportState();
 }
 
 function snapshotReplay(game) {
-  if (typeof game.getReplayState === "function") {
-    return clone(game.getReplayState());
-  }
-
-  // Older engines and lightweight test doubles do not expose replay history.
-  // Their current position is still a valid one-frame review, but it must be
-  // marked incomplete so clients never present it as the full game record.
-  return {
-    version: 1,
-    complete: false,
-    base: serializeGame(game),
-    events: [],
-  };
+  return game.getReplayState();
 }
 
 function fingerprint(prefix, value) {
@@ -781,6 +756,8 @@ function validateSerializedState(state) {
       (!Number.isSafeInteger(state.moveCount) || state.moveCount < 0)) ||
     (state.positionEpoch !== undefined &&
       (!Number.isSafeInteger(state.positionEpoch) || state.positionEpoch < 1)) ||
+    (state.scoringRevision !== undefined &&
+      (!Number.isSafeInteger(state.scoringRevision) || state.scoringRevision < 1)) ||
     !Array.isArray(state.members) ||
     !Array.isArray(state.receipts) ||
     !state.game
@@ -979,6 +956,7 @@ export class RoomEngine {
       revision: 1,
       moveCount: 0,
       positionEpoch: 1,
+      scoringRevision: 1,
       scoreConfirmations: [],
       undoRequest: null,
       resignationOutcome: null,
@@ -1032,6 +1010,10 @@ export class RoomEngine {
     validateSerializedState(state);
     state.moveCount ??= 0;
     state.positionEpoch ??= 1;
+    // Old confirmations were not tied to any scoring proposal. Keep the game,
+    // but require both players to confirm the first versioned proposal again.
+    if (state.scoringRevision === undefined) state.scoreConfirmations = [];
+    state.scoringRevision ??= 1;
     state.scoreConfirmations ??= [];
     state.undoRequest ??= null;
     state.resignationOutcome ??= null;
@@ -1146,6 +1128,23 @@ export class RoomEngine {
     return clone({ ...this.state, game: serializeGame(this.game) });
   }
 
+  scoringToken() {
+    return fingerprint("score", {
+      room: this.state.code,
+      createdAt: this.state.createdAt,
+      roundId: this.state.match.roundId,
+      revision: this.state.scoringRevision,
+      width: this.game.width,
+      height: this.game.height,
+      topology: this.game.topology,
+      rule: this.game.scoringRule,
+      komi: this.game.komi,
+      board: this.game.board,
+      captures: this.game.captures,
+      deadStones: [...this.game.deadStones].sort(),
+    });
+  }
+
   snapshot(nowInput, { viewerRole = "player" } = {}) {
     const now = readNow(nowInput);
     this.assertAvailable(now);
@@ -1226,6 +1225,7 @@ export class RoomEngine {
       revision: this.state.revision,
       version: this.state.revision,
       positionToken: positionToken(this.game, this.state),
+      scoringToken: this.scoringToken(),
       match: clone(this.state.match),
       roundArchive: clone(this.state.roundArchive),
       rounds: this.state.roundArchive.map((round) => ({
@@ -2139,6 +2139,14 @@ export class RoomEngine {
       move = this.game.toggleDead(row, col);
     } else if (action === "finish_scoring") {
       this.assertAnyController(member);
+      if (payload.expectedScoringToken !== this.scoringToken()) {
+        throw new RoomEngineError(
+          "点目结果已经变化，请核对最新结果后重新确认。",
+          409,
+          "STALE_SCORING",
+          true,
+        );
+      }
       if (this.game.phase !== PHASE_SCORING) {
         move = this.game.finishScoring();
       } else {
@@ -2448,6 +2456,7 @@ export class RoomEngine {
       action === "new_game"
     ) {
       this.state.scoreConfirmations = [];
+      this.state.scoringRevision += 1;
     }
 
     if (

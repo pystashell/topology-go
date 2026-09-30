@@ -17,13 +17,11 @@ import {
   updateTerritoryMarkerLayer,
 } from "../src/view/territoryMarkers.js";
 
-test("main sends scored regions to all five board renderers", () => {
+test("main sends scored regions to the active renderer and every renderer supports them", () => {
   const source = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
   assert.match(source, /territoryRegions:\s*territoryRegionsForState\(state\)/);
   assert.match(source, /\["resign",\s*"timeout"\]\.includes\(state\.result\?\.reason\)/);
-  for (const viewName of ["cylinderView", "torusView", "mobiusView", "flatView", "arcView"]) {
-    assert.match(source, new RegExp(`${viewName}\\?\\.setPosition\\(viewState\\)`));
-  }
+  assert.match(source, /activeBoardView\(\)\?\.setPosition\(viewState\)/);
 
   for (const Board of [FlatBoard, ArcBoard, CylinderBoard, TorusBoard]) {
     assert.match(Board.prototype.setPosition.toString(), /territoryRegions/);

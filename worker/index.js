@@ -50,12 +50,34 @@ async function readJsonBody(request) {
   if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
     throw jsonResponse({ error: "请求内容过长。" }, 413);
   }
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) {
-    throw jsonResponse({ error: "请求内容过长。" }, 413);
+  const reader = request.body?.getReader();
+  const chunks = [];
+  let length = 0;
+  if (reader) {
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        length += value.byteLength;
+        if (length > MAX_BODY_BYTES) {
+          // Do not drain or decode a body after it exceeds the byte budget.
+          void reader.cancel().catch(() => {});
+          throw jsonResponse({ error: "请求内容过长。" }, 413);
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
   }
   try {
-    return JSON.parse(text);
+    return JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     throw jsonResponse({ error: "请求不是有效的 JSON。" }, 400);
   }
@@ -216,7 +238,7 @@ const worker = {
           return new Response(null, { status: 405, headers: { Allow: "GET" } });
         }
         if (!hasAllowedOrigin(request)) return jsonResponse({ error: "请求来源不允许。" }, 403);
-        return listLobbyRooms(env);
+        return await listLobbyRooms(env);
       }
 
       if (url.pathname === "/api/rooms") {
@@ -224,7 +246,7 @@ const worker = {
           return new Response(null, { status: 405, headers: { Allow: "POST" } });
         }
         if (!hasAllowedOrigin(request)) return jsonResponse({ error: "请求来源不允许。" }, 403);
-        return createRoom(request, env);
+        return await createRoom(request, env);
       }
 
       const socketMatch = /^\/api\/rooms\/([A-HJ-NP-Z2-9]{6})\/(?:socket|ws)$/.exec(url.pathname);
@@ -233,7 +255,7 @@ const worker = {
           return new Response(null, { status: 405, headers: { Allow: "GET" } });
         }
         if (!hasAllowedOrigin(request)) return jsonResponse({ error: "请求来源不允许。" }, 403);
-        return env.BADUK_ROOMS.getByName(socketMatch[1]).fetch(request);
+        return await env.BADUK_ROOMS.getByName(socketMatch[1]).fetch(request);
       }
 
       const joinMatch = /^\/api\/rooms\/([A-HJ-NP-Z2-9]{6})(?:\/join)?$/.exec(url.pathname);
@@ -243,14 +265,14 @@ const worker = {
           return new Response(null, { status: 405, headers: { Allow: "POST" } });
         }
         if (!hasAllowedOrigin(request)) return jsonResponse({ error: "请求来源不允许。" }, 403);
-        return joinRoom(request, env, joinMatch[1]);
+        return await joinRoom(request, env, joinMatch[1]);
       }
 
       if (url.pathname.startsWith("/api/rooms/")) {
         return jsonResponse({ error: "房间地址不正确。" }, 404);
       }
 
-      if (env.ASSETS) return env.ASSETS.fetch(request);
+      if (env.ASSETS) return await env.ASSETS.fetch(request);
       return new Response("Not found", { status: 404 });
     } catch (error) {
       if (error instanceof Response) return error;

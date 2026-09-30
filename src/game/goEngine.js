@@ -303,6 +303,7 @@ function isPositionHashForDimensions(hash, width, height) {
  */
 
 export class GoEngine {
+  #recordHistory = true;
   /**
    * @param {object} [options]
    * @param {number} [options.size] Legacy square board dimension.
@@ -615,6 +616,16 @@ export class GoEngine {
     return GoEngine.fromState(serialized);
   }
 
+  /** Search keeps every superko position, without validating or copying UI history. */
+  static fromSearchState(state) {
+    const snapshot = typeof state === "string" ? JSON.parse(state) : state;
+    requirePlainObject(snapshot, "Search state");
+    const { undoHistory, replay, ...position } = snapshot;
+    const game = GoEngine.fromState(position);
+    game.#recordHistory = false;
+    return game;
+  }
+
   #validateAndCopyBoard(board) {
     if (!Array.isArray(board) || board.length !== this.height) {
       throw new RangeError(`Initial board must contain ${this.height} rows`);
@@ -752,6 +763,7 @@ export class GoEngine {
   }
 
   #recordReplayMove(move) {
+    if (!this.#recordHistory) return;
     if (move.type === "play") {
       this.replay.events.push({
         type: "play",
@@ -794,6 +806,7 @@ export class GoEngine {
   }
 
   #undoSnapshot() {
+    if (!this.#recordHistory) return null;
     return {
       board: this.getBoard(),
       currentPlayer: this.currentPlayer,
@@ -1051,6 +1064,7 @@ export class GoEngine {
   }
 
   #recordUndo(move, before) {
+    if (!this.#recordHistory) return;
     this.undoHistory.push({
       move: copyLastMove(move, this.width, this.height),
       before,
@@ -1309,7 +1323,7 @@ export class GoEngine {
       reason: "resign",
       resignation: true,
     };
-    this.replay.events.push({ type: "resign", color });
+    if (this.#recordHistory) this.replay.events.push({ type: "resign", color });
     return {
       ok: true,
       type: "resign",
@@ -1378,7 +1392,7 @@ export class GoEngine {
       else this.deadStones.delete(key);
     }
 
-    this.replay.events.push({ type: "toggle_dead", row, col });
+    if (this.#recordHistory) this.replay.events.push({ type: "toggle_dead", row, col });
 
     return {
       ok: true,
@@ -1606,7 +1620,7 @@ export class GoEngine {
     }
     this.result = this.score(rule);
     this.phase = PHASE_FINISHED;
-    this.replay.events.push({
+    if (this.#recordHistory) this.replay.events.push({
       type: "finish_scoring",
       rule: this.result.rule,
     });
@@ -1626,7 +1640,7 @@ export class GoEngine {
     this.consecutivePasses = 0;
     this.deadStones.clear();
     this.result = null;
-    this.replay.events.push({ type: "resume_play", nextPlayer });
+    if (this.#recordHistory) this.replay.events.push({ type: "resume_play", nextPlayer });
     return { ok: true, phase: this.phase, nextPlayer: this.currentPlayer };
   }
 
@@ -1668,6 +1682,14 @@ export class GoEngine {
     };
     if (includeReplay) state.replay = this.getReplayState();
     return state;
+  }
+
+  /** Compact search input; positionHistory is never truncated or discarded. */
+  exportSearchState() {
+    return {
+      ...this.getState(),
+      positionHistory: [...this.positionHistory],
+    };
   }
 
   /** Complete, compact move record independent of the bounded undo window. */

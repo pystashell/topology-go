@@ -29,16 +29,23 @@ GitHub Release 正文会记录 commit、来源分支和两个 Cloudflare ID。�
 
 ```json
 {
-  "version": "0.2.0-rc.8",
-  "tag": "v0.2.0-rc.8",
+  "version": "0.2.0-rc.9",
+  "tag": "v0.2.0-rc.9",
   "channel": "prerelease"
 }
 ```
 
+### 0.2.0-rc.9 的联机兼容边界
+
+- 点目确认必须携带当前 `scoringToken`。旧页面没有这个字段时会收到 `STALE_SCORING`；玩家应刷新页面、重新检查死子后再确认。
+- 旧存档仍可恢复，但没有版本绑定的历史点目确认会清空，避免把旧确认计入新方案。未知 schema 或恢复异常会保留原始存储并停止该房间服务，不会自动删档。
+- 对进行中的点目房间，不应直接回滚到不校验 token 的版本。应先准备包含这项保护的回滚版本，再核对恢复后的双方确认状态。
+- 合并前验证可在本地运行；正式发布仍须核对 `topology-go` 的实际 Worker Version、Deployment 和 `/version.json`，并在预发布环境验证新旧页面共存及发布切换时的断线恢复。
+
 只读查看计划（允许工作区尚未提交）：
 
 ```powershell
-npm.cmd run release:plan -- 0.2.0-rc.8
+npm.cmd run release:plan -- 0.2.0-rc.9
 ```
 
 ## 准备另一个版本
@@ -47,7 +54,7 @@ npm.cmd run release:plan -- 0.2.0-rc.8
 
 ```powershell
 git branch --show-current
-npm.cmd run release:version -- 0.2.0-rc.8
+npm.cmd run release:version -- 0.2.0-rc.9
 git diff -- public/version.json
 ```
 
@@ -58,7 +65,7 @@ git diff -- public/version.json
 提交所有经过评审的变更后，在干净工作区运行：
 
 ```powershell
-npm.cmd run release:check -- 0.2.0-rc.8
+npm.cmd run release:check -- 0.2.0-rc.9
 ```
 
 该命令只执行测试、构建和 Wrangler dry-run，不会创建 tag、push 或部署。任何测试失败、构建失败、Worker dry-run 失败、版本不一致、受保护分支或脏工作区都会阻止后续发布。
@@ -72,7 +79,7 @@ npx.cmd wrangler whoami
 gh auth status
 git status --short
 git rev-parse HEAD
-npm.cmd run release:publish -- 0.2.0-rc.8
+npm.cmd run release:publish -- 0.2.0-rc.9
 ```
 
 `release:publish` 将按以下顺序执行：

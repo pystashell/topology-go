@@ -133,6 +133,14 @@ try {
   });
   await spectatorConnected;
 
+  const invitation = waitFor(white, "state", ({ room }) => room?.match?.status === "invited", "friend invitation");
+  await black.command("request_game", { mode: "friend" });
+  const invited = await invitation;
+  const started = [black, white, spectator].map(client =>
+    waitFor(client, "state", ({ room }) => room?.match?.status === "playing", "accepted friend round"));
+  await white.command("respond_game", { accept: true, requestRevision: invited.room.match.request.requestRevision });
+  await Promise.all(started);
+
   requireCondition(
     black._socket?.protocol === BADUK_WS_PROTOCOL &&
       white._socket?.protocol === BADUK_WS_PROTOCOL,
@@ -148,10 +156,10 @@ try {
     "Explicit spectator join occupied a player seat",
   );
   requireCondition(
-    joined.room?.timeControl?.activeColor === "black" &&
-      joined.room?.timeControl?.running === true &&
-      joined.room?.timeControl?.byoYomiPeriods === 2,
-    "Authoritative Japanese clock did not start when the second player joined",
+    black.room?.timeControl?.activeColor === "black" &&
+      black.room?.timeControl?.running === true &&
+      black.room?.timeControl?.byoYomiPeriods === 2,
+    "Authoritative clock did not start after the game invitation was accepted",
   );
 
   let spectatorWriteRejected = false;
@@ -374,16 +382,15 @@ try {
     aiHost,
     "state",
     ({ room }) =>
-      room?.players?.some((player) =>
-        player?.color === "white" && player?.automated === true) &&
+      room?.match?.controllers?.white?.kind === "ai" &&
       room?.timeControl?.running === true &&
       room?.timeControl?.activeColor === "black",
     "AI white seat on host client",
   );
-  await aiHost.command("attach_ai", { modelId: "b10" });
+  await aiHost.command("request_game", { mode: "human-ai", aiModelId: "b10" });
   const aiAttached = await aiAttachedState;
   requireCondition(
-    aiAttached.room.players.find((player) => player.color === "white")?.role === "ai",
+    aiAttached.room.match.controllers.white.kind === "ai",
     "Attached AI was not exposed as the white controller",
   );
 
@@ -400,7 +407,7 @@ try {
   await aiSpectatorConnected;
   requireCondition(
     aiWatched.session?.role === "spectator" &&
-      aiWatched.room?.players?.some((player) => player?.automated === true),
+      aiWatched.room?.match?.controllers?.white?.kind === "ai",
     "Spectator could not observe the online AI seat",
   );
 
@@ -491,7 +498,7 @@ try {
       coordinate: black.room.chat.messages[0].points[0].label,
       sticker: black.room.chat.messages[1].stickerId,
       synchronized: true,
-      clockStartedAfterBothSeats: true,
+      clockStartedAfterInvitationAccepted: true,
       spectatorReadOnly: spectatorWriteRejected,
       spectatorCannotResign: spectatorResignRejected,
       spectatorSynchronized: spectator.room?.game?.board?.[0]?.[0] === "black",

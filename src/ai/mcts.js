@@ -94,16 +94,14 @@ function boardDimensions(value) {
 
 function normalizeState(gameOrState) {
   if (gameOrState instanceof GoEngine) {
-    return gameOrState.exportState({ includeReplay: false });
+    return gameOrState.exportSearchState();
   }
-  if (gameOrState && typeof gameOrState.exportState === "function") {
-    return GoEngine.fromState(
-      gameOrState.exportState({ includeReplay: false }),
-    ).exportState({
-      includeReplay: false,
-    });
+  if (gameOrState && typeof gameOrState.exportSearchState === "function") {
+    return GoEngine.fromSearchState(
+      gameOrState.exportSearchState(),
+    ).exportSearchState();
   }
-  return GoEngine.fromState(gameOrState).exportState({ includeReplay: false });
+  return GoEngine.fromSearchState(gameOrState).exportSearchState();
 }
 
 function normalizeDifficulty(value = "easy") {
@@ -406,7 +404,7 @@ function refineFragileTactic(game, analysis) {
     return analysis;
   }
 
-  const trial = GoEngine.fromState(game.exportState({ includeReplay: false }));
+  const trial = GoEngine.fromSearchState(game.exportSearchState());
   const played = trial.play(analysis.move.row, analysis.move.col);
   if (!played.ok) return analysis;
 
@@ -475,7 +473,7 @@ function rankedMoveEntries(
   const game =
     gameOrState instanceof GoEngine
       ? gameOrState
-      : GoEngine.fromState(gameOrState);
+      : GoEngine.fromSearchState(gameOrState);
   if (game.phase !== PHASE_PLAY) return [];
   const groups = groupMap(game);
   const entries = [];
@@ -575,11 +573,11 @@ export function listLegalMoves(gameOrState, { includePass = true } = {}) {
   const moves = [];
 
   for (const move of emptyPointMoves(state)) {
-    const trial = GoEngine.fromState(state);
+    const trial = GoEngine.fromSearchState(state);
     if (applyMove(trial, move).ok) moves.push(copyMove(move));
   }
   if (includePass) {
-    const trial = GoEngine.fromState(state);
+    const trial = GoEngine.fromSearchState(state);
     if (trial.pass().ok) moves.push({ type: "pass" });
   }
   return moves;
@@ -640,7 +638,7 @@ function expand(node, settings) {
   );
   if (node.children.length >= allowedChildren) return null;
 
-  const game = GoEngine.fromState(node.state);
+  const game = GoEngine.fromSearchState(node.state);
   while (node.untriedMoves.length > 0) {
     cancellationCheck(settings);
     const analysis = node.untriedMoves.shift();
@@ -648,7 +646,7 @@ function expand(node, settings) {
     if (!result.ok) continue;
 
     const child = createNode(
-      game.exportState({ includeReplay: false }),
+      game.exportSearchState(),
       copyMove(analysis.move),
       analysis,
     );
@@ -832,7 +830,7 @@ function evaluate(game, rootPlayer) {
 }
 
 function rollout(state, rootPlayer, settings) {
-  const game = GoEngine.fromState(state);
+  const game = GoEngine.fromSearchState(state);
   for (let ply = 0; ply < settings.rolloutLimit; ply += 1) {
     cancellationCheck(settings);
     if (game.phase !== PHASE_PLAY) break;
@@ -872,7 +870,7 @@ function runIteration(root, rootPlayer, settings) {
 }
 
 function fallbackMove(state, settings) {
-  const game = GoEngine.fromState(state);
+  const game = GoEngine.fromSearchState(state);
   const ranked = rankedMoveEntries(
     game,
     settings,

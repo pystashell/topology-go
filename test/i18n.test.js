@@ -164,8 +164,8 @@ test("lobby lifecycle and rectangular preview copy is available in English", () 
     "30 × 20 · Torus · Chinese rules · No clock",
   );
   assert.equal(
-    translateText("13 × 19 · 莫比乌斯 · 日本规则 · 5 分钟 + 3×30 秒"),
-    "13 × 19 · Möbius · Japanese rules · 5 min + 3×30 sec",
+    translateText("13 × 19 · 莫比乌斯 · 简化领地计分 · 5 分钟 + 3×30 秒"),
+    "13 × 19 · Möbius · Simplified territory scoring · 5 min + 3×30 sec",
   );
   assert.equal(
     translateText("你将以黑方认输，对方立即获胜；不需要对方确认，此操作不能撤销。"),
@@ -270,7 +270,7 @@ test("public lobby and online invitation copy is available in English", () => {
     ["在线 AI 对弈", "Online AI vs AI"],
     ["在线同机双人", "Online same-device two-player"],
     ["等待被邀请方回应。", "Waiting for the invited player to respond."],
-    ["19 × 13 · 甜甜圈 · 日本规则", "19 × 13 · Torus · Japanese rules"],
+    ["19 × 13 · 甜甜圈 · 简化领地计分", "19 × 13 · Torus · Simplified territory scoring"],
     ["设置并发起一盘新棋", "Configure and start a new game"],
     ["对局邀请等待回应", "Game invitation awaiting response"],
     [

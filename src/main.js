@@ -1020,7 +1020,7 @@ function sgfImportWarningSummary(warnings) {
     IGNORED_MIDGAME_SETUP: "忽略了中盘摆子",
     IGNORED_MIDGAME_PLAYER: "忽略了中盘改行棋方",
     NON_ALTERNATING_MOVE: "棋谱中存在非交替行棋",
-    UNKNOWN_RULE: "未知规则已按日本规则解释",
+    UNKNOWN_RULE: "未知规则已按简化领地计分解释",
     NON_FF4: "已按 FF[4] 兼容方式解析",
     CHARSET_ASSUMED_UTF8: "文本已按 UTF-8 读取",
     LEGACY_TT_PASS: "已兼容旧式 tt 停着",
@@ -1887,7 +1887,7 @@ function analyzeCurrentLivePosition() {
   let state;
   let worker;
   try {
-    state = game.exportState({ includeReplay: false });
+    state = game.exportSearchState();
     worker = ensureReviewWorker();
   } catch (error) {
     liveAnalysis.message = `无法复制当前局面：${error.message}`;
@@ -2683,7 +2683,7 @@ function maybeStartAITurn() {
       // cleanly instead of throwing from the delayed callback.
       state = onlineTurn && onlineRoom?.replay
         ? buildReplayStateAtStep(onlineRoom.replay, moveCount)
-        : game.exportState({ includeReplay: false });
+        : game.exportSearchState();
     } catch (error) {
       aiThinking = false;
       elements.boardStage.removeAttribute("aria-busy");
@@ -3247,7 +3247,7 @@ function rememberPlayerName(name) {
 function onlineBoardSummaryText() {
   const width = normalizeBoardDimension(elements.customWidth.value);
   const height = normalizeBoardDimension(elements.customHeight.value);
-  const rule = elements.scoringRule.value === "japanese" ? "日本规则" : "中国规则";
+  const rule = elements.scoringRule.value === "japanese" ? "简化领地计分" : "中国规则";
   const clock = selectedTimeControlConfig();
   const clockLabel = clock
     ? `${Math.round(clock.mainTimeSeconds / 60)} 分钟 + ${clock.byoYomiPeriods}×${clock.byoYomiSeconds} 秒`
@@ -3391,7 +3391,7 @@ function onlineInvitationSummary(request = onlineRoom?.match?.request) {
   if (!request?.settings) return "等待被邀请方回应。";
   const settings = request.settings;
   return `${settings.width} × ${settings.height} · ${topologySurfaceName(settings.topology)} · ${
-    settings.scoringRule === "japanese" ? "日本规则" : "中国规则"
+    settings.scoringRule === "japanese" ? "简化领地计分" : "中国规则"
   }`;
 }
 
@@ -4864,11 +4864,7 @@ function renderBoardPosition(
     analysisVariation,
     territoryRegions: territoryRegionsForState(state),
   };
-  cylinderView?.setPosition(viewState);
-  torusView?.setPosition(viewState);
-  mobiusView?.setPosition(viewState);
-  flatView?.setPosition(viewState);
-  arcView?.setPosition(viewState);
+  activeBoardView()?.setPosition(viewState);
 }
 
 function analysisContextKey(record = currentAnalysisRecord()) {
@@ -4952,7 +4948,7 @@ function buildAnalysisVariationPreview(baseState, candidate) {
 }
 
 function renderCurrentAnalysisPosition() {
-  if (!game || !cylinderView) return;
+  if (!game || !activeBoardView()) return;
   if (isNextGameSetup() && rematchPreviewGame) {
     renderBoardPosition(rematchPreviewGame.getState(), null);
     return;
@@ -5840,7 +5836,10 @@ elements.confirmScore.addEventListener("click", () => {
   const color = nextScoreConfirmationColor();
   void dispatchMatchAction(
     MATCH_ACTION_FINISH_SCORING,
-    color ? { color } : {},
+    {
+      ...(color ? { color } : {}),
+      ...(onlineRoom ? { expectedScoringToken: onlineRoom.scoringToken } : {}),
+    },
   );
 });
 
@@ -5996,6 +5995,16 @@ function setViewMode(mode) {
   const cylinderActive = cylinder && activeViewMode === "3d";
   const torusActive = torus && activeViewMode === "3d";
   const mobiusActive = mobius && activeViewMode === "3d";
+  const displayed = replaySession?.frames?.[replaySession.index] ?? liveDisplayedGame();
+  const viewOptions = {
+    width: boardWidth(displayed), height: boardHeight(displayed),
+    onPoint: handleBoardPoint, onHover: handleHover,
+  };
+  if (flatActive) flatView ??= new FlatBoard(elements.flatScene, { ...viewOptions, topology: displayedTopology() });
+  if (arcActive) arcView ??= new ArcBoard(elements.arcScene, viewOptions);
+  if (cylinderActive) cylinderView ??= new CylinderBoard(elements.scene, viewOptions);
+  if (torusActive) torusView ??= new TorusBoard(elements.torusScene, viewOptions);
+  if (mobiusActive) mobiusView ??= new MobiusBoard(elements.mobiusScene, viewOptions);
   const finePointer = window.matchMedia?.("(pointer: fine)")?.matches ?? false;
   elements.boardStage.dataset.viewMode = activeViewMode;
   elements.flatScene.hidden = !flatActive;
@@ -6014,6 +6023,8 @@ function setViewMode(mode) {
   }
   if (torusActive) torusView?.setAutoRotate(autoRotateByView["3d"]);
   if (mobiusActive) mobiusView?.setAutoRotate(autoRotateByView["3d"]);
+  syncMovePreviewAvailability();
+  renderCurrentAnalysisPosition();
 
   for (const button of elements.viewButtons) {
     const active = button.dataset.viewMode === activeViewMode;
@@ -6524,42 +6535,6 @@ game = new GoEngine({
   komi: 7.5,
   scoringRule: SCORING_CHINESE,
 });
-cylinderView = new CylinderBoard(elements.scene, {
-  width: boardWidth(),
-  height: boardHeight(),
-  size: 19,
-  onPoint: handleBoardPoint,
-  onHover: handleHover,
-});
-torusView = new TorusBoard(elements.torusScene, {
-  width: boardWidth(),
-  height: boardHeight(),
-  size: 19,
-  onPoint: handleBoardPoint,
-  onHover: handleHover,
-});
-mobiusView = new MobiusBoard(elements.mobiusScene, {
-  width: boardWidth(),
-  height: boardHeight(),
-  size: 19,
-  onPoint: handleBoardPoint,
-  onHover: handleHover,
-});
-flatView = new FlatBoard(elements.flatScene, {
-  width: boardWidth(),
-  height: boardHeight(),
-  size: 19,
-  topology: game.topology,
-  onPoint: handleBoardPoint,
-  onHover: handleHover,
-});
-arcView = new ArcBoard(elements.arcScene, {
-  width: boardWidth(),
-  height: boardHeight(),
-  size: 19,
-  onPoint: handleBoardPoint,
-  onHover: handleHover,
-});
 setSidebarTab("settings");
 buildChatPickers();
 syncLanguageControls();
@@ -6628,11 +6603,11 @@ window.addEventListener(
     cancelReplayAIReview({ terminate: true });
     cancelLobbyRequest();
     if (clockTimer !== null) window.clearInterval(clockTimer);
-    cylinderView.destroy();
-    torusView.destroy();
-    mobiusView.destroy();
-    flatView.destroy();
-    arcView.destroy();
+    cylinderView?.destroy();
+    torusView?.destroy();
+    mobiusView?.destroy();
+    flatView?.destroy();
+    arcView?.destroy();
     roomClient.destroy();
     unsubscribeLocale();
     void gameSounds.destroy();

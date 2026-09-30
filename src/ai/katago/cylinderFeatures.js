@@ -28,8 +28,8 @@ function pointKey(row, col) {
 export function buildCylinderFeatures(gameOrState) {
   const game =
     gameOrState instanceof GoEngine
-      ? GoEngine.fromState(gameOrState.exportState({ includeReplay: false }))
-      : GoEngine.fromState(gameOrState);
+      ? GoEngine.fromSearchState(gameOrState.exportSearchState())
+      : GoEngine.fromSearchState(gameOrState);
   const { width, height } = game;
   const spatial = new Float32Array(
     width * height * KATAGO_SPATIAL_CHANNELS,
@@ -123,21 +123,21 @@ export function buildCylinderFeatures(gameOrState) {
 export function buildLegalPolicyMask(gameOrState) {
   const game =
     gameOrState instanceof GoEngine
-      ? GoEngine.fromState(gameOrState.exportState({ includeReplay: false }))
-      : GoEngine.fromState(gameOrState);
-  const state = game.exportState({ includeReplay: false });
+      ? GoEngine.fromSearchState(gameOrState.exportSearchState())
+      : GoEngine.fromSearchState(gameOrState);
+  const state = game.exportSearchState();
   const pointCount = game.width * game.height;
   const mask = new Uint8Array(pointCount + 1);
 
   for (let row = 0; row < game.height; row += 1) {
     for (let col = 0; col < game.width; col += 1) {
       if (game.get(row, col) !== null) continue;
-      const trial = GoEngine.fromState(state);
+      const trial = GoEngine.fromSearchState(state);
       if (trial.play(row, col).ok) mask[row * game.width + col] = 1;
     }
   }
 
-  const passTrial = GoEngine.fromState(state);
+  const passTrial = GoEngine.fromSearchState(state);
   if (passTrial.pass().ok) mask[pointCount] = 1;
   return mask;
 }
@@ -157,8 +157,8 @@ export function policyPriorsFromLogits({
 }) {
   const game =
     gameOrState instanceof GoEngine
-      ? GoEngine.fromState(gameOrState.exportState({ includeReplay: false }))
-      : GoEngine.fromState(gameOrState);
+      ? GoEngine.fromSearchState(gameOrState.exportSearchState())
+      : GoEngine.fromSearchState(gameOrState);
   const { width, height } = game;
   const pointCount = width * height;
   if (!Number.isInteger(policyChannels) || policyChannels < 1) {
