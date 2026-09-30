@@ -71,8 +71,17 @@ F6 使用保守的停止服务策略：即使异常发生在序列化阶段，�
 ## 后续处理与发布边界
 
 1. **依赖告警已处理。** `wrangler@4.145.0` 与其自带的 `miniflare@5.20260930.0-alpha` 对齐并锁定，更新后的 `sharp@0.35.4`、`undici@7.29.1`、`postcss@8.5.28`、`nanoid@3.3.19` 使全部依赖 `npm audit` 从 6 项降为 0 项；生产依赖扫描也是 0。没有使用 `--force` 或 overrides。Miniflare 5 的[配置变更](https://developers.cloudflare.com/changelog/post/2026-09-08-miniflare-v5/)通过原生 module manifest 适配，真实 SQLite 用例保留。
-2. **按边界整理本地提交。** `47ae485` 保存原有 19 文件大厅改动，`b434cce` 保存依赖升级；审计修复、验证脚本和文档另作提交。最终整合记录见下文。初始的 11 个领先提交不包含这些新提交。
+2. **按边界整理本地提交。** `47ae485` 保存原有 19 文件大厅改动，`b434cce` 保存依赖升级，`ec540fc` 保存审计修复、验证脚本、CI 与文档，`b4954c0` 整合最新 main。最终整合记录见下文。初始的 11 个领先提交不包含这些新提交。
 3. **可重复验收。** 更新工具链后已通过 372 项测试、构建、dry-run、两个 live smoke、实际 b10/b18 推理、长棋谱、移动端模拟和本地进程重启恢复。新增 `.github/workflows/ci.yml`，PR 将运行锁文件安装、完整测试、构建、dry-run 与所有依赖审计，权限仅为读取代码，不使用生产凭据。本地尚未推送，不能称远端 CI 已通过；合并应以实际 PR 检查结果为准。
 4. **发布前仍须完成。** `0.2.0-rc.9` 是候选号；tag/Release 和部署必须绑定最终 commit。预发布环境的新旧页面共存、发布切换以及真实移动设备/Safari 尚未验证。README 与 `wrangler.jsonc` 都指向 `topology-go`，发布时仍须核对实际 Worker Version/Deployment。点目客户端与回滚边界已写入 [RELEASES.md](RELEASES.md)。
 
 主文件后续按联机、AI、复盘、聊天和视图职责拆分，以及玩家/HTTP 入口的进一步限速，是独立的后续改进项；本轮未宣称完成这些结构和容量工作。
+
+## 最终代码候选验收
+
+- 代码候选：`b4954c0ef3eb9bc27400c48ecf308c971e11eb9e`，分支 `codex/大厅版`。
+- 已整合的 main：`ac9e82dece9ace9f0ea49188fbb6c0c1387e0966`。唯一 README 冲突已解决，远端新版项目介绍完整保留。整合后的文件树与 `ec540fc` 相同。
+- 在该候选的干净工作区运行 `npm run release:check -- 0.2.0-rc.9`，372 项测试全部通过，构建和严格部署 dry-run 通过；随后两项 live smoke 也通过。运行环境是 Windows、Node.js 24.14.0，不能代称尚未运行的 Ubuntu/Node.js 22 CI。
+- 此时 `git rev-list --left-right --count origin/main...HEAD` 为 `0 15`。之后只有本记录与验收 JSON 的文档提交，计数会增加；最新数字以该命令为准。
+- 本地 main 分支、远端 main 和线上服务均未改动；没有 push、PR、tag、Release 或部署。本分支对应的远端 PR 查询为空。合并流程下一步是推送分支、创建 PR 并取得实际 CI 结果；预发布/真机验收属于随后发布前检查。
+- 可移植的命令与结果摘要见 [最终预检记录](audits/2026-10-01-final-preflight.json)。原始本地日志在 `%TEMP%/topology-go-audit-20261001/`。
