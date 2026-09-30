@@ -14,6 +14,8 @@ export const CHAT_TEXT_MAX_LINES = 4;
 export const CHAT_POINT_LIMIT = 4;
 export const CHAT_HISTORY_LIMIT = 100;
 export const CHAT_HISTORY_MAX_BYTES = 64 * 1024;
+export const CHAT_CHANNEL_PLAYERS = "players";
+export const CHAT_CHANNEL_SPECTATORS = "spectators";
 
 export const CHAT_STICKERS = Object.freeze([
   Object.freeze({ id: "good-move", emoji: "👏", label: "好棋！" }),
@@ -29,6 +31,20 @@ export const CHAT_STICKERS = Object.freeze([
 const CHAT_STICKER_IDS = new Set(CHAT_STICKERS.map(({ id }) => id));
 const VALID_TOPOLOGIES = new Set(["cylinder", "torus", "mobius"]);
 const textEncoder = new TextEncoder();
+
+export function chatChannelForRole(role) {
+  if (role === "player") return CHAT_CHANNEL_PLAYERS;
+  if (role === "spectator") return CHAT_CHANNEL_SPECTATORS;
+  return null;
+}
+
+export function chatMessageChannel(message) {
+  const inferred = chatChannelForRole(message?.senderRole);
+  if (!inferred) return null;
+  return message?.channel === undefined || message.channel === inferred
+    ? inferred
+    : null;
+}
 
 export class ChatValidationError extends Error {
   constructor(message, code = "INVALID_CHAT") {
@@ -203,8 +219,9 @@ export function isStoredChatMessage(value) {
     typeof value.senderName !== "string" ||
     !value.senderName ||
     value.senderName.length > 80 ||
-    value.senderRole !== "player" ||
-    !["black", "white"].includes(value.senderColor) ||
+    !chatMessageChannel(value) ||
+    (value.senderRole === "player" && !["black", "white"].includes(value.senderColor)) ||
+    (value.senderRole === "spectator" && value.senderColor !== null) ||
     !Number.isFinite(value.sentAt) ||
     !dimensions ||
     !VALID_TOPOLOGIES.has(value.boardTopology) ||
@@ -234,13 +251,19 @@ export function isStoredChatMessage(value) {
   return value.kind === "sticker" && CHAT_STICKER_IDS.has(value.stickerId);
 }
 
-export function trimStoredChatHistory(messages) {
-  const history = Array.isArray(messages)
+function normalizedStoredChatMessages(messages) {
+  return Array.isArray(messages)
     ? messages
         .filter(isStoredChatMessage)
-        .slice(-CHAT_HISTORY_LIMIT)
-        .map((message) => JSON.parse(JSON.stringify(message)))
+        .map((message) => ({
+          ...JSON.parse(JSON.stringify(message)),
+          channel: chatMessageChannel(message),
+        }))
     : [];
+}
+
+function trimNormalizedChatHistory(messages) {
+  const history = messages.slice(-CHAT_HISTORY_LIMIT);
   while (
     history.length > 0 &&
     textEncoder.encode(JSON.stringify(history)).byteLength > CHAT_HISTORY_MAX_BYTES
@@ -248,4 +271,20 @@ export function trimStoredChatHistory(messages) {
     history.shift();
   }
   return history;
+}
+
+export function trimStoredChatHistory(messages) {
+  return trimNormalizedChatHistory(normalizedStoredChatMessages(messages));
+}
+
+/** Keep the two audiences from evicting one another's retained history. */
+export function trimStoredChatHistories(messages) {
+  const normalized = normalizedStoredChatMessages(messages);
+  const history = [CHAT_CHANNEL_PLAYERS, CHAT_CHANNEL_SPECTATORS]
+    .flatMap((channel) =>
+      trimNormalizedChatHistory(
+        normalized.filter((message) => message.channel === channel),
+      )
+    );
+  return history.sort((left, right) => left.sequence - right.sequence);
 }

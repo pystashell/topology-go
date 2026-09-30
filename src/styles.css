@@ -970,6 +970,39 @@ summary:focus-visible {
   font-size: 12px;
 }
 
+.chat-channel-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(5, 10, 8, 0.36);
+}
+
+.chat-channel-tabs[hidden] {
+  display: none;
+}
+
+.chat-channel-tabs button {
+  min-height: 32px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.chat-channel-tabs button[aria-pressed="true"] {
+  color: #1d160d;
+  background: linear-gradient(145deg, #e6bd70, #d3a253);
+  font-weight: 800;
+}
+
 .chat-connection {
   padding: 3px 7px;
   border-radius: 999px;
@@ -1026,6 +1059,10 @@ summary:focus-visible {
 
 .chat-message-meta .white-name {
   color: #f3eee2;
+}
+
+.chat-message-meta .spectator-name {
+  color: #a6d7ff;
 }
 
 .chat-bubble {
@@ -2161,6 +2198,13 @@ select:disabled {
 
 .online-match-options .section-heading {
   margin-bottom: 0;
+}
+
+.room-connected > .online-match-options {
+  margin: 0 0 10px;
+  padding: 10px;
+  border-color: rgba(215, 169, 91, 0.28);
+  background: rgba(215, 169, 91, 0.055);
 }
 
 .next-game-setup > div {

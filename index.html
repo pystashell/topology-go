@@ -188,7 +188,45 @@
             </div>
 
             <div id="room-connected" class="room-connected" hidden>
-              <div class="room-code-row">
+              <section id="online-match-options" class="online-match-options" hidden>
+                <div class="section-heading compact-heading">
+                  <h3>在线对局方式</h3>
+                  <span>棋局会同步并可供观战</span>
+                </div>
+                <label class="input-row" for="online-match-mode">
+                  <span>
+                    <strong>双方控制方式</strong>
+                    <small>好友需要接受邀请；其他模式由本浏览器控制</small>
+                  </span>
+                  <select id="online-match-mode">
+                    <option value="friend">邀请好友</option>
+                    <option value="human-ai">我和 AI</option>
+                    <option value="ai-ai">AI 对 AI</option>
+                    <option value="local">同机双人</option>
+                  </select>
+                </label>
+                <label id="online-match-ai-model-field" class="input-row" for="online-match-ai-model" hidden>
+                  <span>
+                    <strong>白方 AI</strong>
+                    <small>b18 更强，但下载和显存占用明显更高</small>
+                  </span>
+                  <select id="online-match-ai-model">
+                    <option value="b10">b10 · 快速</option>
+                    <option value="b18">b18 · 增强（高耗资源）</option>
+                  </select>
+                </label>
+                <label id="online-match-black-ai-model-field" class="input-row" for="online-match-black-ai-model" hidden>
+                  <span>
+                    <strong>黑方 AI</strong>
+                    <small>AI 对 AI 时黑白双方可分别选择模型</small>
+                  </span>
+                  <select id="online-match-black-ai-model">
+                    <option value="b10">b10 · 快速</option>
+                    <option value="b18">b18 · 增强（高耗资源）</option>
+                  </select>
+                </label>
+              </section>
+              <div id="friend-room-code-row" class="room-code-row">
                 <span>房间</span>
                 <strong id="room-code">------</strong>
                 <span id="local-role" class="role-badge">旁观</span>
@@ -208,7 +246,7 @@
                 <button id="detach-room-ai" class="text-button" type="button" hidden>移除在线 AI</button>
                 <small>在线 AI 由房主页面运行；服务器只验证棋步并同步给观众。</small>
               </div>
-              <div class="seat-list" aria-label="房间座位">
+              <div id="friend-seat-list" class="seat-list" aria-label="房间座位">
                 <div>
                   <span class="stone black small" aria-hidden="true"></span>
                   <span id="black-seat">等待黑方</span>
@@ -319,9 +357,13 @@
             <div class="chat-heading">
               <span>
                 <span class="eyebrow">实时联机</span>
-                <strong>对局聊天</strong>
+                <strong id="chat-channel-title">对局聊天</strong>
               </span>
               <span id="chat-connection" class="chat-connection">连接中</span>
+            </div>
+            <div id="chat-channel-tabs" class="chat-channel-tabs" role="group" aria-label="聊天频道" hidden>
+              <button type="button" data-chat-channel="spectators" aria-pressed="true">旁观聊天</button>
+              <button type="button" data-chat-channel="players" aria-pressed="false">对局聊天 · 只读</button>
             </div>
 
             <div id="chat-messages" class="chat-messages" role="log" aria-live="polite" aria-relevant="additions">
@@ -537,35 +579,6 @@
               <h2 id="settings-title">棋盘设置</h2>
               <span id="board-topology">19 路 · 竹筒</span>
             </div>
-
-            <section id="online-match-options" class="online-match-options" hidden>
-              <div class="section-heading compact-heading">
-                <h3>在线对局方式</h3>
-                <span>棋局会同步并可供观战</span>
-              </div>
-              <label class="input-row" for="online-match-mode">
-                <span>
-                  <strong>双方控制方式</strong>
-                  <small>好友需要接受邀请；其他模式由本浏览器控制</small>
-                </span>
-                <select id="online-match-mode">
-                  <option value="friend">邀请好友</option>
-                  <option value="human-ai">我和 AI</option>
-                  <option value="ai-ai">AI 对 AI</option>
-                  <option value="local">同机双人</option>
-                </select>
-              </label>
-              <label id="online-match-ai-model-field" class="input-row" for="online-match-ai-model" hidden>
-                <span>
-                  <strong>浏览器 AI</strong>
-                  <small>b18 更强，但下载和显存占用明显更高</small>
-                </span>
-                <select id="online-match-ai-model">
-                  <option value="b10">b10 · 快速</option>
-                  <option value="b18">b18 · 增强（高耗资源）</option>
-                </select>
-              </label>
-            </section>
 
             <section id="next-game-setup" class="next-game-setup" aria-live="polite" hidden>
               <div>
@@ -828,6 +841,14 @@
         <label class="dialog-field" for="ai-model">
           <span>AI 模型</span>
           <select id="ai-model" aria-describedby="ai-model-warning">
+            <option value="b10">b10 快速（特殊棋盘段位未测）</option>
+            <option value="b18">b18 增强（高耗资源 · 段位未测）</option>
+          </select>
+        </label>
+
+        <label id="ai-black-model-field" class="dialog-field" for="ai-black-model" hidden>
+          <span>黑方 AI 模型</span>
+          <select id="ai-black-model">
             <option value="b10">b10 快速（特殊棋盘段位未测）</option>
             <option value="b18">b18 增强（高耗资源 · 段位未测）</option>
           </select>

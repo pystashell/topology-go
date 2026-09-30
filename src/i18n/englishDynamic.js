@@ -22,6 +22,16 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "你": "You",
   "旁观": "Spectator",
   "旁观者": "Spectator",
+  "旁观聊天": "Spectator chat",
+  "对局聊天": "Game chat",
+  "只读：旁观者可以阅读对局聊天，但不能在这里发言。":
+    "Read-only: spectators can read game chat but cannot post here.",
+  "旁观聊天只对旁观者可见，不会显示给黑白双方。":
+    "Spectator chat is visible only to spectators and never appears for Black or White.",
+  "还没有旁观者消息。": "No spectator messages yet.",
+  "还没有对局聊天。": "No game chat yet.",
+  "已引用 📍 {label}；发送后当前频道可以点击定位。":
+    "Mentioned 📍 {label}; people in the current channel can jump to it after you send.",
   "人类玩家": "Human player",
   "人类": "Human",
   "双方和棋": "Draw",
@@ -610,8 +620,8 @@ export const ENGLISH_PATTERNS = Object.freeze([
     replace: (_, count, activity) => `${count} spectator${count === "1" ? "" : "s"} · ${capturedPhrase(activity)}`,
   },
   {
-    pattern: /^共 (\d+) 个公开房间 · 自动刷新$/u,
-    replace: (_, count) => `${count} public room${count === "1" ? "" : "s"} · auto-refreshing`,
+    pattern: /^共 (\d+) 个公开房间$/u,
+    replace: (_, count) => `${count} public room${count === "1" ? "" : "s"}`,
   },
   {
     pattern: /^你将以(.+)认输，对方立即获胜；不需要对方确认，此操作不能撤销。$/u,

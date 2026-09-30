@@ -47,3 +47,44 @@ test("lobby refresh reuses cards and lazily paints visible board previews", asyn
   assert.doesNotMatch(renderSource, /lobbyRoomList\.replaceChildren/u);
   assert.doesNotMatch(html, /id="lobby-room-list"[^>]+aria-live/u);
 });
+
+test("online match mode lives in the connected room header", async () => {
+  const html = await readFile(new URL("index.html", root), "utf8");
+  const roomConnected = html.indexOf('id="room-connected"');
+  const roomCodeRow = html.indexOf('id="friend-room-code-row"', roomConnected);
+  const roomActions = html.indexOf('<div class="room-actions"', roomConnected);
+  const onlineOptions = html.indexOf('id="online-match-options"');
+  const settings = html.indexOf('<section class="settings"');
+
+  assert.ok(roomConnected >= 0);
+  assert.ok(onlineOptions > roomConnected);
+  assert.ok(onlineOptions < roomCodeRow);
+  assert.ok(onlineOptions < roomActions);
+  assert.ok(settings > onlineOptions);
+  assert.equal(html.match(/id="online-match-options"/gu)?.length, 1);
+});
+
+test("friend invitation details are conditional on friend mode", async () => {
+  const [html, main] = await Promise.all([
+    readFile(new URL("index.html", root), "utf8"),
+    readFile(new URL("src/main.js", root), "utf8"),
+  ]);
+
+  assert.match(html, /id="friend-room-code-row"/u);
+  assert.match(html, /id="friend-seat-list"/u);
+  assert.match(main, /showFriendInvitationDetails = active && selectedOnlineMode === ONLINE_MODE_FRIEND/u);
+  assert.match(main, /elements\.friendRoomCodeRow\.hidden = !showFriendInvitationDetails/u);
+  assert.match(main, /elements\.copyRoomLink\.hidden = !showFriendInvitationDetails/u);
+  assert.match(main, /elements\.friendSeatList\.hidden = !showFriendInvitationDetails/u);
+});
+
+test("spectator chat has separate channel controls", async () => {
+  const html = await readFile(new URL("index.html", root), "utf8");
+  const main = await readFile(new URL("src/main.js", root), "utf8");
+
+  assert.match(html, /id="chat-channel-tabs"/u);
+  assert.match(html, /data-chat-channel="spectators"/u);
+  assert.match(html, /data-chat-channel="players"/u);
+  assert.match(main, /CHAT_CHANNEL_SPECTATORS/u);
+  assert.match(main, /canSendCurrentChatChannel/u);
+});

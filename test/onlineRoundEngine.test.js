@@ -190,10 +190,12 @@ test("non-friend online modes start immediately with browser-owned controllers",
   const aiAI = createSetupRoom();
   let aiSnapshot = request(aiAI, {
     mode: MATCH_MODE_AI_AI,
-    aiModelId: "b10",
+    aiModelIds: { black: "b18", white: "b10" },
   }, 1_100).room;
   assert.equal(aiSnapshot.match.controllers.black.kind, "ai");
   assert.equal(aiSnapshot.match.controllers.white.kind, "ai");
+  assert.equal(aiSnapshot.match.controllers.black.modelId, "b18");
+  assert.equal(aiSnapshot.match.controllers.white.modelId, "b10");
   aiSnapshot = aiAI.applyAction({
     playerId: "host",
     action: "ai_play",

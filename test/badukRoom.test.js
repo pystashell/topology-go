@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { BadukRoom } from "../worker/BadukRoom.js";
+import {
+  CHAT_CHANNEL_PLAYERS,
+  CHAT_CHANNEL_SPECTATORS,
+} from "../src/multiplayer/chat.js";
 
 function socketFor(identity) {
   const messages = [];
@@ -168,4 +172,52 @@ test("room persistence never depends on the optional one-way room index", async 
   assert.deepEqual(writes, [{ key: "room", value: { durable: true } }]);
   assert.equal(background.length, 1);
   await assert.doesNotReject(background[0]);
+});
+
+test("chat broadcasts keep spectator messages out of player sockets", () => {
+  const playerSocket = socketFor({
+    playerId: "black-player",
+    playerName: "Black",
+    role: "player",
+    color: "black",
+  });
+  const spectatorSocket = socketFor({
+    playerId: "viewer",
+    playerName: "Viewer",
+    role: "spectator",
+    color: null,
+  });
+  const durableObject = Object.create(BadukRoom.prototype);
+  durableObject.ctx = {
+    getWebSockets() {
+      return [playerSocket, spectatorSocket];
+    },
+  };
+
+  const playerMessage = {
+    id: "chat-player",
+    sequence: 1,
+    channel: CHAT_CHANNEL_PLAYERS,
+    senderRole: "player",
+    senderColor: "black",
+  };
+  const spectatorMessage = {
+    id: "chat-spectator",
+    sequence: 2,
+    channel: CHAT_CHANNEL_SPECTATORS,
+    senderRole: "spectator",
+    senderColor: null,
+  };
+
+  durableObject.broadcastChat(playerMessage);
+  durableObject.broadcastChat(spectatorMessage);
+
+  assert.deepEqual(
+    playerSocket.messages.map((message) => message.message.id),
+    ["chat-player"],
+  );
+  assert.deepEqual(
+    spectatorSocket.messages.map((message) => message.message.id),
+    ["chat-player", "chat-spectator"],
+  );
 });

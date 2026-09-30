@@ -14,7 +14,7 @@ test("single and online lobby remain separate, with an explicit navigation entry
   assert.match(htmlSource, /href="\/single">返回单人模式/u);
 });
 
-test("lobby networking is dynamically activated only on the lobby screen", () => {
+test("lobby networking loads once on entry without background polling", () => {
   assert.match(mainSource, /import\("\.\/multiplayer\/lobby\.js"\)/u);
   assert.match(mainSource, /import\("\.\/multiplayer\/lobbyClient\.js"\)/u);
   assert.doesNotMatch(
@@ -23,8 +23,9 @@ test("lobby networking is dynamically activated only on the lobby screen", () =>
   );
   assert.match(
     mainSource,
-    /function showAppScreen[\s\S]*?if \(lobbyVisible\) \{[\s\S]*?startLobbyRefresh\(\);[\s\S]*?return;/u,
+    /function showAppScreen[\s\S]*?if \(lobbyVisible\) \{[\s\S]*?loadLobbyOnce\(\);[\s\S]*?return;/u,
   );
+  assert.doesNotMatch(mainSource, /lobbyRefreshTimer|setInterval\(\(\) => void refreshLobby/u);
 });
 
 test("root, standalone, and direct-room startup have separate route branches", () => {

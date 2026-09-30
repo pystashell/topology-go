@@ -26,9 +26,12 @@ import {
   timeControlConfig,
 } from "../game/timeControl.js";
 import {
+  CHAT_CHANNEL_PLAYERS,
+  CHAT_CHANNEL_SPECTATORS,
   ChatValidationError,
+  chatChannelForRole,
   normalizeChatPayload,
-  trimStoredChatHistory,
+  trimStoredChatHistories,
 } from "./chat.js";
 import { isRoomCode, isRoomRole } from "./protocol.js";
 
@@ -322,7 +325,15 @@ function controller(kind, operatorId, modelId) {
   };
 }
 
-function controllersForMode({ mode, hostId, whiteId = null, aiModelId = "b10" }) {
+function controllersForMode({
+  mode,
+  hostId,
+  whiteId = null,
+  aiModelId = "b10",
+  aiModelIds = null,
+}) {
+  const blackAIModelId = aiModelIds?.[BLACK] ?? aiModelId;
+  const whiteAIModelId = aiModelIds?.[WHITE] ?? aiModelId;
   if (mode === MATCH_MODE_LOCAL) {
     return {
       [BLACK]: controller("human", hostId),
@@ -332,13 +343,13 @@ function controllersForMode({ mode, hostId, whiteId = null, aiModelId = "b10" })
   if (mode === MATCH_MODE_HUMAN_AI) {
     return {
       [BLACK]: controller("human", hostId),
-      [WHITE]: controller("ai", hostId, aiModelId),
+      [WHITE]: controller("ai", hostId, whiteAIModelId),
     };
   }
   if (mode === MATCH_MODE_AI_AI) {
     return {
-      [BLACK]: controller("ai", hostId, aiModelId),
-      [WHITE]: controller("ai", hostId, aiModelId),
+      [BLACK]: controller("ai", hostId, blackAIModelId),
+      [WHITE]: controller("ai", hostId, whiteAIModelId),
     };
   }
   return {
@@ -978,6 +989,7 @@ export class RoomEngine {
       chatSequence: 0,
       chatMessages: [],
       chatBucket: freshChatBucket(CHAT_ROOM_BURST, now),
+      spectatorChatBucket: freshChatBucket(CHAT_ROOM_BURST, now),
       spectatorCommandBucket: freshChatBucket(
         SPECTATOR_COMMAND_ROOM_BURST,
         now,
@@ -1026,7 +1038,7 @@ export class RoomEngine {
     state.roundArchive ??= [];
     state.allowLegacyNewGame ??= false;
     state.timeControl = persistedRoomTimeControl(state.timeControl);
-    state.chatMessages = trimStoredChatHistory(state.chatMessages);
+    state.chatMessages = trimStoredChatHistories(state.chatMessages);
     const latestChatSequence = state.chatMessages.reduce(
       (latest, message) => Math.max(latest, message.sequence),
       0,
@@ -1036,6 +1048,11 @@ export class RoomEngine {
       : latestChatSequence;
     state.chatBucket = restoredChatBucket(
       state.chatBucket,
+      CHAT_ROOM_BURST,
+      state.updatedAt,
+    );
+    state.spectatorChatBucket = restoredChatBucket(
+      state.spectatorChatBucket,
       CHAT_ROOM_BURST,
       state.updatedAt,
     );
@@ -1129,9 +1146,12 @@ export class RoomEngine {
     return clone({ ...this.state, game: serializeGame(this.game) });
   }
 
-  snapshot(nowInput) {
+  snapshot(nowInput, { viewerRole = "player" } = {}) {
     const now = readNow(nowInput);
     this.assertAvailable(now);
+    const visibleChatChannels = viewerRole === "spectator"
+      ? new Set([CHAT_CHANNEL_PLAYERS, CHAT_CHANNEL_SPECTATORS])
+      : new Set([CHAT_CHANNEL_PLAYERS]);
     const players = this.state.members
       .filter((member) => member.role === "player")
       .sort((left, right) =>
@@ -1230,7 +1250,11 @@ export class RoomEngine {
       timeControl,
       chat: {
         sequence: this.state.chatSequence,
-        messages: clone(this.state.chatMessages),
+        messages: clone(
+          this.state.chatMessages.filter((message) =>
+            visibleChatChannels.has(message.channel)
+          ),
+        ),
       },
       game,
       players,
@@ -1238,6 +1262,11 @@ export class RoomEngine {
       updatedAt: this.state.updatedAt,
       expiresAt: this.state.expiresAt,
     };
+  }
+
+  snapshotFor(playerId, nowInput) {
+    const member = this.requireMember(normalizePlayerId(playerId));
+    return this.snapshot(nowInput, { viewerRole: member.role });
   }
 
   identityFor(member) {
@@ -1272,7 +1301,7 @@ export class RoomEngine {
         changed: false,
         revision: this.state.revision,
         identity: this.identityFor(existing),
-        room: this.snapshot(now),
+        room: this.snapshotFor(existing.playerId, now),
       };
     }
 
@@ -1344,7 +1373,7 @@ export class RoomEngine {
       changed: true,
       revision: this.state.revision,
       identity: this.identityFor(member),
-      room: this.snapshot(now),
+      room: this.snapshotFor(member.playerId, now),
     };
   }
 
@@ -1380,7 +1409,7 @@ export class RoomEngine {
       revision: this.state.revision,
       identity: this.identityFor(member),
       move: { ok: true, type: "seat_claimed", color: WHITE },
-      room: this.snapshot(now),
+      room: this.snapshotFor(member.playerId, now),
     };
   }
 
@@ -1426,7 +1455,7 @@ export class RoomEngine {
       revision: this.state.revision,
       identity: this.identityFor(member),
       move: { ok: true, type: "seat_released", color: WHITE },
-      room: this.snapshot(now),
+      room: this.snapshotFor(member.playerId, now),
     };
   }
 
@@ -1483,7 +1512,7 @@ export class RoomEngine {
       identity,
       connectionId: normalizedConnectionId,
       revision: this.state.revision,
-      room: this.snapshot(now),
+      room: this.snapshotFor(member.playerId, now),
     };
   }
 
@@ -1573,6 +1602,10 @@ export class RoomEngine {
     const now = readNow(nowInput);
     this.prepare(now);
     const member = this.requireMember(normalizePlayerId(playerId));
+    const channel = chatChannelForRole(member.role);
+    if (!channel) {
+      throw new RoomEngineError("当前身份不能发送聊天消息。", 403, "FORBIDDEN");
+    }
     if (!Number.isSafeInteger(sequence) || sequence <= 0) {
       throw new RoomEngineError(
         "聊天消息缺少有效序号。",
@@ -1603,14 +1636,15 @@ export class RoomEngine {
     // payloads. This prevents malformed text and unknown stickers from
     // bypassing the storage-backed rate limit.
     member.chatBucket = memberSpend.bucket;
-    this.requirePlayer(member);
 
-    // Spectator abuse is charged only to that spectator's own bucket. The
-    // shared room budget belongs to authorized players, so rejected spectator
-    // traffic cannot silence the two people who are actually playing.
+    // Each audience has an independent shared budget, so spectator traffic can
+    // never silence the two people playing the game (and vice versa).
+    const roomBucketKey = channel === CHAT_CHANNEL_SPECTATORS
+      ? "spectatorChatBucket"
+      : "chatBucket";
     const roomSpend = spendChatToken(
       restoredChatBucket(
-        this.state.chatBucket,
+        this.state[roomBucketKey],
         CHAT_ROOM_BURST,
         this.state.updatedAt,
       ),
@@ -1626,7 +1660,7 @@ export class RoomEngine {
         true,
       );
     }
-    this.state.chatBucket = roomSpend.bucket;
+    this.state[roomBucketKey] = roomSpend.bucket;
 
     let normalized;
     try {
@@ -1651,6 +1685,7 @@ export class RoomEngine {
       senderName: member.name,
       senderRole: member.role,
       senderColor: member.color,
+      channel,
       kind: normalized.kind,
       ...(normalized.kind === "text"
         ? { text: normalized.text }
@@ -1667,7 +1702,7 @@ export class RoomEngine {
     };
 
     this.state.chatSequence = chatSequence;
-    this.state.chatMessages = trimStoredChatHistory([
+    this.state.chatMessages = trimStoredChatHistories([
       ...this.state.chatMessages,
       message,
     ]);
@@ -1690,7 +1725,7 @@ export class RoomEngine {
       return {
         changed: false,
         revision: this.state.revision,
-        room: this.snapshot(now),
+        room: this.snapshotFor(member.playerId, now),
       };
     }
     if (action === "leave") return this.leave({ playerId, now });
@@ -2110,21 +2145,18 @@ export class RoomEngine {
         const controlledColors = [BLACK, WHITE].filter(
           (color) => this.controllerFor(color)?.operatorId === member.playerId,
         );
-        for (const color of controlledColors) {
-          if (!this.state.scoreConfirmations.includes(color)) {
-            this.state.scoreConfirmations.push(color);
-          }
+        const requestedColor = VALID_COLORS.has(payload.color)
+          ? payload.color
+          : member.color;
+        if (!controlledColors.includes(requestedColor)) {
+          throw new RoomEngineError(
+            "当前身份不能确认这一方的点目结果。",
+            403,
+            "FORBIDDEN",
+          );
         }
-        const automated = this.automatedPlayer();
-        if (
-          automated &&
-          automated.controllerId === member.playerId &&
-          !this.state.scoreConfirmations.includes(automated.color)
-        ) {
-          // There is no remote AI process to click a confirmation button. The
-          // human controller's single confirmation represents both local
-          // seats, matching local human-vs-AI scoring and avoiding deadlock.
-          this.state.scoreConfirmations.push(automated.color);
+        if (!this.state.scoreConfirmations.includes(requestedColor)) {
+          this.state.scoreConfirmations.push(requestedColor);
         }
         const bothPlayersConfirmed = [BLACK, WHITE].every((color) =>
           this.state.scoreConfirmations.includes(color),
@@ -2133,7 +2165,7 @@ export class RoomEngine {
           move = {
             ...this.game.finishScoring(),
             type: "finish_scoring",
-            color: member.color,
+            color: requestedColor,
             scoreConfirmations: clone(this.state.scoreConfirmations),
           };
         } else {
@@ -2141,7 +2173,7 @@ export class RoomEngine {
             ok: true,
             type: "score_confirmation",
             phase: this.game.phase,
-            color: member.color,
+            color: requestedColor,
             scoreConfirmations: clone(this.state.scoreConfirmations),
           };
         }
@@ -2360,6 +2392,7 @@ export class RoomEngine {
           hostId: member.playerId,
           whiteId: this.humanWhitePlayer()?.playerId ?? null,
           aiModelId: payload.aiModelId ?? this.automatedPlayer()?.modelId ?? "b10",
+          aiModelIds: payload.aiModelIds,
         }),
         request: null,
         startedAt: now,
@@ -2847,6 +2880,7 @@ export class RoomEngine {
       hostId: member.playerId,
       whiteId: this.humanWhitePlayer()?.playerId ?? null,
       aiModelId: payload.aiModelId ?? "b10",
+      aiModelIds: payload.aiModelIds,
     });
     if (mode !== MATCH_MODE_FRIEND) {
       const occupiedWhite = this.state.members.find(

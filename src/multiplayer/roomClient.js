@@ -1,4 +1,4 @@
-import { trimStoredChatHistory } from "./chat.js";
+import { trimStoredChatHistories } from "./chat.js";
 import {
   BADUK_PROTOCOL_VERSION,
   BADUK_WS_PROTOCOL,
@@ -835,7 +835,7 @@ export class RoomClient {
         ...incoming,
         chat: {
           ...incoming.chat,
-          messages: trimStoredChatHistory(incoming.chat.messages),
+          messages: trimStoredChatHistories(incoming.chat.messages),
         },
       };
     }
@@ -868,7 +868,7 @@ export class RoomClient {
       return;
     }
     byId.set(message.id, message);
-    const messages = trimStoredChatHistory(
+    const messages = trimStoredChatHistories(
       [...byId.values()]
         .sort((left, right) => (left.sequence ?? 0) - (right.sequence ?? 0)),
     );

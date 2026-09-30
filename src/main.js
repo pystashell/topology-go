@@ -66,7 +66,10 @@ import {
   parseShareUrl,
 } from "./multiplayer/roomClient.js";
 import {
+  CHAT_CHANNEL_PLAYERS,
+  CHAT_CHANNEL_SPECTATORS,
   CHAT_STICKERS,
+  chatMessageChannel,
   chatSticker,
   COORDINATE_LETTERS,
   formatBoardCoordinate,
@@ -207,6 +210,8 @@ const elements = {
   onlineMatchMode: $("#online-match-mode"),
   onlineMatchAiModelField: $("#online-match-ai-model-field"),
   onlineMatchAiModel: $("#online-match-ai-model"),
+  onlineMatchBlackAiModelField: $("#online-match-black-ai-model-field"),
+  onlineMatchBlackAiModel: $("#online-match-black-ai-model"),
   timeControlPreset: $("#time-control-preset"),
   customTimeFields: $("#custom-time-fields"),
   mainTimeMinutes: $("#main-time-minutes"),
@@ -255,6 +260,7 @@ const elements = {
   openInviteButtons: [...document.querySelectorAll("[data-open-invite]")],
   joinInvitation: $("#join-invitation"),
   roomConnected: $("#room-connected"),
+  friendRoomCodeRow: $("#friend-room-code-row"),
   roomCode: $("#room-code"),
   localRole: $("#local-role"),
   copyRoomLink: $("#copy-room-link"),
@@ -271,7 +277,11 @@ const elements = {
   cancelGameInvitation: $("#cancel-game-invitation"),
   attachRoomAi: $("#attach-room-ai"),
   detachRoomAi: $("#detach-room-ai"),
+  friendSeatList: $("#friend-seat-list"),
   chatPanel: $("#chat-panel"),
+  chatChannelTitle: $("#chat-channel-title"),
+  chatChannelTabs: $("#chat-channel-tabs"),
+  chatChannelButtons: [...document.querySelectorAll("[data-chat-channel]")],
   chatConnection: $("#chat-connection"),
   chatMessages: $("#chat-messages"),
   chatEmpty: $("#chat-empty"),
@@ -299,6 +309,8 @@ const elements = {
   aiDialogTitle: $("#ai-dialog-title"),
   aiDialogIntro: $("#ai-dialog-intro"),
   aiModel: $("#ai-model"),
+  aiBlackModelField: $("#ai-black-model-field"),
+  aiBlackModel: $("#ai-black-model"),
   aiModelWarning: $("#ai-model-warning"),
   aiModelWarningTitle: $("#ai-model-warning-title"),
   aiModelWarningResource: $("#ai-model-warning-resource"),
@@ -369,7 +381,6 @@ const ONLINE_MODE_AI_AI = "ai-ai";
 const ONLINE_MODE_LOCAL = "local";
 let matchLifecycle = MATCH_LIFECYCLE_LOBBY;
 let lobbyPreviewFrame = null;
-let lobbyRefreshTimer = null;
 let lobbyRefreshController = null;
 let lobbyRooms = [];
 const lobbyRoomCards = new Map();
@@ -402,6 +413,8 @@ let chatReferenceTimer = null;
 let lastRenderedChatKey = "";
 let chatStatusMessage = "";
 let chatStatusError = false;
+let chatChannelView = CHAT_CHANNEL_PLAYERS;
+let chatChannelIdentityId = null;
 let offlineGameState = null;
 let aiActive = false;
 let aiMatchMode = "human-ai";
@@ -409,6 +422,10 @@ let aiAutoplayPaused = false;
 let aiHumanColor = BLACK;
 let preferredAIModelId = DEFAULT_AI_MODEL_ID;
 let aiGameModelId = DEFAULT_AI_MODEL_ID;
+let aiGameModelIds = {
+  [BLACK]: DEFAULT_AI_MODEL_ID,
+  [WHITE]: DEFAULT_AI_MODEL_ID,
+};
 let aiThinking = false;
 let aiWorker = null;
 let aiWorkerModelId = null;
@@ -475,8 +492,12 @@ function browserSupportsAIModel(modelId) {
 }
 
 function syncAIDialogModelPresentation() {
-  const model = getAIModel(elements.aiModel.value);
-  const supported = browserSupportsAIModel(model.id);
+  const mode = normalizeAIMatchMode(elements.aiMatchMode.value);
+  const selectedModels = mode === AI_MATCH_SELF_PLAY
+    ? [getAIModel(elements.aiBlackModel.value), getAIModel(elements.aiModel.value)]
+    : [getAIModel(elements.aiModel.value)];
+  const model = selectedModels.find((candidate) => candidate.heavy) ?? selectedModels[0];
+  const supported = selectedModels.every((candidate) => browserSupportsAIModel(candidate.id));
   elements.aiModelWarningTitle.textContent = model.heavy
     ? `${model.name} · ${translateText("增强模型 / 高耗资源")}`
     : `${model.name} · ${translateText("快速模型 / 轻量")}`;
@@ -492,6 +513,10 @@ function syncAIDialogModelPresentation() {
 let soundEnabled = savedSoundEnabled();
 preferredAIModelId = savedAIModelId();
 aiGameModelId = preferredAIModelId;
+aiGameModelIds = {
+  [BLACK]: preferredAIModelId,
+  [WHITE]: preferredAIModelId,
+};
 liveAnalysis.modelId = preferredAIModelId;
 const gameSounds = createGameSounds({ enabled: soundEnabled });
 
@@ -743,7 +768,7 @@ function clockDisplayName(color) {
     return operator?.name ?? roomSeat(color)?.name ?? translateText(colorName(color));
   }
   if (isAIMode()) {
-    if (isAIvsAI()) return `${getAIModel(aiGameModelId).shortLabel} AI`;
+    if (isAIvsAI()) return `${getAIModel(localAIModelId(color)).shortLabel} AI`;
     return color === aiHumanColor ? translateText("你") : getAIModel(aiGameModelId).shortLabel;
   }
   return translateText(colorName(color));
@@ -1103,9 +1128,40 @@ function formatReviewMove(move, height = boardHeight()) {
   return `${letter}${height - move.row}`;
 }
 
+function syncChatChannelIdentity() {
+  const identity = currentIdentity();
+  const identityId = identity.playerId ?? identity.id ?? "";
+  const role = identity.role ?? "";
+  if (chatChannelIdentityId !== identityId) {
+    chatChannelIdentityId = identityId;
+    chatChannelView = role === "spectator"
+      ? CHAT_CHANNEL_SPECTATORS
+      : CHAT_CHANNEL_PLAYERS;
+    lastRenderedChatKey = "";
+  }
+  if (role !== "spectator" && chatChannelView !== CHAT_CHANNEL_PLAYERS) {
+    chatChannelView = CHAT_CHANNEL_PLAYERS;
+    lastRenderedChatKey = "";
+  }
+}
+
+function isViewingSpectatorChat() {
+  return chatChannelView === CHAT_CHANNEL_SPECTATORS;
+}
+
+function canSendCurrentChatChannel() {
+  if (!roomClient.isConnected || chatSending) return false;
+  const identity = currentIdentity();
+  if (identity.role === "player") return chatChannelView === CHAT_CHANNEL_PLAYERS;
+  return identity.role === "spectator" && chatChannelView === CHAT_CHANNEL_SPECTATORS;
+}
+
 function currentChatMessages() {
+  syncChatChannelIdentity();
   return Array.isArray(onlineRoom?.chat?.messages)
-    ? onlineRoom.chat.messages
+    ? onlineRoom.chat.messages.filter(
+        (message) => chatMessageChannel(message) === chatChannelView,
+      )
     : [];
 }
 
@@ -1142,6 +1198,12 @@ function setChatStatus(message = "", error = false) {
 
 function defaultChatStatus() {
   if (!roomClient.isConnected) return "连接恢复后可以继续发送；当前草稿会保留。";
+  if (currentIdentity().role === "spectator" && chatChannelView === CHAT_CHANNEL_PLAYERS) {
+    return "只读：旁观者可以阅读对局聊天，但不能在这里发言。";
+  }
+  if (currentIdentity().role === "spectator") {
+    return "旁观聊天只对旁观者可见，不会显示给黑白双方。";
+  }
   if (!isOnlinePlayer()) return "旁观者可以阅读聊天，只有黑白双方可以发言。";
   if (chatPointPicking) return "请在棋盘上点击要引用的位置；这次点击不会落子。";
   return "文字不做内容审查；仅有技术性长度与频率限制。";
@@ -1202,9 +1264,13 @@ function renderChatMessage(message) {
   const meta = document.createElement("div");
   meta.className = "chat-message-meta";
   const name = document.createElement("span");
-  name.className = message.senderColor === BLACK ? "black-name" : "white-name";
+  name.className = message.senderRole === "spectator"
+    ? "spectator-name"
+    : message.senderColor === BLACK ? "black-name" : "white-name";
   name.dataset.i18nIgnore = "";
-  name.textContent = `${message.senderName} · ${translateText(colorName(message.senderColor))}`;
+  name.textContent = message.senderRole === "spectator"
+    ? `${message.senderName} · ${translateText("旁观者")}`
+    : `${message.senderName} · ${translateText(colorName(message.senderColor))}`;
   const time = document.createElement("time");
   time.dateTime = new Date(message.sentAt).toISOString();
   time.textContent = new Intl.DateTimeFormat(getLocale(), {
@@ -1257,6 +1323,7 @@ function renderChatHistory() {
   const displayedGame = liveDisplayedGame();
   const key = [
     onlineRoom?.code ?? "",
+    chatChannelView,
     boardWidth(displayedGame, ""),
     boardHeight(displayedGame, ""),
     displayedGame?.topology ?? "",
@@ -1287,10 +1354,24 @@ function renderChatHistory() {
 
 function syncChatUI() {
   const active = hasOnlineSession();
+  syncChatChannelIdentity();
+  const identity = currentIdentity();
+  const spectator = active && identity.role === "spectator";
   elements.chatPanel.hidden = false;
   elements.chatForm.hidden = !active;
+  elements.chatChannelTabs.hidden = !spectator;
+  elements.chatChannelTitle.textContent = isViewingSpectatorChat()
+    ? "旁观聊天"
+    : "对局聊天";
+  for (const button of elements.chatChannelButtons) {
+    const activeChannel = button.dataset.chatChannel === chatChannelView;
+    button.setAttribute("aria-pressed", String(activeChannel));
+    button.classList.toggle("active", activeChannel);
+  }
   elements.chatEmpty.textContent = active
-    ? "还没有消息，先和对手打个招呼吧。"
+    ? isViewingSpectatorChat()
+      ? "还没有旁观者消息。"
+      : "还没有对局聊天。"
     : "聊天需要进入联机房间；本地棋局的分析、棋谱、设置和复盘仍然完整可用。";
   if (!active) {
     chatPointPicking = false;
@@ -1302,10 +1383,11 @@ function syncChatUI() {
   }
 
   const connected = roomClient.isConnected;
-  const canSend = connected && isOnlinePlayer() && !chatSending;
-  if (!connected || !isOnlinePlayer()) {
+  const canSend = canSendCurrentChatChannel();
+  if (!canSend) {
     chatPointPicking = false;
     elements.boardStage.classList.remove("chat-coordinate-picking");
+    closeChatPickers();
   }
   elements.chatConnection.textContent = connected ? "实时连接" : "正在重连";
   elements.chatConnection.classList.toggle("connected", connected);
@@ -1354,7 +1436,7 @@ function insertChatText(text) {
 }
 
 function setChatPointPicking(enabled) {
-  chatPointPicking = Boolean(enabled) && roomClient.isConnected && isOnlinePlayer();
+  chatPointPicking = Boolean(enabled) && canSendCurrentChatChannel();
   closeChatPickers();
   elements.boardStage.classList.toggle(
     "chat-coordinate-picking",
@@ -1378,11 +1460,11 @@ function insertPickedChatPoint(row, col) {
     : "";
   insertChatText(`${prefix}${label} `);
   setChatPointPicking(false);
-  setChatStatus(`已引用 📍 ${label}；发送后双方都能点击定位。`);
+  setChatStatus(`已引用 📍 ${label}；发送后当前频道可以点击定位。`);
 }
 
 async function sendChatPayload(payload, { clearText = false } = {}) {
-  if (!roomClient.isConnected || !isOnlinePlayer() || chatSending) return;
+  if (!canSendCurrentChatChannel()) return;
   chatSending = true;
   setChatStatus("正在发送…");
   syncChatUI();
@@ -1433,6 +1515,7 @@ function applyOnlineChat({ message, chat }) {
   onlineRoom = { ...onlineRoom, chat };
   lastRenderedChatKey = "";
   syncChatUI();
+  if (chatMessageChannel(message) !== chatChannelView) return;
   if (
     message.senderId !== currentIdentity().playerId &&
     Array.isArray(message.points) &&
@@ -1454,6 +1537,8 @@ function resetChatSessionState({ clearDraft = true } = {}) {
   chatPointPicking = false;
   chatReferencePoint = null;
   chatReferenceFocusViews = false;
+  chatChannelIdentityId = null;
+  chatChannelView = CHAT_CHANNEL_PLAYERS;
   lastRenderedChatKey = "";
   setChatStatus("");
   if (chatReferenceTimer !== null) window.clearTimeout(chatReferenceTimer);
@@ -2281,8 +2366,15 @@ function isAIvsAI() {
   return isAIMode() && normalizeAIMatchMode(aiMatchMode) === AI_MATCH_SELF_PLAY;
 }
 
+function localAIModelId(color = game?.currentPlayer) {
+  if (isAIvsAI()) {
+    return normalizeAIModelId(aiGameModelIds[color] ?? aiGameModelId);
+  }
+  return normalizeAIModelId(aiGameModelId);
+}
+
 function currentAIName() {
-  return `KataGo ${topologyName()}混合 AI`;
+  return `KataGo ${getAIModel(localAIModelId()).shortLabel} ${topologyName()}混合 AI`;
 }
 
 function aiColor() {
@@ -2348,6 +2440,9 @@ function syncAIMatchModePresentation() {
   const mode = normalizeAIMatchMode(elements.aiMatchMode.value);
   const onlineSeatMode = hasOnlineSession();
   elements.aiMatchMode.closest(".dialog-field").hidden = onlineSeatMode;
+  elements.aiBlackModelField.hidden = onlineSeatMode || mode !== AI_MATCH_SELF_PLAY;
+  elements.aiModel.closest(".dialog-field").querySelector("span").textContent =
+    mode === AI_MATCH_SELF_PLAY ? "白方 AI 模型" : "AI 模型";
   elements.aiHumanColorField.hidden = onlineSeatMode || mode === AI_MATCH_SELF_PLAY;
   elements.aiDialogEyebrow.textContent = onlineSeatMode ? "在线 AI 座位" : "本机 AI 对手";
   elements.aiDialogTitle.textContent = onlineSeatMode
@@ -2390,9 +2485,10 @@ function showAIDialog() {
   }
   elements.aiMatchMode.value = aiMatchMode;
   elements.aiHumanColor.value = aiHumanColor;
+  elements.aiBlackModel.value = isAIMode() ? localAIModelId(BLACK) : preferredAIModelId;
   elements.aiModel.value = hasOnlineSession()
     ? normalizeAIModelId(onlineAISeat(WHITE)?.modelId ?? preferredAIModelId)
-    : isAIMode() ? aiGameModelId : preferredAIModelId;
+    : isAIMode() ? localAIModelId(WHITE) : preferredAIModelId;
   syncAIDialogModelPresentation();
   syncAIMatchModePresentation();
   if (typeof elements.aiDialog.showModal === "function") {
@@ -2477,7 +2573,7 @@ function handleAIWorkerMessage(event) {
   const message = event.data ?? {};
   if (message.id !== aiRequestId) return;
   if (message.type === "status") {
-    const model = getAIModel(aiWorkerContext?.modelId ?? aiGameModelId);
+    const model = getAIModel(aiWorkerContext?.modelId ?? localAIModelId());
     if (message.stage === "loading_model") {
       const progress = Number.isFinite(message.loadedBytes) && message.loadedBytes > 0
         ? ` · ${formatModelDownloadProgress(message.loadedBytes, model.id)}`
@@ -2540,7 +2636,7 @@ function maybeStartAITurn() {
   if (onlineTurn && aiFailedPositionToken === onlineRoom?.positionToken) return;
   const modelId = onlineTurn
     ? normalizeAIModelId(onlineSeat?.modelId)
-    : aiGameModelId;
+    : localAIModelId(game.currentPlayer);
   if (!browserSupportsAIModel(modelId)) {
     aiWorkerContext = {
       kind: onlineTurn ? MATCH_TRANSPORT_ONLINE : MATCH_TRANSPORT_LOCAL,
@@ -2623,7 +2719,12 @@ async function startAIGame(event) {
     return;
   }
   const requestedModelId = normalizeAIModelId(elements.aiModel.value);
-  if (!browserSupportsAIModel(requestedModelId)) {
+  const requestedBlackModelId = normalizeAIModelId(elements.aiBlackModel.value);
+  const requestedMatchMode = normalizeAIMatchMode(elements.aiMatchMode.value);
+  const requestedModelIds = requestedMatchMode === AI_MATCH_SELF_PLAY
+    ? [requestedBlackModelId, requestedModelId]
+    : [requestedModelId];
+  if (requestedModelIds.some((modelId) => !browserSupportsAIModel(modelId))) {
     syncAIDialogModelPresentation();
     setMessage("当前浏览器没有检测到 WebGPU，无法使用 b18；请选择 b10。", true);
     return;
@@ -2631,6 +2732,10 @@ async function startAIGame(event) {
   cancelAIThinking();
   preferredAIModelId = requestedModelId;
   aiGameModelId = requestedModelId;
+  aiGameModelIds = {
+    [BLACK]: requestedBlackModelId,
+    [WHITE]: requestedModelId,
+  };
   rememberPreferredAIModel();
   if (hasOnlineSession()) {
     const hadOnlineAI = Boolean(onlineAISeat(WHITE));
@@ -2650,7 +2755,7 @@ async function startAIGame(event) {
     if (!sent && hadOnlineAI) maybeStartAITurn();
     return;
   }
-  aiMatchMode = normalizeAIMatchMode(elements.aiMatchMode.value);
+  aiMatchMode = requestedMatchMode;
   aiHumanColor = elements.aiHumanColor.value === WHITE ? WHITE : BLACK;
   aiAutoplayPaused = false;
   aiActive = true;
@@ -2659,7 +2764,7 @@ async function startAIGame(event) {
   await startNewGame();
   setMessage(
     isAIvsAI()
-      ? `AI 自对弈已开始：黑白双方都由 ${currentAIName()} 控制。`
+      ? `AI 自对弈已开始：黑方 ${getAIModel(localAIModelId(BLACK)).shortLabel}，白方 ${getAIModel(localAIModelId(WHITE)).shortLabel}。`
       : aiHumanColor === BLACK
         ? `AI 对局已开始：你执黑，${currentAIName()} 执白。`
         : `AI 对局已开始：${currentAIName()} 执黑，正在思考第一手。`,
@@ -3055,7 +3160,7 @@ async function refreshLobby({ announce = false } = {}) {
     const { fetchLobbyRooms } = await loadLobbyModules();
     lobbyRooms = await fetchLobbyRooms({ signal: lobbyRefreshController.signal });
     await renderLobbyRooms();
-    elements.lobbyStatus.textContent = `共 ${lobbyRooms.length} 个公开房间 · 自动刷新`;
+    elements.lobbyStatus.textContent = `共 ${lobbyRooms.length} 个公开房间`;
   } catch (error) {
     if (error?.cause?.name === "AbortError") return;
     elements.lobbyStatus.textContent = error?.message || "暂时无法读取在线大厅。";
@@ -3067,20 +3172,14 @@ async function refreshLobby({ announce = false } = {}) {
   }
 }
 
-function stopLobbyRefresh() {
-  if (lobbyRefreshTimer !== null) {
-    window.clearInterval(lobbyRefreshTimer);
-    lobbyRefreshTimer = null;
-  }
+function cancelLobbyRequest() {
   lobbyRefreshController?.abort();
   lobbyRefreshController = null;
   lobbyLoading = false;
 }
 
-function startLobbyRefresh() {
-  if (lobbyRefreshTimer !== null) return;
+function loadLobbyOnce() {
   void refreshLobby({ announce: true });
-  lobbyRefreshTimer = window.setInterval(() => void refreshLobby(), 8_000);
 }
 
 function showAppScreen(mode) {
@@ -3090,10 +3189,10 @@ function showAppScreen(mode) {
   elements.gameScreen.hidden = lobbyVisible;
   elements.headerTopologySwitch.hidden = lobbyVisible;
   if (lobbyVisible) {
-    startLobbyRefresh();
+    loadLobbyOnce();
     return;
   }
-  stopLobbyRefresh();
+  cancelLobbyRequest();
   window.requestAnimationFrame(() => {
     cylinderView?.resize?.();
     torusView?.resize?.();
@@ -3316,6 +3415,7 @@ function updateRoomUI() {
   ).length;
   const scoreConfirmations = onlineRoom?.scoreConfirmations ?? [];
   const ownScoreConfirmed = scoreConfirmations.includes(identity.color);
+  const nextScoreColor = active ? nextScoreConfirmationColor() : null;
   const hasBothPlayers = active ? onlineControllersReady() : true;
   const undoRequest = currentUndoRequest();
   const ownUndoRequest = isOwnUndoRequest(undoRequest);
@@ -3371,12 +3471,14 @@ function updateRoomUI() {
 
   if (aiMode) {
     elements.aiOpponentName.textContent = isAIvsAI() ? "KataGo AI 自对弈" : currentAIName();
-    elements.aiLevelBadge.textContent = getAIModel(aiGameModelId).badgeLabel;
+    elements.aiLevelBadge.textContent = isAIvsAI()
+      ? `${getAIModel(localAIModelId(BLACK)).badgeLabel} / ${getAIModel(localAIModelId(WHITE)).badgeLabel}`
+      : getAIModel(aiGameModelId).badgeLabel;
     elements.aiBlackSeat.textContent = isAIvsAI()
-      ? `AI · 黑方 · ${getAIModel(aiGameModelId).shortLabel}`
+      ? `AI · 黑方 · ${getAIModel(localAIModelId(BLACK)).shortLabel}`
       : aiHumanColor === BLACK ? "你 · 黑方" : "AI · 黑方";
     elements.aiWhiteSeat.textContent = isAIvsAI()
-      ? `AI · 白方 · ${getAIModel(aiGameModelId).shortLabel}`
+      ? `AI · 白方 · ${getAIModel(localAIModelId(WHITE)).shortLabel}`
       : aiHumanColor === WHITE ? "你 · 白方" : "AI · 白方";
     elements.toggleAiAutoplay.hidden = !isAIvsAI();
     elements.toggleAiAutoplay.textContent = aiAutoplayPaused ? "继续对弈" : "暂停对弈";
@@ -3599,13 +3701,13 @@ function updateRoomUI() {
   elements.approveUndo.disabled = reviewing || !onlineControlsAvailable || ownUndoRequest;
   elements.declineUndo.disabled = reviewing || !onlineControlsAvailable || ownUndoRequest;
   elements.cancelUndoRequest.disabled = reviewing || !onlineControlsAvailable || !ownUndoRequest;
-  elements.confirmScore.disabled = !match.capabilities.finish_scoring || (active && ownScoreConfirmed);
+  elements.confirmScore.disabled = !match.capabilities.finish_scoring || (active && !nextScoreColor);
   elements.resumeGame.disabled = !match.capabilities.resume_play;
-  elements.confirmScore.textContent = active && ownScoreConfirmed
-    ? "已确认，等待对方"
-    : active && scoreConfirmations.length > 0
-      ? "确认同意结果"
-      : "确认结果";
+  elements.confirmScore.textContent = active
+    ? nextScoreColor
+      ? `确认${colorName(nextScoreColor)}结果`
+      : "已确认，等待对方"
+    : "确认结果";
 
   const canChangeNextGameSettings = (
     lobby || (rematchSetup && (!active || isOnlineHost()))
@@ -3646,8 +3748,15 @@ function updateRoomUI() {
   const onlineModeUsesAI = [ONLINE_MODE_HUMAN_AI, ONLINE_MODE_AI_AI].includes(
     selectedOnlineMode,
   );
+  const onlineModeUsesBlackAI = selectedOnlineMode === ONLINE_MODE_AI_AI;
+  elements.onlineMatchBlackAiModelField.hidden = !onlineModeUsesBlackAI;
   elements.onlineMatchAiModelField.hidden = !onlineModeUsesAI;
+  elements.onlineMatchBlackAiModel.disabled = !canChangeNextGameSettings || !onlineModeUsesBlackAI;
   elements.onlineMatchAiModel.disabled = !canChangeNextGameSettings || !onlineModeUsesAI;
+  const showFriendInvitationDetails = active && selectedOnlineMode === ONLINE_MODE_FRIEND;
+  elements.friendRoomCodeRow.hidden = !showFriendInvitationDetails;
+  elements.copyRoomLink.hidden = !showFriendInvitationDetails;
+  elements.friendSeatList.hidden = !showFriendInvitationDetails;
   if (elements.nextGameSetup) {
     elements.nextGameSetup.hidden = !rematchSetup;
     elements.nextGameContext.textContent = active ? "当前在线房间" : "沿用上一局";
@@ -3720,6 +3829,7 @@ function rememberOfflineGame() {
       autoplayPaused: aiAutoplayPaused,
       humanColor: aiHumanColor,
       modelId: aiGameModelId,
+      modelIds: { ...aiGameModelIds },
     },
   };
 }
@@ -3795,6 +3905,10 @@ function restoreOfflineGame() {
   aiAutoplayPaused = Boolean(offlineGameState.ai?.autoplayPaused) && aiMatchMode === AI_MATCH_SELF_PLAY;
   aiHumanColor = offlineGameState.ai?.humanColor === WHITE ? WHITE : BLACK;
   aiGameModelId = normalizeAIModelId(offlineGameState.ai?.modelId);
+  aiGameModelIds = {
+    [BLACK]: normalizeAIModelId(offlineGameState.ai?.modelIds?.[BLACK] ?? offlineGameState.ai?.modelId),
+    [WHITE]: normalizeAIModelId(offlineGameState.ai?.modelIds?.[WHITE] ?? offlineGameState.ai?.modelId),
+  };
   if (aiActive) {
     preferredAIModelId = aiGameModelId;
     rememberPreferredAIModel();
@@ -3937,10 +4051,7 @@ function applyOnlineRoom(room) {
   onlineRoom = room;
   if (!isOnlineNextGameSetup()) {
     elements.onlineMatchMode.value = room.match?.mode ?? ONLINE_MODE_FRIEND;
-    const modelId = [BLACK, WHITE]
-      .map((color) => room.match?.controllers?.[color]?.modelId)
-      .find(Boolean);
-    elements.onlineMatchAiModel.value = normalizeAIModelId(modelId ?? aiGameModelId);
+    reflectOnlineAIModelControls(room.match?.controllers);
   }
   const {
     nextRoundStarted,
@@ -4011,10 +4122,7 @@ function applyOnlineRoom(room) {
     rematchSetupTransport = MATCH_TRANSPORT_ONLINE;
     rematchPreviewGame = new GoEngine(options);
     elements.onlineMatchMode.value = room.match?.request?.mode ?? room.match?.mode ?? ONLINE_MODE_FRIEND;
-    const requestedAI = [BLACK, WHITE]
-      .map((color) => room.match?.request?.controllers?.[color]?.modelId)
-      .find(Boolean);
-    elements.onlineMatchAiModel.value = normalizeAIModelId(requestedAI ?? aiGameModelId);
+    reflectOnlineAIModelControls(room.match?.request?.controllers ?? room.match?.controllers);
     rebuildViews(options.width, options.height, options.topology);
     setViewMode(activeViewMode);
     setSidebarTab("settings");
@@ -4390,12 +4498,44 @@ function selectedOnlineMatchMode() {
   ].includes(mode) ? mode : ONLINE_MODE_FRIEND;
 }
 
+function selectedOnlineAIModelIds() {
+  return {
+    [BLACK]: normalizeAIModelId(elements.onlineMatchBlackAiModel.value),
+    [WHITE]: normalizeAIModelId(elements.onlineMatchAiModel.value),
+  };
+}
+
+function reflectOnlineAIModelControls(controllers = null) {
+  const blackModel = normalizeAIModelId(
+    controllers?.[BLACK]?.modelId ?? elements.onlineMatchBlackAiModel.value ?? preferredAIModelId,
+  );
+  const whiteModel = normalizeAIModelId(
+    controllers?.[WHITE]?.modelId ?? elements.onlineMatchAiModel.value ?? preferredAIModelId,
+  );
+  elements.onlineMatchBlackAiModel.value = blackModel;
+  elements.onlineMatchAiModel.value = whiteModel;
+}
+
 function onlineGameRequestPayload(options) {
+  const aiModelIds = selectedOnlineAIModelIds();
   return {
     ...options,
     mode: selectedOnlineMatchMode(),
-    aiModelId: normalizeAIModelId(elements.onlineMatchAiModel.value),
+    aiModelId: aiModelIds[WHITE],
+    aiModelIds,
   };
+}
+
+function nextScoreConfirmationColor() {
+  if (!hasOnlineSession()) return null;
+  const confirmed = new Set(onlineRoom?.scoreConfirmations ?? []);
+  const identity = currentIdentity();
+  const identityId = identity.playerId ?? identity.id;
+  for (const color of [BLACK, WHITE]) {
+    if (confirmed.has(color)) continue;
+    if (onlineController(color)?.operatorId === identityId) return color;
+  }
+  return null;
 }
 
 async function requestOnlineGame(options) {
@@ -4411,10 +4551,13 @@ async function requestOnlineGame(options) {
     return false;
   }
   const mode = selectedOnlineMatchMode();
-  const modelId = normalizeAIModelId(elements.onlineMatchAiModel.value);
+  const aiModelIds = selectedOnlineAIModelIds();
+  const selectedModelIds = mode === ONLINE_MODE_AI_AI
+    ? [aiModelIds[BLACK], aiModelIds[WHITE]]
+    : [aiModelIds[WHITE]];
   if (
     [ONLINE_MODE_HUMAN_AI, ONLINE_MODE_AI_AI].includes(mode) &&
-    getAIModel(modelId).heavy &&
+    selectedModelIds.some((modelId) => getAIModel(modelId).heavy) &&
     !window.confirm(translateText(
       "b18 首次需要下载约 93.4 MB，并会占用数百 MB 内存与显存、增加耗电和发热。仅建议桌面端 WebGPU。确定使用吗？",
     ))
@@ -4438,6 +4581,7 @@ function currentLocalNextGameAIState() {
     matchMode: aiMatchMode,
     humanColor: aiHumanColor,
     modelId: aiGameModelId,
+    modelIds: { ...aiGameModelIds },
     autoplayPaused: aiAutoplayPaused,
   };
 }
@@ -4448,6 +4592,10 @@ function applyLocalNextGameAIState(state) {
   aiMatchMode = state.matchMode;
   aiHumanColor = state.humanColor;
   aiGameModelId = state.modelId;
+  aiGameModelIds = {
+    [BLACK]: normalizeAIModelId(state.modelIds?.[BLACK] ?? state.modelId),
+    [WHITE]: normalizeAIModelId(state.modelIds?.[WHITE] ?? state.modelId),
+  };
   aiAutoplayPaused = state.autoplayPaused;
 }
 
@@ -4592,10 +4740,7 @@ function enterNextGameSetup() {
   rematchPreviewGame = new GoEngine(options);
   if (hasOnlineSession()) {
     elements.onlineMatchMode.value = onlineRoom?.match?.mode ?? ONLINE_MODE_FRIEND;
-    const modelId = [BLACK, WHITE]
-      .map((color) => onlineRoom?.match?.controllers?.[color]?.modelId)
-      .find(Boolean);
-    elements.onlineMatchAiModel.value = normalizeAIModelId(modelId ?? aiGameModelId);
+    reflectOnlineAIModelControls(onlineRoom?.match?.controllers);
   }
   setSidebarTab("settings", { focus: true });
   resetLobbyPreview({
@@ -5692,7 +5837,11 @@ elements.cancelUndoRequest.addEventListener("click", () => {
 });
 
 elements.confirmScore.addEventListener("click", () => {
-  void dispatchMatchAction(MATCH_ACTION_FINISH_SCORING);
+  const color = nextScoreConfirmationColor();
+  void dispatchMatchAction(
+    MATCH_ACTION_FINISH_SCORING,
+    color ? { color } : {},
+  );
 });
 
 elements.resumeGame.addEventListener("click", () => {
@@ -5709,6 +5858,7 @@ elements.confirmNextGame.addEventListener("click", () => {
 });
 elements.onlineMatchMode.addEventListener("change", updateUI);
 elements.onlineMatchAiModel.addEventListener("change", updateUI);
+elements.onlineMatchBlackAiModel.addEventListener("change", updateUI);
 elements.acceptGameInvitation.addEventListener("click", () => {
   const requestRevision = onlineRoom?.match?.request?.requestRevision;
   if (!Number.isSafeInteger(requestRevision)) return;
@@ -6164,6 +6314,7 @@ elements.leaveAi.addEventListener("click", leaveAIGame);
 elements.toggleAiAutoplay.addEventListener("click", toggleAIAutoplay);
 elements.aiForm.addEventListener("submit", (event) => void startAIGame(event));
 elements.aiModel.addEventListener("change", syncAIDialogModelPresentation);
+elements.aiBlackModel.addEventListener("change", syncAIDialogModelPresentation);
 elements.aiMatchMode.addEventListener("change", syncAIMatchModePresentation);
 elements.aiReviewModel.addEventListener("change", () => {
   const requested = normalizeAIModelId(elements.aiReviewModel.value);
@@ -6284,6 +6435,19 @@ elements.chatSticker.addEventListener("click", () => toggleChatPicker("sticker")
 elements.chatPoint.addEventListener("click", () => {
   setChatPointPicking(!chatPointPicking);
 });
+for (const button of elements.chatChannelButtons) {
+  button.addEventListener("click", () => {
+    if (currentIdentity().role !== "spectator") return;
+    const channel = button.dataset.chatChannel;
+    if (![CHAT_CHANNEL_PLAYERS, CHAT_CHANNEL_SPECTATORS].includes(channel)) return;
+    if (chatChannelView === channel) return;
+    chatChannelView = channel;
+    lastRenderedChatKey = "";
+    setChatStatus("");
+    setChatPointPicking(false);
+    syncChatUI();
+  });
+}
 elements.toggleSound.addEventListener("click", () => {
   soundEnabled = !soundEnabled;
   gameSounds.setEnabled(soundEnabled);
@@ -6346,7 +6510,10 @@ void loadVersionLabel();
 setPendingDimensions(19, 19);
 setPendingTopology(TOPOLOGY_CYLINDER);
 elements.aiModel.value = preferredAIModelId;
+elements.aiBlackModel.value = preferredAIModelId;
 elements.aiMatchMode.value = aiMatchMode;
+elements.onlineMatchBlackAiModel.value = preferredAIModelId;
+elements.onlineMatchAiModel.value = preferredAIModelId;
 syncAIDialogModelPresentation();
 syncAIMatchModePresentation();
 game = new GoEngine({
@@ -6459,7 +6626,7 @@ window.addEventListener(
   () => {
     cancelAIThinking();
     cancelReplayAIReview({ terminate: true });
-    stopLobbyRefresh();
+    cancelLobbyRequest();
     if (clockTimer !== null) window.clearInterval(clockTimer);
     cylinderView.destroy();
     torusView.destroy();

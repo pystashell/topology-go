@@ -345,3 +345,17 @@ test("lobby pruning drops stale rooms and keeps the newest order", () => {
     ["CURR23", "OLDER2"],
   );
 });
+
+test("lobby entries follow the room expiry without an independent index TTL", () => {
+  const roomOwnedExpiry = lobbySummaryFromRoom(room({
+    code: "LIVE24",
+    updatedAt: 1_000,
+    expiresAt: 100_000_000,
+  }));
+
+  assert.deepEqual(
+    pruneLobbyRooms([roomOwnedExpiry], 99_000_000).map(({ code }) => code),
+    ["LIVE24"],
+  );
+  assert.deepEqual(pruneLobbyRooms([roomOwnedExpiry], 100_000_000), []);
+});

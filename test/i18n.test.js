@@ -254,7 +254,7 @@ test("public lobby and online invitation copy is available in English", () => {
     ["1 小时前", "1 hour ago"],
     ["2 人观战 · 刚刚更新", "2 spectators · updated just now"],
     ["3 人观战 · 4 分钟前", "3 spectators · 4 minutes ago"],
-    ["共 12 个公开房间 · 自动刷新", "12 public rooms · auto-refreshing"],
+    ["共 12 个公开房间", "12 public rooms"],
     ["返回房间", "Return to room"],
     ["返回大厅", "Back to lobby"],
     ["观战", "Watch"],

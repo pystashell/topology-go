@@ -14,6 +14,7 @@ import {
   RoomEngine,
   RoomEngineError,
 } from "../src/multiplayer/roomEngine.js";
+import { CHAT_CHANNEL_SPECTATORS } from "../src/multiplayer/chat.js";
 
 const STORAGE_KEY = "room";
 const MAX_SOCKET_CONNECTIONS = 64;
@@ -175,7 +176,7 @@ export class BadukRoom {
         value.v === BADUK_PROTOCOL_VERSION &&
         value.type === "join"
       ) {
-        this.sendWelcome(socket, attachment.identity, this.engine.snapshot());
+        this.sendWelcome(socket, attachment.identity);
         return;
       }
 
@@ -385,7 +386,7 @@ export class BadukRoom {
         message: "这条命令已经过期，已同步最新棋局。",
         retryable: true,
       });
-      this.sendState(socket, this.engine.snapshot());
+      this.sendState(socket);
       return;
     }
 
@@ -567,21 +568,38 @@ export class BadukRoom {
     }
   }
 
-  sendWelcome(socket, identity, room) {
+  roomForSocket(socket, fallback = null) {
+    const attachment = this.readAttachment(socket);
+    if (!this.engine || !attachment.identity?.playerId) return fallback;
+    try {
+      if (typeof this.engine.snapshotFor === "function") {
+        return this.engine.snapshotFor(attachment.identity.playerId);
+      }
+      if (typeof this.engine.snapshot === "function") return this.engine.snapshot();
+    } catch {
+      return fallback;
+    }
+    return fallback;
+  }
+
+  sendWelcome(socket, identity, room = null) {
+    const safeRoom = this.roomForSocket(socket, room);
     this.safeSend(socket, {
       v: BADUK_PROTOCOL_VERSION,
       type: "welcome",
       identity,
       self: identity,
-      room,
+      room: safeRoom,
       serverTime: Date.now(),
     });
   }
 
-  sendState(socket, room) {
+  sendState(socket, room = null) {
     const attachment = this.readAttachment(socket);
+    const safeRoom = this.roomForSocket(socket, room);
+    if (!safeRoom) return;
     this.safeSend(socket, {
-      ...makeStateMessage(room),
+      ...makeStateMessage(safeRoom),
       self: attachment.identity,
       identity: attachment.identity,
     });
@@ -589,13 +607,7 @@ export class BadukRoom {
 
   broadcastState(excluded) {
     if (!this.engine) return;
-    let room;
-    try {
-      room = this.engine.snapshot();
-    } catch {
-      return;
-    }
-    for (const socket of this.joinedSockets(excluded)) this.sendState(socket, room);
+    for (const socket of this.joinedSockets(excluded)) this.sendState(socket);
   }
 
   broadcastPresence(excluded) {
@@ -612,7 +624,13 @@ export class BadukRoom {
 
   broadcastChat(message) {
     const event = makeChatMessage(message);
-    for (const socket of this.joinedSockets()) this.safeSend(socket, event);
+    for (const socket of this.joinedSockets()) {
+      const role = this.readAttachment(socket).identity?.role ?? null;
+      if (message?.channel === CHAT_CHANNEL_SPECTATORS && role !== "spectator") {
+        continue;
+      }
+      this.safeSend(socket, event);
+    }
   }
 
   joinedSockets(excluded) {

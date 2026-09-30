@@ -1,138 +1,240 @@
-# 3D Baduk（奇异棋盘围棋）
+# Topology Go: Baduk Beyond Flat Boards
 
-一个探索不同曲面与拓扑的 3D 围棋项目。目前可以在“竹筒”“甜甜圈”和“莫比乌斯”之间切换；棋盘形状不只是视觉效果，连通、数气、提子、超级劫和点目都会使用所选拓扑。
+A fully playable Go game on cylinders, tori, and Möbius strips—built during OpenAI Build Week with Codex and GPT-5.6.
 
-## 在线游玩
+**Live demo:**
+https://topology-go.pystashell.workers.dev/
 
-**[立即开始 3D Baduk](https://bamboo-baduk.pystashell.workers.dev/)**
+---
 
-根地址会进入 `/single`：棋盘只是可拖动、可旋转的实时预览，不会自动开局、启动 AI 或连接服务器。先在“棋盘设置”里调整形状、宽高、规则和计时，再选择本地双人、KataGo AI、AI 自对弈或创建在线房间。在线房间创建后同样先停在设置阶段；房主发起好友、人机、AI 对 AI 或同机双人对局，好友模式必须由白方明确接受后才会开局。无论双方由谁控制，在线房的每一步都会同步，知道房间码的朋友可以随时进入观战；“仅观战”不会占用棋手席位。
+## The idea
 
-## 棋盘形状
+Traditional Go is played on a flat rectangular board with clear edges and corners.
 
-### 竹筒
+Topology Go begins with a different question:
 
-- 左右首尾相接，上下仍是边界
-- 平面展开可横向周期滑动
-- 提供平面、可循环平移的弧面，以及完整 3D 竹筒视图
+> What would Go feel like on a board without traditional boundaries?
 
-### 甜甜圈
+My original idea was to create Go on a sphere. While exploring the geometry, however, I discovered that a regular rectangular Go grid does not fit naturally on a sphere without distortion or irregular intersections.
 
-- 左右相接，同时上下相接；每一个棋点都有四个邻点
-- 平面展开可向上下左右或斜向周期滑动，并在两个方向按整格吸附
-- 3D 视图是可以自由旋转和缩放的甜甜圈
-- 3D 主光和补光跟随玩家视角，并有柔和全向保底光；转到内圈或背光侧时棋线与棋子仍然清楚
-- 这种棋盘在数学上是环面；环面无法无失真地嵌入三维空间，因此内圈格子会比外圈密，平面展开是更适合判断全局的主视图
+That led to a more interesting direction: connecting the edges of a normal board in different ways.
 
-### 莫比乌斯
+The same rectangular grid can become:
 
-- 左右倒序相接：一侧第 1 行连接另一侧末行；上下保留为同一圈边界
-- 没有传统棋盘的四个角，但边界点仍是三口气，中腹点是四口气
-- 平面展开可横向连续滑动；滑过一圈后整盘上下翻转，滑过两圈恢复方向
-- 3D 视图是一条可自由旋转的双面渲染莫比乌斯带；棋子、AI 标记、聊天坐标和复盘都与平面上的同一个逻辑棋点对应
-- 莫比乌斯与甜甜圈复用同一套玩家视角补光，翻到带子的另一侧也不会出现无法下棋的暗面
+- A **cylinder**, where the left and right edges connect
+- A **torus**, where both pairs of opposite edges connect
+- A **Möbius strip**, where one pair of edges connects with reversed orientation
 
-## 已实现
+These surfaces are not visual skins. Their topology changes adjacency, liberties, captures, territory, escape routes, connections, and strategy.
 
-- 9×9、13×13、19×19 快捷尺寸，以及宽、高分别为 5–30 路的自定义矩形棋盘；30 列以上使用 AA–AE 扩展坐标
-- 竹筒、甜甜圈与莫比乌斯拓扑进入完整规则引擎、离线恢复、在线房间和 Durable Object 持久化
-- 跨任意接缝连通、数气、提子、领地遍历与整组死子标记
-- 禁止自杀和位置超级劫
-- 双方连续停一手后进入点目；系统会保守预标能够严格确认的死棋，并在平面、弧面与三种立体棋盘上同步标出黑地、白地，未定区域和公气保持空白，玩家仍可逐块修正死活
-- 中国面积规则与日本数目规则，可配置贴目
-- 可选无计时、5 分钟快棋、20 分钟标准、45 分钟长考或自定义主时间 + 日式读秒；联机由服务端权威计时，断线不暂停，超时结果可导出为标准 SGF `B+T/W+T`
-- 参考 OGS 的桌面信息层级：黑白时钟卡常驻，棋局、AI 分析、聊天、棋谱和棋盘设置归入可切换侧栏
-- 首次访问按浏览器语言选择简体中文或英文，右上角可随时切换并记住本机偏好；玩家名、聊天正文和 SGF 原文不会被翻译
-- 本地和联机共用同一个 `MatchSession`、同一组业务动作与同一份侧栏 DOM；落子、停一手、悔棋、认输、新局和点目只在最后一步选择“本地规则引擎”或“联机同步”适配器。五个侧栏标签始终可见，本地聊天页会说明需要联机，而不会连同其他功能一起消失
-- 唯一内置对手为 KataGo 混合 AI：神经网络负责全盘落点判断，拓扑感知 MCTS 按真实接缝验证与搜索
-- 竹筒模式使用横向循环卷积；甜甜圈模式同时使用横向和纵向循环卷积；莫比乌斯模式的每一层横向卷积都会从对边倒序取行。可选择约 10.6 MiB 的快速 b10 或约 93.4 MiB 的增强 b18，之后由浏览器缓存，无需账号或第三方 API
-- AI 在浏览器 Web Worker 中运行；模型失败时会明确退出 AI 对战，不会暗中换用另一个对手
-- 本地交替模式预览下一手棋子；AI 与真人联机只在轮到本地玩家时显示落子预览
-- 桌面端统一使用左键点击落子；右键拖动用于浏览棋盘：平面/弧面循环平移，立体视图旋转。右键不会落子并会抑制棋盘上的浏览器菜单；触屏仍使用轻点落子、单指拖动浏览和双指缩放
-- 落子使用短促的木质音效，提子另有清脆反馈并会随提子数量轻微变化；右上角可随时关闭音效
-- 本地交替模式可撤回上一手；AI 对局提供“直接悔棋”，AI 已应手时会同时撤回 AI 应手和玩家上一手，回到玩家上次决策点；真人联机提供“申请悔棋”，必须由对手同意才撤回最新一手，对手可拒绝，申请方也可取消
-- 开始 AI 对局、创建在线房间或加入房间后，侧栏会自动回到“棋局”页，确保停一手、悔棋和认输等对局操作立即可见
-- 支持二次确认认输：本地交替由当前行棋方认输，人机对局始终由人类方认输；真人联机不受当前轮次限制，服务端按已认证棋手身份立即判负，无需对手同意。旁观、复盘和 AI 自对弈不能认输
-- 认输结果会进入完整复盘并随在线房间持久化；SGF 使用标准 `RE[B+R]` / `RE[W+R]`，普通围棋软件也能识别胜方与认输结果
-- 所有棋盘和对局模式共用完整复盘：可逐手前后跳转、拖动时间轴、调速自动播放，并在复盘途中自由切换平面、弧面和可用的立体视图；最终死子标记和点目结果也会还原，棋谱独立于有限的悔棋记录
-- 复盘中可让 KataGo 深入分析当前局面，或串行快速分析整局；每一步显示最多五个候选、访问占比和最多八手后续变化。在棋盘候选标记或侧栏候选上悬停、或用键盘聚焦都可临时预演，点击侧栏候选可固定分支；标记会同步出现在平面、弧面和当前立体视图上
-- AI 复盘结果按模型和手数分别缓存，整局分析可随时停止；当前“搜索估值”来自拓扑感知短搜索，不冒充官方 KataGo 胜率或精确目差
-- 在线房间支持 setup-first 对局邀请、邀请接受/拒绝/取消、邀请链接、旁观、服务端权威判定、双方点目确认、协商悔棋、服务端认输判定、断线回座与 24 小时无活动清理。房间可连续保存最多 24 轮完整棋谱；每轮结束后既可沿用设置，也可在同一房间调整下一轮，房间号、成员、观众和聊天记录持续保留
-- 在线和本地都支持好友/同机双人、人机、AI 对 AI；AI 模型和搜索仍只运行在负责 controller 的浏览器，服务器用 operator、模型、回合、手数和局面指纹验证 `ai_play/ai_pass` 后再同步。在线人机的“直接悔棋”会权威撤回到玩家上次决策点；在线同机双人直接撤回一手；不同真人控制双方时仍必须由对方同意
-- 观众可以在自己的浏览器里开启局势分析并在棋盘上自选研究点；候选、变化和点选都不发送给房间。为保证公平，正在对局的黑白双方禁用实战 AI 分析
-- 在线双方可以实时聊天：支持完整 Unicode 文字、Emoji 和内置表情包；不做关键词或语义审查，只进行纯文本安全渲染、长度限制与防刷屏限速
-- 聊天输入 `D4`、`K10` 等位置编号会自动生成可点击的棋点引用；也可以先点“选棋点”再点棋盘。对方点击引用后，平面、弧面或对应的竹筒、甜甜圈、莫比乌斯视图都会转到同一个逻辑棋点并高亮，引用操作本身绝不会落子
-- 旁观者可以阅读聊天但不能发言；最多最近 100 条（总量上限 64 KiB）随房间持久化，断线重连后仍可恢复
+---
 
-## AI 模型
+## What makes it different
 
-当前提供两个完全在玩家浏览器中运行的 KataGo 网络：
+Players make moves on a familiar flat Go board, but the board can be dragged continuously through its connected directions.
 
-- `快速 b10`：约 10.6 MiB，默认选项；支持 WebGPU、WebGL 和 CPU，适合移动端与普通浏览器
-- `增强 b18`：官方 `kata1-b18c384nbt-s9996604416-d4316597426`，约 93.4 MiB；要求 WebGPU，强烈建议使用桌面端，会占用数百 MiB 内存与显存，并明显增加耗电、发热和等待时间
-- `云端 b28 / b40`：约 259 MiB 到 823 MiB，更适合独立 GPU 服务，不适合直接塞进普通 Cloudflare Worker
+Visually, there is no final edge.
 
-Cloudflare 单个静态资源上限为 25 MiB，所以 b18 在部署时被无损拆成四片；浏览器按顺序下载、拼接并校验完整长度后才会加载，服务器仍不参与推理。
+When stones disappear from one side, they reappear from the opposite side. On the torus, players can continue sliding horizontally or vertically and eventually return to the same position.
 
-官方只把这些普通围棋网络概括为职业级以上，没有可靠的“b10 等于人类几段、b18 等于人类几段”换算。本项目又只使用网络的根节点策略，再接自己的拓扑搜索；模型从未学习竹筒、甜甜圈或莫比乌斯接缝。因此界面明确标注“特殊棋盘段位未测”，不会把官方普通棋盘强度冒充成本项目实战段位。b18 通常会给出更准确的全盘判断，但仍需通过本项目的真人对局和 A/B 比赛才能标定等级。参见 [KataGo 官方选网建议](https://github.com/lightvector/KataGo#other-questions)、[官方网络列表](https://katagotraining.org/networks/)、[网络许可](https://katagotraining.org/network_license/) 和 [Cloudflare 静态资源限制](https://developers.cloudflare.com/workers/platform/limits/)。
+The logical board is finite, but its flat representation repeats continuously.
 
-## 本地运行
+This creates strategic situations that cannot occur in ordinary Go:
 
-```powershell
-$env:NODE_OPTIONS='--use-system-ca'
+- A fight on the left can connect directly to stones on the right
+- Groups that appear distant may already support or surround one another
+- A formation may attack through what appears to be the opposite side
+- Players must think beyond the currently visible window
+
+At any time, players can switch between the flat board and its synchronized 3D surface.
+
+A complete game can also be replayed on the cylinder, torus, or Möbius strip, allowing players to see how a familiar two-dimensional battle unfolded inside a connected geometric space.
+
+---
+
+## Features
+
+### Topology-aware Go
+
+- Cylinder, torus, and Möbius-strip boards
+- 9×9, 13×13, and 19×19 presets
+- Custom board sizes from 5×5 to 25×25
+- Seam-aware group connection and liberty counting
+- Captures across connected edges
+- Suicide prevention
+- Positional superko
+- Territory traversal and dead-stone marking
+- Chinese area scoring and Japanese territory scoring
+- Configurable komi
+
+### Ways to play
+
+- Local two-player mode
+- Browser-based AI opponent
+- Online multiplayer rooms
+- Invitation links
+- Spectator mode
+- Reconnection and room-state recovery
+- Negotiated undo for online games
+
+### Replay and analysis
+
+- Full move-by-move replay
+- Timeline scrubbing
+- Adjustable playback speed
+- Import and export
+- Switching between flat and 3D views during replay
+- AI-assisted position analysis
+- Candidate-move visualization
+- Whole-game analysis
+- AI markers synchronized across flat and 3D boards
+
+### Communication
+
+- Real-time online chat
+- Unicode and emoji support
+- Clickable board-coordinate references such as `D4` and `K10`
+- Coordinate highlighting across all synchronized views
+
+---
+
+## How Codex and GPT-5.6 were used
+
+This project was conceived and built during OpenAI Build Week through an intensive AI-assisted vibe-coding workflow.
+
+My role was closer to that of a:
+
+- Product designer
+- Game-system designer
+- Creative director
+- Tester
+- Player
+
+I defined the central idea, researched the possible topologies, decided how each board should behave, designed the interaction model, tested every version, identified confusing or incorrect behavior, and continuously refined the product.
+
+**Codex and ChatGPT generated and revised the implementation. I did not manually type the implementation code.**
+
+### Product development with Codex
+
+I usually began by describing the result I wanted rather than specifying every technical step.
+
+For example, I would describe:
+
+- How an endlessly pannable board should feel
+- How stones should reappear after crossing a seam
+- How a flat position should correspond to the 3D geometry
+- How replay and AI analysis should remain synchronized
+- How online players should interact with rooms and shared game state
+
+I often allowed Codex to propose its own architecture and implementation approach first.
+
+The model frequently produced solutions that surprised me. When an approach worked well, I could continue developing the product without prescribing the implementation myself. When it did not match the intended experience, I gave more precise feedback, examples, or constraints.
+
+### Debugging with GPT-5.6 Sol
+
+GPT-5.6 Sol was used throughout the project for:
+
+- Feature implementation
+- Topology-specific game behavior
+- Debugging
+- AI integration
+- Interaction refinement
+- Repeated product iteration
+
+Debugging happened primarily through natural-language conversation.
+
+Instead of opening the code and investigating every line myself, I described:
+
+- What happened
+- What I expected to happen
+- Under what conditions the issue appeared
+- What had changed before the issue occurred
+
+The model investigated the likely cause, proposed a revision, and updated the implementation. I then tested the result and continued the conversation until the behavior matched the intended design.
+
+Because I have programming experience, I could provide technical context and judge whether the diagnosis made sense. However, the workflow felt less like manually repairing a machine and more like a doctor interviewing a patient: observing symptoms, forming a diagnosis, applying a treatment, and checking whether the problem disappeared.
+
+### Fast first, precise later
+
+The development process followed a clear fast-then-slow pattern.
+
+Early in the project, I gave the AI broad goals and freedom to explore. This produced a playable prototype very quickly.
+
+Later, the work became increasingly detailed. Most of my time shifted toward:
+
+- Human-computer interaction
+- Camera behavior
+- Board movement
+- Stone placement
+- Visual synchronization
+- Replay controls
+- AI visualization
+- Product consistency
+- UI refinement
+
+At that stage, I repeatedly played the game and gave increasingly precise feedback.
+
+Annotated screenshots also became useful as visual blueprints. Arrows, boxes, and short notes often communicated UI and interaction requirements more effectively than long written descriptions.
+
+---
+
+## AI opponent
+
+A topology experiment is easy to demonstrate, but Go is only meaningful when there is someone—or something—worth playing against.
+
+A player may open the game without another person available, so the AI opponent was essential rather than optional.
+
+The game uses a browser-based **KataGo hybrid system**:
+
+1. A KataGo neural network provides global policy suggestions
+2. The project applies topology-aware legality checks
+3. A custom search evaluates moves using the actual cylinder, torus, or Möbius adjacency rules
+
+The available models are:
+
+- **Fast b10** — approximately 10.6 MiB, with WebGPU, WebGL, and CPU support
+- **Enhanced b18** — approximately 93.4 MiB, requiring WebGPU
+
+Inference runs locally in the player's browser inside a Web Worker. No account or paid inference API is required.
+
+Because ordinary KataGo networks were trained on standard flat Go boards, the project does not claim that their normal-board strength transfers perfectly to unusual topologies.
+
+---
+
+## Technology
+
+- OpenAI Codex
+- GPT-5.6 Sol
+- JavaScript
+- Three.js
+- TensorFlow.js
+- KataGo neural networks
+- WebGPU
+- WebGL
+- Web Workers
+- Vite
+- Cloudflare Workers
+- Cloudflare Durable Objects
+- WebSockets
+
+### Architecture
+
+- **Three.js** renders the cylinder, torus, and Möbius-strip views
+- **TensorFlow.js** runs KataGo network inference in the browser
+- **WebGPU/WebGL** accelerate local neural-network inference
+- **Web Workers** keep AI computation separate from the UI thread
+- **Cloudflare Workers** serve the application and room APIs
+- **Durable Objects** maintain authoritative multiplayer room state
+- **WebSockets** provide real-time moves, chat, spectators, and reconnection
+- **Vite** handles local development and production builds
+
+---
+
+## Local development
+
+### Install dependencies
+
+```bash
 npm install
 npm run dev
 ```
-
-然后打开 `http://127.0.0.1:8787/`。`npm run dev:online` 是完整联机入口；只调试界面时可运行 `npm run dev:ui`，但该 Vite 入口不提供房间 API。
-
-## 验证
-
-```powershell
-npm test
-npm run build
-$env:NODE_OPTIONS='--use-system-ca'
-npm run test:live -- https://bamboo-baduk.pystashell.workers.dev/
-```
-
-测试覆盖三种拓扑的邻接、跨接缝提子与禁自杀、位置超级劫、计分、KataGo 合法落点与接缝感知、甜甜圈和莫比乌斯三维坐标，以及统一 match session、桌面/触屏手势状态策略（含多指取消落子）、在线 AI 席位与陈旧局面拒绝、音效、直接/协商悔棋、认输、完整复盘、多候选 PV、SGF 认输结果、主时间/日式读秒、服务端超时、房间席位/观战、命令去重、聊天安全和版本发布/回滚解析。真实 Canvas 拖动、缩放和命中仍须在目标浏览器与触屏设备上做发布前回归。
-
-## 版本发布与回滚
-
-生产发布使用 SemVer、Git tag、Cloudflare Worker Version/Deployment ID 和 GitHub Release 四重标识。预发布版本会自动创建 GitHub prerelease；脚本拒绝在 `main/master`、脏工作区或版本不一致时发布：
-
-```powershell
-npm.cmd run release:version -- 0.2.0-rc.1
-# 评审并提交改动后
-npm.cmd run release:check -- 0.2.0-rc.1
-npm.cmd run release:publish -- 0.2.0-rc.1
-npm.cmd run release:list
-npm.cmd run release:rollback -- v0.2.0-rc.1 --yes
-```
-
-完整安全约束、重试和按不可变 Worker Version ID 回滚的说明见 [docs/RELEASES.md](docs/RELEASES.md)。
-
-## 拓扑约定
-
-对于宽 `W`、高 `H` 的棋盘，竹筒和甜甜圈的左右邻点是：
-
-```text
-(row, (col - 1 + W) mod W)
-(row, (col + 1) mod W)
-```
-
-竹筒的上下方向在 `row = 0` 与 `row = H - 1` 处停止。甜甜圈（数学上的环面）则继续使用：
-
-```text
-((row - 1 + H) mod H, col)
-((row + 1) mod H, col)
-```
-
-莫比乌斯的上下方向与竹筒一样保留边界，左右接缝改为：
-
-```text
-(row, 0) 的左邻点     = (H - 1 - row, W - 1)
-(row, W - 1) 的右邻点 = (H - 1 - row, 0)
-```
-
-首尾点不会重复渲染，因此逻辑落子点始终恰好为 `W × H` 个。

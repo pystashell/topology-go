@@ -14,7 +14,11 @@ import {
   RoomEngine,
   RoomEngineError,
 } from "../src/multiplayer/roomEngine.js";
-import { CHAT_HISTORY_MAX_BYTES } from "../src/multiplayer/chat.js";
+import {
+  CHAT_CHANNEL_PLAYERS,
+  CHAT_CHANNEL_SPECTATORS,
+  CHAT_HISTORY_MAX_BYTES,
+} from "../src/multiplayer/chat.js";
 import { GoEngine } from "../src/game/goEngine.js";
 import { buildReplayFrames } from "../src/game/replay.js";
 
@@ -543,10 +547,19 @@ test("AI pass uses the same stale-position guard and enters scoring", () => {
   assert.equal(scoring.game.phase, "scoring");
   assert.equal(scoring.moveCount, 2);
 
-  const finished = room.applyAction({
+  const blackConfirmed = room.applyAction({
     playerId: "black-player",
     action: "finish_scoring",
     now: 1_500,
+  }).room;
+  assert.equal(blackConfirmed.game.phase, "scoring");
+  assert.deepEqual(blackConfirmed.scoreConfirmations, ["black"]);
+
+  const finished = room.applyAction({
+    playerId: "black-player",
+    action: "finish_scoring",
+    payload: { color: "white" },
+    now: 1_600,
   }).room;
   assert.equal(finished.game.phase, "finished");
   assert.deepEqual(finished.scoreConfirmations.sort(), ["black", "white"]);
@@ -654,10 +667,16 @@ test("direct AI undo cannot reopen scoring or a finished result", () => {
     (error) => error instanceof RoomEngineError && error.code === "UNDO_UNAVAILABLE",
   );
 
-  const finished = room.applyAction({
+  room.applyAction({
     playerId: "black-player",
     action: "finish_scoring",
     now: 1_500,
+  });
+  const finished = room.applyAction({
+    playerId: "black-player",
+    action: "finish_scoring",
+    payload: { color: "white" },
+    now: 1_600,
   }).room;
   assert.equal(finished.game.phase, "finished");
   assert.equal(finished.undoAvailable, false);
@@ -2254,7 +2273,7 @@ test("rectangular room chat survives snapshots and persistence with both dimensi
   assert.deepEqual(restored.chat.messages, snapshot.chat.messages);
 });
 
-test("spectators cannot send chat and sticker ids are server validated", () => {
+test("spectator chat is isolated while sticker ids are server validated", () => {
   const room = createRoom();
   joinWhite(room);
   room.join({
@@ -2265,38 +2284,31 @@ test("spectators cannot send chat and sticker ids are server validated", () => {
     now: 2_100,
   });
 
-  assert.throws(
-    () =>
-      room.postChat({
-        playerId: "viewer",
-        sequence: 1,
-        payload: { kind: "text", text: "我只能旁观" },
-        now: 3_000,
-    }),
-    (error) => error instanceof RoomEngineError && error.code === "FORBIDDEN",
+  const spectatorPost = room.postChat({
+    playerId: "viewer",
+    sequence: 1,
+    payload: { kind: "text", text: "旁观者在自己的频道说话" },
+    now: 3_000,
+  });
+  assert.equal(spectatorPost.message.channel, CHAT_CHANNEL_SPECTATORS);
+  assert.equal(spectatorPost.message.senderRole, "spectator");
+  assert.equal(spectatorPost.message.senderColor, null);
+
+  const playerPost = room.postChat({
+    playerId: "black-player",
+    sequence: 1,
+    payload: { kind: "text", text: "对局者频道" },
+    now: 3_001,
+  });
+  assert.equal(playerPost.message.channel, CHAT_CHANNEL_PLAYERS);
+
+  assert.deepEqual(
+    room.snapshot(3_002).chat.messages.map((message) => message.text),
+    ["对局者频道"],
   );
-  for (let sequence = 2; sequence <= 5; sequence += 1) {
-    assert.throws(
-      () =>
-        room.postChat({
-          playerId: "viewer",
-          sequence,
-          payload: { kind: "text", text: "旁观请求也要受限速" },
-          now: 3_000,
-        }),
-      (error) => error instanceof RoomEngineError && error.code === "FORBIDDEN",
-    );
-  }
-  assert.throws(
-    () =>
-      room.postChat({
-        playerId: "viewer",
-        sequence: 6,
-        payload: { kind: "text", text: "不能无限触发拒绝写入" },
-        now: 3_000,
-      }),
-    (error) =>
-      error instanceof RoomEngineError && error.code === "CHAT_RATE_LIMITED",
+  assert.deepEqual(
+    room.snapshotFor("viewer", 3_002).chat.messages.map((message) => message.text),
+    ["旁观者在自己的频道说话", "对局者频道"],
   );
   assert.throws(
     () =>
@@ -2309,10 +2321,13 @@ test("spectators cannot send chat and sticker ids are server validated", () => {
     (error) =>
       error instanceof RoomEngineError && error.code === "UNKNOWN_STICKER",
   );
-  assert.equal(room.snapshot(3_002).chat.messages.length, 0);
+  assert.deepEqual(
+    room.snapshot(3_003).chat.messages.map((message) => message.text),
+    ["对局者频道"],
+  );
 });
 
-test("spectator abuse does not consume the players' shared chat budget", () => {
+test("spectator chat does not consume the players' shared chat budget", () => {
   const room = createRoom();
   joinWhite(room);
 
@@ -2326,20 +2341,27 @@ test("spectator abuse does not consume the players' shared chat budget", () => {
       now: 2_100,
     });
 
-    for (let sequence = 1; sequence <= 5; sequence += 1) {
-      assert.throws(
-        () =>
-          room.postChat({
-            playerId,
-            sequence,
-            payload: { kind: "text", text: "spectator abuse" },
-            now: 3_000,
-          }),
-        (error) =>
-          error instanceof RoomEngineError && error.code === "FORBIDDEN",
-      );
+    for (let sequence = 1; sequence <= 4; sequence += 1) {
+      room.postChat({
+        playerId,
+        sequence,
+        payload: { kind: "text", text: "spectator chatter" },
+        now: 3_000,
+      });
     }
   }
+
+  assert.throws(
+    () =>
+      room.postChat({
+        playerId: "viewer-1",
+        sequence: 5,
+        payload: { kind: "text", text: "spectator channel has its own cap" },
+        now: 3_000,
+      }),
+    (error) =>
+      error instanceof RoomEngineError && error.code === "CHAT_RATE_LIMITED",
+  );
 
   for (const playerId of ["black-player", "white-player"]) {
     for (let sequence = 1; sequence <= 5; sequence += 1) {
@@ -2353,6 +2375,7 @@ test("spectator abuse does not consume the players' shared chat budget", () => {
   }
 
   assert.equal(room.snapshot(3_001).chat.messages.length, 10);
+  assert.equal(room.snapshotFor("viewer-1", 3_001).chat.messages.length, 22);
 });
 
 test("invalid chat attempts consume the same persistent rate limit", () => {

@@ -17,7 +17,6 @@ export const LOBBY_MATCH_MODES = Object.freeze([
   "local",
 ]);
 
-export const LOBBY_ENTRY_TTL_MS = 25 * 60 * 60 * 1_000;
 export const MAX_LOBBY_ROOMS = 500;
 
 const VALID_STATUSES = new Set([
@@ -240,7 +239,9 @@ export function lobbySummaryFromRoom(room, now = Date.now()) {
     updatedAt,
     startedAt: finiteTimestamp(match.startedAt, null),
     finishedAt: finiteTimestamp(match.finishedAt, null),
-    expiresAt: finiteTimestamp(room.expiresAt, updatedAt + LOBBY_ENTRY_TTL_MS),
+    // The room owns its lifecycle. The lobby only mirrors the room-provided
+    // expiry and must not invent a second retention window of its own.
+    expiresAt: finiteTimestamp(room.expiresAt, updatedAt),
   };
 }
 
@@ -280,8 +281,7 @@ export function pruneLobbyRooms(rooms, now = Date.now()) {
   return sortLobbyRooms(
     rooms.filter((room) =>
       isLobbySummary(room) &&
-      room.expiresAt > now &&
-      room.updatedAt + LOBBY_ENTRY_TTL_MS > now
+      room.expiresAt > now
     ),
   ).slice(0, MAX_LOBBY_ROOMS);
 }
