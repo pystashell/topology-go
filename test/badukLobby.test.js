@@ -165,3 +165,54 @@ test("stale or duplicate room revisions cannot regress an indexed room", async (
   assert.equal(indexed.moveCount, 9);
   assert.equal(writes.length, 1, "ignored upserts must not rewrite durable storage");
 });
+
+test("a failed directory write resets memory before retrying its revision", async () => {
+  for (const failurePoint of ["before", "after"]) {
+    let stored = null;
+    let failNext = false;
+    const spawn = () => new BadukLobby({
+      blockConcurrencyWhile: (initialize) => initialize(),
+      abort: () => { throw new Error("Durable Object reset"); },
+      storage: {
+        async get() { return stored; },
+        async put(_key, value) {
+          if (failNext && failurePoint === "before") {
+            failNext = false;
+            throw new Error("write rejected before commit");
+          }
+          stored = structuredClone(value);
+          if (failNext) {
+            failNext = false;
+            throw new Error("response lost after commit");
+          }
+        },
+      },
+    });
+    const upsert = (lobby, snapshot) => lobby.fetch(new Request("https://index/internal/upsert", {
+      method: "POST",
+      body: JSON.stringify(snapshot),
+    }));
+
+    let lobby = spawn();
+    assert.equal((await upsert(lobby, roomSnapshot({ revision: 1 }))).status, 200);
+    failNext = true;
+    await assert.rejects(upsert(lobby, roomSnapshot({ revision: 2 })),
+      /Durable Object reset/u);
+
+    lobby = spawn();
+    await lobby.ready;
+    assert.equal(lobby.rooms.get("ABC123").revision,
+      failurePoint === "before" ? 1 : 2);
+    const retry = await upsert(lobby, roomSnapshot({ revision: 2 }));
+    assert.equal(retry.status, 200);
+    assert.deepEqual(await retry.json(), failurePoint === "before"
+      ? { ok: true }
+      : { ok: true, ignored: "stale" });
+    await upsert(lobby, roomSnapshot({ code: "BCA234", revision: 1 }));
+    assert.deepEqual(stored.map(({ code, revision }) => ({ code, revision }))
+      .sort((left, right) => left.code.localeCompare(right.code)), [
+      { code: "ABC123", revision: 2 },
+      { code: "BCA234", revision: 1 },
+    ]);
+  }
+});

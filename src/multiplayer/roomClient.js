@@ -21,6 +21,7 @@ const MAX_CREATE_CODE_ATTEMPTS = 12;
 // These actions must remain bound to the exact round and position the player saw.
 const POSITION_BOUND_ACTIONS = new Set([
   "play", "pass", "resign", "toggle_dead", "resume_play", "request_undo",
+  "set_ai_autoplay_paused",
 ]);
 
 export const CONNECTION_STATUS = Object.freeze({

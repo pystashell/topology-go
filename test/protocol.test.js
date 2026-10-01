@@ -138,6 +138,15 @@ test("online AI seat commands pass through the reconnect-safe whitelist", () => 
       expectedMoveCount: 2,
       expectedPositionToken: "pos-v1-fedcba9876543210-2",
     }],
+    ["direct_undo_ai_move", {
+      expectedMoveCount: 2,
+      expectedPositionToken: "pos-v1-fedcba9876543210-2",
+    }],
+    ["set_ai_autoplay_paused", {
+      paused: true,
+      expectedMoveCount: 2,
+      expectedPositionToken: "pos-v1-fedcba9876543210-2",
+    }],
   ];
 
   for (const [action, payload] of commands) {

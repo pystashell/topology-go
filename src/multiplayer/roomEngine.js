@@ -400,6 +400,20 @@ function snapshotReplay(game) {
   return game.getReplayState();
 }
 
+function publicReplay(game, timeControl, resignationOutcome) {
+  const replay = snapshotReplay(game);
+  if (timeControl?.outcome) {
+    replay.outcome = clone(timeControl.outcome);
+  } else {
+    const resignation = publicResignationResult(resignationOutcome);
+    if (resignation) {
+      replay.events = replay.events.slice(0, resignationOutcome.replayEventCount);
+      replay.outcome = resignation;
+    }
+  }
+  return replay;
+}
+
 function fingerprint(prefix, value) {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
   let hash = 0xcbf29ce484222325n;
@@ -665,6 +679,7 @@ function migrateSerializedState(value) {
         state.resignationOutcome?.finishedAt ??
         state.updatedAt
       : null,
+    aiAutoplayPaused: false,
   };
   state.roundArchive = [];
   // Persisted v1 rooms retain the old immediate `new_game` command. Fresh
@@ -697,6 +712,9 @@ function validateMatchState(state) {
     !VALID_MATCH_MODES.has(match.mode) ||
     !validController(match.controllers?.[BLACK]) ||
     !validController(match.controllers?.[WHITE]) ||
+    (match.aiAutoplayPaused !== undefined &&
+      (typeof match.aiAutoplayPaused !== "boolean" ||
+        (match.aiAutoplayPaused && match.mode !== MATCH_MODE_AI_AI))) ||
     (match.startedAt !== null && !Number.isFinite(match.startedAt)) ||
     (match.finishedAt !== null && !Number.isFinite(match.finishedAt))
   ) {
@@ -949,6 +967,7 @@ export class RoomEngine {
       request: null,
       startedAt: startImmediately ? now : null,
       finishedAt: null,
+      aiAutoplayPaused: false,
     };
     const state = {
       schemaVersion: SERIALIZED_SCHEMA_VERSION,
@@ -1019,6 +1038,7 @@ export class RoomEngine {
     state.resignationOutcome ??= null;
     state.roundArchive ??= [];
     state.allowLegacyNewGame ??= false;
+    state.match.aiAutoplayPaused ??= false;
     state.timeControl = persistedRoomTimeControl(state.timeControl);
     state.chatMessages = trimStoredChatHistories(state.chatMessages);
     const latestChatSequence = state.chatMessages.reduce(
@@ -1210,16 +1230,7 @@ export class RoomEngine {
       game.lastMove = clone(this.state.resignationOutcome.lastMove);
     }
     game.moveCount = this.state.moveCount;
-    const replay = snapshotReplay(this.game);
-    if (timeControl?.outcome) {
-      replay.outcome = clone(timeControl.outcome);
-    } else if (resignationResult) {
-      replay.events = replay.events.slice(
-        0,
-        this.state.resignationOutcome.replayEventCount,
-      );
-      replay.outcome = resignationResult;
-    }
+    const replay = publicReplay(this.game, timeControl, this.state.resignationOutcome);
     return {
       code: this.state.code,
       revision: this.state.revision,
@@ -1757,6 +1768,7 @@ export class RoomEngine {
     }
     this.syncTimeControlRunning(now);
     let move;
+    let aiPauseChanged = false;
 
     if (action === "attach_ai") {
       this.requireHost(member);
@@ -1935,9 +1947,46 @@ export class RoomEngine {
         this.state.undoRequest = null;
         move.undoRequestAutoDeclined = true;
       }
+    } else if (action === "set_ai_autoplay_paused") {
+      this.assertGamePlaying();
+      const blackController = this.controllerFor(BLACK);
+      const whiteController = this.controllerFor(WHITE);
+      if (this.state.match.mode !== MATCH_MODE_AI_AI ||
+          blackController?.kind !== "ai" ||
+          whiteController?.kind !== "ai" ||
+          blackController.operatorId !== member.playerId ||
+          whiteController.operatorId !== member.playerId) {
+        throw new RoomEngineError(
+          "Only the operator of both AI colors can pause self-play.",
+          403,
+          "FORBIDDEN",
+        );
+      }
+      if (typeof payload.paused !== "boolean") {
+        throw new RoomEngineError("paused must be a boolean.", 400, "BAD_REQUEST");
+      }
+      if (this.game.phase !== PHASE_PLAY) {
+        throw new RoomEngineError(
+          "AI self-play can only be paused during play.",
+          409,
+          "ILLEGAL_MOVE",
+        );
+      }
+      this.assertFreshPosition(payload);
+      aiPauseChanged = this.state.match.aiAutoplayPaused !== payload.paused;
+      if (aiPauseChanged) {
+        this.state.match.aiAutoplayPaused = payload.paused;
+      }
+      move = {
+        ok: true,
+        type: payload.paused ? "ai_autoplay_paused" : "ai_autoplay_resumed",
+      };
     } else if (action === "ai_play") {
       this.assertNoUndoRequest();
       this.requireBothPlayers();
+      if (this.state.match.aiAutoplayPaused) {
+        throw new RoomEngineError("AI self-play is paused.", 409, "AI_PAUSED");
+      }
       this.assertFreshPosition(payload);
       this.assertControllerTurn(member, "ai");
       const row = validateCoordinate(payload.row, "行");
@@ -1946,18 +1995,27 @@ export class RoomEngine {
     } else if (action === "ai_pass") {
       this.assertNoUndoRequest();
       this.requireBothPlayers();
+      if (this.state.match.aiAutoplayPaused) {
+        throw new RoomEngineError("AI self-play is paused.", 409, "AI_PAUSED");
+      }
       this.assertFreshPosition(payload);
       this.assertControllerTurn(member, "ai");
       move = this.game.pass();
+      if (move?.ok && this.game.phase === PHASE_SCORING &&
+          this.state.match.mode === MATCH_MODE_AI_AI) {
+        this.state.match.aiAutoplayPaused = true;
+      }
     } else if (action === "direct_undo_ai_round") {
       this.assertNoUndoRequest();
       this.assertGamePlaying();
-      if (![BLACK, WHITE].some((color) => {
-        const value = this.controllerFor(color);
-        return value?.kind === "ai" && value.operatorId === member.playerId;
-      })) {
+      const humanController = this.controllerFor(member.color);
+      const aiController = this.controllerFor(member.color === BLACK ? WHITE : BLACK);
+      if (humanController?.kind !== "human" ||
+          humanController.operatorId !== member.playerId ||
+          aiController?.kind !== "ai" ||
+          aiController.operatorId !== member.playerId) {
         throw new RoomEngineError(
-          "There is no AI controller operated by this browser.",
+          "This browser does not control a human-AI match.",
           409,
           "AI_NOT_ATTACHED",
         );
@@ -2020,7 +2078,8 @@ export class RoomEngine {
         currentPlayer: this.game.currentPlayer,
         phase: this.game.phase,
       };
-    } else if (action === "direct_undo_local_round") {
+    } else if (action === "direct_undo_local_round" ||
+        action === "direct_undo_ai_move") {
       if (this.state.match?.status !== MATCH_STATUS_PLAYING) {
         throw new RoomEngineError(
           "Only a game in progress can be undone.",
@@ -2032,18 +2091,28 @@ export class RoomEngine {
       const blackController = this.controllerFor(BLACK);
       const whiteController = this.controllerFor(WHITE);
       const sharedOperatorId = blackController?.operatorId;
+      const controllerKind = action === "direct_undo_ai_move" ? "ai" : "human";
       if (
-        blackController?.kind !== "human" ||
-        whiteController?.kind !== "human" ||
+        blackController?.kind !== controllerKind ||
+        whiteController?.kind !== controllerKind ||
         typeof sharedOperatorId !== "string" ||
         sharedOperatorId.length === 0 ||
         whiteController.operatorId !== sharedOperatorId ||
         sharedOperatorId !== member.playerId
       ) {
         throw new RoomEngineError(
-          "Direct local undo requires both human colors to be controlled by this browser.",
+          "Direct single-move undo requires both colors to be controlled by this browser.",
           403,
           "FORBIDDEN",
+        );
+      }
+
+      if (action === "direct_undo_ai_move" &&
+          !this.state.match.aiAutoplayPaused) {
+        throw new RoomEngineError(
+          "Pause AI self-play before undoing a move.",
+          409,
+          "UNDO_UNAVAILABLE",
         );
       }
 
@@ -2076,7 +2145,7 @@ export class RoomEngine {
       this.state.moveCount = Math.max(0, this.state.moveCount - 1);
       move = {
         ...clone(undone),
-        type: "local_move_undone",
+        type: action === "direct_undo_ai_move" ? "ai_move_undone" : "local_move_undone",
         currentPlayer: this.game.currentPlayer,
         phase: this.game.phase,
       };
@@ -2405,6 +2474,7 @@ export class RoomEngine {
         request: null,
         startedAt: now,
         finishedAt: null,
+        aiAutoplayPaused: false,
       };
       move = { ok: true, type: "new_game", phase: PHASE_PLAY };
       }
@@ -2429,6 +2499,8 @@ export class RoomEngine {
       action === "attach_ai" ||
       action === "detach_ai" ||
       action === "direct_undo_ai_round" ||
+      action === "direct_undo_ai_move" ||
+      aiPauseChanged ||
       action === "direct_undo_local_round" ||
       action === "resign" ||
       action === "toggle_dead" ||
@@ -2449,6 +2521,7 @@ export class RoomEngine {
       action === "ai_play" ||
       action === "ai_pass" ||
       action === "direct_undo_ai_round" ||
+      action === "direct_undo_ai_move" ||
       action === "direct_undo_local_round" ||
       action === "resign" ||
       action === "toggle_dead" ||
@@ -2461,6 +2534,7 @@ export class RoomEngine {
 
     if (
       action === "direct_undo_ai_round" ||
+      action === "direct_undo_ai_move" ||
       action === "direct_undo_local_round" ||
       action === "resign" ||
       action === "resume_play" ||
@@ -2834,8 +2908,11 @@ export class RoomEngine {
       return;
     }
     const result = this.currentRoundResult();
-    const replay = snapshotReplay(this.game);
-    if (result) replay.outcome = clone(result);
+    const replay = publicReplay(
+      this.game,
+      snapshotTimeControl(this.state.timeControl, now),
+      this.state.resignationOutcome,
+    );
     this.state.roundArchive.push({
       roundId: match.roundId,
       startedAt: match.startedAt,
@@ -2866,6 +2943,7 @@ export class RoomEngine {
       request: null,
       startedAt: now,
       finishedAt: null,
+      aiAutoplayPaused: false,
     };
   }
 
@@ -3064,6 +3142,7 @@ export class RoomEngine {
       !this.state.timeControl.outcome &&
       this.state.match?.status === MATCH_STATUS_PLAYING &&
       this.game.phase === PHASE_PLAY &&
+      !this.state.match.aiAutoplayPaused &&
       this.hasBothPlayers(),
     );
   }

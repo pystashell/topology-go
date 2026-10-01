@@ -26,6 +26,10 @@ const REPLAY_VERSION = 1;
 const VALID_COLORS = new Set([BLACK, WHITE]);
 const VALID_TOPOLOGIES = new Set(["cylinder", "torus", "mobius"]);
 const VALID_SCORING_RULES = new Set(["chinese", "japanese"]);
+const GAME_INFO_PROPERTIES = new Set([
+  "AN", "BR", "BT", "CP", "DT", "EV", "GC", "GN", "HA", "KM", "ON",
+  "OT", "PB", "PC", "PW", "RE", "RO", "RU", "SO", "TM", "US", "WR", "WT",
+]);
 const SIMPLIFIED_TERRITORY_RULE = "Simplified territory scoring (seki eyes counted)";
 const PARTIAL_BASE_FIELDS = Object.freeze([
   "captures", "positionHistory", "phase", "consecutivePasses",
@@ -746,17 +750,49 @@ function parseKomi(value, warnings) {
   return komi;
 }
 
-function rootMetadata(root, warnings) {
+function gameInfoNode(nodes, partialBase) {
+  let selected = null;
+  for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
+    const node = nodes[nodeIndex];
+    const properties = node.properties.filter(({ identifier }) =>
+      GAME_INFO_PROPERTIES.has(identifier));
+    if (properties.length === 0) {
+      continue;
+    }
+    if (selected) {
+      throw new SgfError(
+        "Game-info properties occur in multiple nodes on the main line",
+        "INVALID_GAME_INFO",
+        { nodeIndex },
+      );
+    }
+    const seen = new Set();
+    for (const { identifier, values } of properties) {
+      if (seen.has(identifier) || values.length !== 1) {
+        throw new SgfError(
+          `Game-info property ${identifier} is ambiguous`,
+          partialBase ? "INVALID_PARTIAL_BASE" : "INVALID_GAME_INFO",
+          { nodeIndex },
+        );
+      }
+      seen.add(identifier);
+    }
+    selected = node;
+  }
+  return selected;
+}
+
+function readMetadata(root, info, warnings) {
   return {
     format: firstProperty(root, "FF") ?? "",
     game: firstProperty(root, "GM") ?? "",
     charset: firstProperty(root, "CA") ?? "",
     application: firstProperty(root, "AP") ?? "",
-    komi: parseKomi(firstProperty(root, "KM"), warnings),
-    rules: firstProperty(root, "RU") ?? "",
-    blackPlayer: firstProperty(root, "PB") ?? "",
-    whitePlayer: firstProperty(root, "PW") ?? "",
-    result: firstProperty(root, "RE") ?? "",
+    komi: parseKomi(info ? firstProperty(info, "KM") : undefined, warnings),
+    rules: info ? firstProperty(info, "RU") ?? "" : "",
+    blackPlayer: info ? firstProperty(info, "PB") ?? "" : "",
+    whitePlayer: info ? firstProperty(info, "PW") ?? "" : "",
+    result: info ? firstProperty(info, "RE") ?? "" : "",
   };
 }
 
@@ -887,9 +923,11 @@ export function importSgf(input, options = {}) {
 
   const nodes = flattenMainLine(collection[0]);
   const root = nodes[0];
-  if (root.properties.some(({ identifier }) =>
-    identifier === SGF_EXTENSION_PROPERTIES.partialBase)) {
-    for (const identifier of ["SZ", "KM", "RU", SGF_EXTENSION_PROPERTIES.topology, "PL"]) {
+  const hasPartialBase = root.properties.some(({ identifier }) =>
+    identifier === SGF_EXTENSION_PROPERTIES.partialBase);
+  const info = gameInfoNode(nodes, hasPartialBase);
+  if (hasPartialBase) {
+    for (const identifier of ["SZ", SGF_EXTENSION_PROPERTIES.topology, "PL"]) {
       const entries = root.properties.filter((property) => property.identifier === identifier);
       if (entries.length > 1 || entries.some(({ values }) => values.length !== 1)) {
         throw new SgfError(`Partial baseline has ambiguous ${identifier}`, "INVALID_PARTIAL_BASE");
@@ -918,7 +956,7 @@ export function importSgf(input, options = {}) {
   const sizeValue = firstProperty(root, "SZ");
   if (sizeValue === undefined) warnings.push(warning("MISSING_SIZE", "SZ was absent; 19x19 was assumed."));
   const { width, height } = parseSize(sizeValue ?? "19", limits);
-  const metadata = rootMetadata(root, warnings);
+  const metadata = readMetadata(root, info, warnings);
   const scoringRule = normalizeRule(metadata.rules, warnings);
 
   const topologyValue = firstProperty(root, SGF_EXTENSION_PROPERTIES.topology);

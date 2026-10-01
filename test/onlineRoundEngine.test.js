@@ -14,6 +14,7 @@ import {
   RoomEngineError,
 } from "../src/multiplayer/roomEngine.js";
 import { normalizeCommandMessage } from "../src/multiplayer/protocol.js";
+import { buildReplayFrames } from "../src/game/replay.js";
 
 const BLACK_HASH = "a".repeat(64);
 const WHITE_HASH = "b".repeat(64);
@@ -344,6 +345,144 @@ test("same-browser local mode directly undoes one move and preserves clock and r
   assert.equal(restored.undoAvailable, true);
 });
 
+test("online AI self-play directly undoes exactly one move at odd and even counts", () => {
+  for (const handCount of [1, 2, 3]) {
+    const room = createSetupRoom({ mainTimeSeconds: 30 });
+    request(room, { mode: MATCH_MODE_AI_AI }, 1_100);
+    let current = room.snapshot(1_100);
+    for (let hand = 0; hand < handCount; hand += 1) {
+      current = room.applyAction({
+        playerId: "host",
+        action: "ai_play",
+        payload: {
+          row: 0,
+          col: hand,
+          expectedMoveCount: current.moveCount,
+          expectedPositionToken: current.positionToken,
+        },
+        now: 1_200 + hand * 100,
+      }).room;
+    }
+    assert.throws(() => room.applyAction({
+      playerId: "host",
+      action: "direct_undo_ai_round",
+      payload: {
+        expectedMoveCount: current.moveCount,
+        expectedPositionToken: current.positionToken,
+      },
+      now: 1_600,
+    }), (error) => error instanceof RoomEngineError && error.code === "AI_NOT_ATTACHED");
+
+    current = room.applyAction({
+      playerId: "host",
+      action: "set_ai_autoplay_paused",
+      payload: {
+        paused: true,
+        expectedMoveCount: current.moveCount,
+        expectedPositionToken: current.positionToken,
+      },
+      now: 1_650,
+    }).room;
+
+    const undone = room.applyAction({
+      playerId: "host",
+      action: "direct_undo_ai_move",
+      payload: {
+        expectedMoveCount: current.moveCount,
+        expectedPositionToken: current.positionToken,
+      },
+      now: 1_700,
+    });
+    assert.equal(undone.move.type, "ai_move_undone");
+    assert.equal(undone.room.moveCount, handCount - 1);
+    assert.equal(undone.room.game.board[0][handCount - 1], null);
+    assert.equal(undone.room.replay.events.length, handCount - 1);
+    assert.equal(undone.room.timeControl.activeColor, null);
+    assert.equal(undone.room.match.aiAutoplayPaused, true);
+    const restored = RoomEngine.restore(room.serialize()).snapshot(1_800);
+    assert.equal(restored.moveCount, handCount - 1);
+    assert.deepEqual(restored.replay, undone.room.replay);
+  }
+});
+
+test("online AI self-play pause is authoritative, timed, and survives recovery", () => {
+  const room = createSetupRoom({ mainTimeSeconds: 30 });
+  request(room, { mode: MATCH_MODE_AI_AI }, 1_100);
+  const initial = room.snapshot(1_100);
+  const first = room.applyAction({
+    playerId: "host", action: "ai_play",
+    payload: { row: 0, col: 0, expectedMoveCount: 0,
+      expectedPositionToken: initial.positionToken }, now: 1_200,
+  }).room;
+  const second = room.applyAction({
+    playerId: "host", action: "ai_play",
+    payload: { row: 0, col: 1, expectedMoveCount: 1,
+      expectedPositionToken: first.positionToken }, now: 1_300,
+  }).room;
+  assert.throws(() => room.applyAction({
+    playerId: "host", action: "direct_undo_ai_move",
+    payload: { expectedMoveCount: 2, expectedPositionToken: second.positionToken },
+    now: 1_350,
+  }), (error) => error instanceof RoomEngineError && error.code === "UNDO_UNAVAILABLE");
+
+  const paused = room.applyAction({
+    playerId: "host", action: "set_ai_autoplay_paused",
+    payload: { paused: true, expectedMoveCount: 2,
+      expectedPositionToken: second.positionToken }, now: 1_400,
+  }).room;
+  assert.equal(paused.match.aiAutoplayPaused, true);
+  assert.notEqual(paused.positionToken, second.positionToken);
+  assert.equal(paused.timeControl.running, false);
+  assert.equal(paused.timeControl.activeColor, null);
+  assert.throws(() => room.applyAction({
+    playerId: "host", action: "ai_play",
+    payload: { row: 1, col: 1, expectedMoveCount: 2,
+      expectedPositionToken: second.positionToken }, now: 1_500,
+  }), (error) => error instanceof RoomEngineError && error.code === "AI_PAUSED");
+  assert.throws(() => room.applyAction({
+    playerId: "host", action: "set_ai_autoplay_paused",
+    payload: { paused: true, expectedMoveCount: 2,
+      expectedPositionToken: second.positionToken }, now: 1_550,
+  }), (error) => error instanceof RoomEngineError && error.code === "STALE_GAME_STATE");
+
+  room.advance(10_000);
+  const stillPaused = RoomEngine.restore(room.serialize()).snapshot(10_001);
+  assert.equal(stillPaused.match.aiAutoplayPaused, true);
+  assert.equal(stillPaused.timeControl.running, false);
+  assert.deepEqual(stillPaused.timeControl.players, paused.timeControl.players);
+  const undone = room.applyAction({
+    playerId: "host", action: "direct_undo_ai_move",
+    payload: { expectedMoveCount: 2,
+      expectedPositionToken: stillPaused.positionToken }, now: 10_100,
+  }).room;
+  assert.equal(undone.moveCount, 1);
+  assert.equal(undone.game.currentPlayer, "white");
+  assert.equal(undone.match.aiAutoplayPaused, true);
+  assert.equal(undone.timeControl.running, false);
+  assert.deepEqual(undone.timeControl.players, paused.timeControl.players);
+
+  const resumed = room.applyAction({
+    playerId: "host", action: "set_ai_autoplay_paused",
+    payload: { paused: false, expectedMoveCount: 1,
+      expectedPositionToken: undone.positionToken }, now: 10_200,
+  }).room;
+  assert.equal(resumed.match.aiAutoplayPaused, false);
+  assert.equal(resumed.timeControl.activeColor, "white");
+  assert.equal(resumed.timeControl.running, true);
+  const whiteBefore = resumed.timeControl.players.white.mainTimeRemainingMs;
+  const later = room.snapshot(11_200);
+  assert.equal(later.timeControl.players.white.mainTimeRemainingMs, whiteBefore - 1_000);
+  assert.equal(RoomEngine.restore(room.serialize()).snapshot(11_200).match.aiAutoplayPaused, false);
+
+  const legacy = room.serialize();
+  delete legacy.match.aiAutoplayPaused;
+  assert.equal(RoomEngine.restore(legacy).snapshot(11_200).match.aiAutoplayPaused, false);
+  legacy.match.aiAutoplayPaused = "true";
+  assert.throws(() => RoomEngine.restore(legacy), {
+    code: "BAD_ROOM_STATE",
+  });
+});
+
 test("direct local undo rejects friend and human-AI controller layouts", () => {
   const friendRoom = createSetupRoom();
   joinWhite(friendRoom);
@@ -477,6 +616,69 @@ test("starting the next round preserves a full bounded archive for replay and lo
   assert.equal(next.roundArchive[0].replay.complete, true);
   assert.equal(next.roundArchive[0].replay.events[0].row, 2);
   assert.equal(next.roundArchive[0].replay.events[0].col, 3);
+});
+
+test("scoring, resignation, and timeout archives replay the public terminal frame", () => {
+  const cases = [
+    {
+      name: "score",
+      finish(room) {
+        room.applyAction({ playerId: "host", action: "pass", now: 1_200 });
+        room.applyAction({ playerId: "host", action: "pass", now: 1_300 });
+        room.applyAction({
+          playerId: "host", action: "finish_scoring",
+          payload: { color: "black", expectedScoringToken: room.scoringToken() },
+          now: 1_400,
+        });
+        return room.applyAction({
+          playerId: "host", action: "finish_scoring",
+          payload: { color: "white", expectedScoringToken: room.scoringToken() },
+          now: 1_500,
+        }).room;
+      },
+    },
+    {
+      name: "resign",
+      finish(room) {
+        room.applyAction({
+          playerId: "host", action: "play", payload: { row: 0, col: 0 }, now: 1_200,
+        });
+        return room.applyAction({
+          playerId: "host", action: "resign", payload: { color: "white" }, now: 1_300,
+        }).room;
+      },
+    },
+    {
+      name: "timeout",
+      finish(room) {
+        return room.advance(4_100).room;
+      },
+    },
+  ];
+
+  for (const scenario of cases) {
+    const room = createSetupRoom({ mainTimeSeconds: 3 });
+    request(room, { mode: MATCH_MODE_LOCAL }, 1_100);
+    const finished = scenario.finish(room);
+    assert.equal(finished.match.status, MATCH_STATUS_FINISHED, scenario.name);
+    const archive = request(room, { mode: MATCH_MODE_LOCAL }, 4_300).room.roundArchive.at(-1);
+    assert.equal(archive.moveCount, finished.moveCount, scenario.name);
+    assert.equal(
+      buildReplayFrames(archive.replay).steps.length,
+      archive.moveCount,
+      scenario.name,
+    );
+    assert.deepEqual(
+      buildReplayFrames(archive.replay).frames.at(-1),
+      buildReplayFrames(finished.replay).frames.at(-1),
+      scenario.name,
+    );
+    assert.deepEqual(
+      RoomEngine.restore(room.serialize()).snapshot(4_301).roundArchive.at(-1).replay,
+      archive.replay,
+      scenario.name,
+    );
+  }
 });
 
 test("v1 rooms migrate to persistent match controllers and protocol accepts negotiation commands", () => {

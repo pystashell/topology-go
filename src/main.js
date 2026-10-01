@@ -16,6 +16,7 @@ import {
 import {
   buildReplayFrames,
   buildReplayStateAtStep,
+  buildLiveReviewState,
 } from "./game/replay.js";
 import { exportSgf, importSgf, SgfError } from "./game/sgf.js";
 import {
@@ -264,6 +265,7 @@ const elements = {
   roomCode: $("#room-code"),
   localRole: $("#local-role"),
   copyRoomLink: $("#copy-room-link"),
+  toggleOnlineAiAutoplay: $("#toggle-online-ai-autoplay"),
   leaveRoom: $("#leave-room"),
   blackSeat: $("#black-seat"),
   whiteSeat: $("#white-seat"),
@@ -412,6 +414,8 @@ let onlineStateSynchronized = false;
 let onlineBusy = false;
 let onlineCommandPending = false;
 let onlineCommandRevision = null;
+let onlineAIPauseIntent = null;
+let onlineAIPauseSending = false;
 let lastAnnouncedRoomRevision = null;
 let rematchSetupTransport = null;
 let rematchPreviewGame = null;
@@ -1575,6 +1579,8 @@ function livePositionKey(state = game?.getState?.()) {
     state.phase,
     moveCount,
     state.board,
+    hasOnlineSession() ? onlineRoom?.code : null,
+    hasOnlineSession() ? onlineRoom?.positionToken : null,
   ]);
 }
 
@@ -1904,7 +1910,11 @@ function analyzeCurrentLivePosition() {
   let state;
   let worker;
   try {
-    state = game.exportSearchState();
+    state = buildLiveReviewState(game, {
+      online: hasOnlineSession(),
+      replay: onlineRoom?.replay,
+      moveCount,
+    });
     worker = ensureReviewWorker();
   } catch (error) {
     liveAnalysis.message = `无法复制当前局面：${error.message}`;
@@ -2333,6 +2343,23 @@ function isOnlineAIController() {
   }));
 }
 
+function isOnlineAISelfPlay() {
+  if (!hasOnlineSession() || onlineRoom?.match?.mode !== ONLINE_MODE_AI_AI) return false;
+  const identity = currentIdentity();
+  const identityId = identity.playerId ?? identity.id;
+  return Boolean(identityId && [BLACK, WHITE].every((color) => {
+    const controller = onlineController(color);
+    return controller?.kind === MATCH_CONTROLLER_AI &&
+      controller.operatorId === identityId;
+  }));
+}
+
+function pauseIntentMatchesRoom() {
+  return Boolean(onlineAIPauseIntent &&
+    onlineAIPauseIntent.code === onlineRoom?.code &&
+    onlineAIPauseIntent.roundId === onlineRoom?.match?.roundId);
+}
+
 function currentMatchSession() {
   const online = hasOnlineSession();
   const identity = online ? currentIdentity() : {};
@@ -2359,7 +2386,12 @@ function currentMatchSession() {
     commandPending: onlineCommandPending,
     bothSeats: online ? onlineControllersReady() : true,
     whiteSeat: online ? roomSeat(WHITE) : null,
-    undoAvailable: online ? onlineRoom?.undoAvailable === true : localUndoAvailable,
+    undoAvailable: online
+      ? onlineRoom?.undoAvailable === true &&
+        (!isOnlineAISelfPlay() ||
+          (onlineRoom.match.aiAutoplayPaused === true &&
+            !pauseIntentMatchesRoom() && !aiThinking))
+      : localUndoAvailable,
     undoRequest: online ? currentUndoRequest() : null,
     replaying: isReplaying(),
     timedOut: Boolean(currentTimeoutOutcome()),
@@ -2432,6 +2464,8 @@ function isOnlineAITurn() {
       !currentTimeoutOutcome() &&
       !currentUndoRequest() &&
       !onlineCommandPending &&
+      !onlineRoom?.match?.aiAutoplayPaused &&
+      !(pauseIntentMatchesRoom() && onlineAIPauseIntent.paused) &&
       !isReplaying(),
   );
 }
@@ -2818,6 +2852,20 @@ async function startLocalTwoPlayerGame() {
 }
 
 function toggleAIAutoplay() {
+  if (isOnlineAISelfPlay()) {
+    if (game.phase !== PHASE_PLAY || pauseIntentMatchesRoom()) return;
+    const paused = !Boolean(onlineRoom.match.aiAutoplayPaused);
+    onlineAIPauseIntent = {
+      code: onlineRoom.code,
+      roundId: onlineRoom.match.roundId,
+      paused,
+    };
+    if (paused) cancelAIThinking();
+    setMessage(paused ? "正在暂停在线 AI 自对弈…" : "正在继续在线 AI 自对弈…");
+    updateUI();
+    void flushOnlineAIPauseIntent();
+    return;
+  }
   if (!isAIvsAI() || game.phase !== PHASE_PLAY) return;
   aiAutoplayPaused = !aiAutoplayPaused;
   if (aiAutoplayPaused) {
@@ -3535,6 +3583,14 @@ function updateRoomUI() {
   elements.offlineOpponentActions.hidden = !lobby || reviewing;
   elements.roomConnected.hidden = !active;
   elements.aiConnected.hidden = !aiMode;
+  const onlineSelfPlay = isOnlineAISelfPlay();
+  elements.toggleOnlineAiAutoplay.hidden = !onlineSelfPlay;
+  elements.toggleOnlineAiAutoplay.textContent = pauseIntentMatchesRoom()
+    ? onlineAIPauseIntent.paused ? "正在暂停…" : "正在继续…"
+    : onlineRoom?.match?.aiAutoplayPaused ? "继续对弈" : "暂停对弈";
+  elements.toggleOnlineAiAutoplay.disabled = !onlineSelfPlay ||
+    !onlineReady || !connected || onlineBusy || reviewing ||
+    game?.phase !== PHASE_PLAY || pauseIntentMatchesRoom();
   if (elements.scoreStrip) {
     elements.scoreStrip.hidden = (lobby || waiting || rematchSetup) && !reviewing;
   }
@@ -3741,6 +3797,9 @@ function updateRoomUI() {
     elements.directRematch.hidden || elements.adjustNextGame.hidden,
   );
   const sameBrowserOnlineUndo = active && isSameBrowserHumanOnlineMatch(match);
+  const onlineAiSelfPlay = active &&
+    match.controllerByColor.black === MATCH_CONTROLLER_AI &&
+    match.controllerByColor.white === MATCH_CONTROLLER_AI;
   elements.undoButton.textContent = active
     ? sameBrowserOnlineUndo
       ? "悔棋"
@@ -3751,7 +3810,11 @@ function updateRoomUI() {
   elements.undoButton.title = active
     ? sameBrowserOnlineUndo
       ? "直接撤回上一手"
-      : match.opponentController === MATCH_CONTROLLER_AI
+      : onlineAiSelfPlay
+        ? onlineRoom?.match?.aiAutoplayPaused
+          ? "直接撤回上一手，保持暂停"
+          : "请先暂停 AI 自对弈，再撤回上一手"
+        : match.opponentController === MATCH_CONTROLLER_AI
         ? "直接撤回你和 AI 的上一轮落子，不需要 AI 同意"
         : "需要对方同意后才会撤回上一手"
     : aiMode
@@ -4123,6 +4186,9 @@ function applyOnlineRoom(room) {
   };
   const previousTopology = previouslyDisplayedGame?.topology;
   onlineRoom = room;
+  if (onlineAIPauseIntent && !pauseIntentMatchesRoom()) {
+    onlineAIPauseIntent = null;
+  }
   if (!isOnlineNextGameSetup()) {
     elements.onlineMatchMode.value = room.match?.mode ?? ONLINE_MODE_FRIEND;
     reflectOnlineAIModelControls(room.match?.controllers);
@@ -4254,9 +4320,10 @@ function applyOnlineRoom(room) {
   }
   updateUI();
   maybeStartAITurn();
+  void flushOnlineAIPauseIntent();
 }
 
-async function sendOnlineCommand(action, payload = {}) {
+async function sendOnlineCommand(action, payload = {}, { onError } = {}) {
   if (!hasOnlineSession()) {
     setMessage("请先创建或加入一个联机房间。", true);
     return false;
@@ -4291,9 +4358,65 @@ async function sendOnlineCommand(action, payload = {}) {
   } catch (error) {
     onlineCommandPending = false;
     onlineCommandRevision = null;
+    onError?.(error);
     setMessage(error.message || "房间拒绝了这个操作。", true);
     updateRoomUI();
     return false;
+  } finally {
+    if (action !== "set_ai_autoplay_paused" && onlineAIPauseIntent) {
+      void flushOnlineAIPauseIntent();
+    }
+  }
+}
+
+async function flushOnlineAIPauseIntent() {
+  if (!onlineAIPauseIntent || onlineAIPauseSending) return;
+  if (!pauseIntentMatchesRoom() || !isOnlineAISelfPlay()) {
+    onlineAIPauseIntent = null;
+    updateUI();
+    return;
+  }
+  if (onlineRoom.match.aiAutoplayPaused === onlineAIPauseIntent.paused) {
+    const resumed = !onlineAIPauseIntent.paused;
+    onlineAIPauseIntent = null;
+    setMessage(resumed
+      ? "在线 AI 自对弈已继续。"
+      : "在线 AI 自对弈已暂停；可以悔一步、复盘或切换视图。");
+    updateUI();
+    if (resumed) maybeStartAITurn();
+    return;
+  }
+  if (!roomClient.isConnected || !onlineStateSynchronized ||
+      onlineBusy || onlineCommandPending) return;
+
+  onlineAIPauseSending = true;
+  let failure = null;
+  const sent = await sendOnlineCommand(
+    "set_ai_autoplay_paused",
+    { paused: onlineAIPauseIntent.paused },
+    { onError: (error) => { failure = error; } },
+  );
+  onlineAIPauseSending = false;
+  if (!onlineAIPauseIntent || !pauseIntentMatchesRoom()) return;
+  if (onlineRoom.match.aiAutoplayPaused === onlineAIPauseIntent.paused) {
+    const resumed = !onlineAIPauseIntent.paused;
+    onlineAIPauseIntent = null;
+    setMessage(resumed
+      ? "在线 AI 自对弈已继续。"
+      : "在线 AI 自对弈已暂停；可以悔一步、复盘或切换视图。");
+    updateUI();
+    if (resumed) maybeStartAITurn();
+    return;
+  }
+  if (!sent && ["STALE_GAME_STATE", "ACK_TIMEOUT"].includes(failure?.code)) {
+    setMessage("棋局已更新，正在核对在线 AI 暂停状态…");
+    void roomClient.command("sync").catch(() => {
+      // A reconnect will supply a fresh room snapshot and retry the intent.
+    });
+  } else if (!sent && failure) {
+    onlineAIPauseIntent = null;
+    updateUI();
+    maybeStartAITurn();
   }
 }
 
@@ -4352,7 +4475,8 @@ async function dispatchMatchAction(action, payload = {}, options = {}) {
       setMessage(
         route.command === "direct_undo_ai_round"
           ? "正在直接撤回你和 AI 的上一轮落子…"
-          : route.command === "direct_undo_local_round"
+          : route.command === "direct_undo_local_round" ||
+              route.command === "direct_undo_ai_move"
             ? "正在直接撤回上一手…"
             : "正在发送悔棋申请…",
       );
@@ -5543,7 +5667,9 @@ function updateUI() {
             ? "轮到你落子"
             : "AI 准备落子"
       : currentController === MATCH_CONTROLLER_AI
-        ? `KataGo ${aiThinking ? "正在思考" : "准备落子"}`
+        ? isOnlineAISelfPlay() && onlineRoom?.match?.aiAutoplayPaused
+          ? `已暂停 · ${colorName(state.currentPlayer)}待行`
+          : `KataGo ${aiThinking ? "正在思考" : "准备落子"}`
         : `${colorName(state.currentPlayer)}落子`;
     return;
   }
@@ -6251,6 +6377,7 @@ async function joinOnlineRoom(role = "player", pendingPlayerId = "") {
     : null;
   const name = pendingJoin?.name || normalizedPlayerName();
   const code = sanitizeRoomCode(elements.roomCodeInput.value);
+  const pendingBefore = new Set(roomClient.listPendingJoins(code).map((entry) => entry.playerId));
   if (!name) {
     showOnlineError("请先填写你的名字。");
     elements.playerName.focus();
@@ -6302,9 +6429,19 @@ async function joinOnlineRoom(role = "player", pendingPlayerId = "") {
     restoreOfflineGame();
     updateUI();
     maybeStartAITurn();
-    showOnlineError(error.message || "加入房间失败，请检查房间号。");
+    const pending = roomClient.listPendingJoins(code);
+    const currentPending = pendingPlayerId
+      ? pending.some((entry) => entry.playerId === pendingPlayerId)
+      : pending.some((entry) => !pendingBefore.has(entry.playerId));
+    if (pending.length) elements.roomCodeInput.value = code;
+    showOnlineError(currentPending
+      ? `${error.message || "加入房间失败。"} 已保留本次加入凭据；请使用下方“核对并恢复”重试原身份。`
+      : pending.length
+        ? `${error.message || "加入房间失败。"} 此房间仍有其他可恢复的加入请求，请核对身份后再恢复。`
+        : error.message || "加入房间失败，请检查房间号。");
   } finally {
     setOnlineBusy(false);
+    renderStoredIdentityPanels();
   }
 }
 
@@ -6367,6 +6504,7 @@ function returnToOffline(message) {
     cancelAIThinking();
   }
   onlineRoom = null;
+  onlineAIPauseIntent = null;
   rematchSetupTransport = null;
   rematchPreviewGame = null;
   onlineStateSynchronized = false;
@@ -6458,6 +6596,7 @@ elements.changeAiSettings.addEventListener("click", showAIDialog);
 elements.cancelAi.addEventListener("click", closeAIDialog);
 elements.leaveAi.addEventListener("click", leaveAIGame);
 elements.toggleAiAutoplay.addEventListener("click", toggleAIAutoplay);
+elements.toggleOnlineAiAutoplay.addEventListener("click", toggleAIAutoplay);
 elements.aiForm.addEventListener("submit", (event) => void startAIGame(event));
 elements.aiModel.addEventListener("change", syncAIDialogModelPresentation);
 elements.aiBlackModel.addEventListener("change", syncAIDialogModelPresentation);

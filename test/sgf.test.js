@@ -67,6 +67,48 @@ test("standard FF4 metadata and square replay round-trip into GoEngine frames", 
   );
 });
 
+test("game-info on a non-root move node supplies the replay's rules and metadata", () => {
+  const sgf = "(;FF[4]GM[1]CA[UTF-8]SZ[5]XTOP[cylinder];B[aa]KM[7.5]RU[Chinese]PB[Alice]PW[Bob]RE[W+R])";
+  const imported = importSgf(sgf);
+  assert.equal(imported.replay.base.komi, 7.5);
+  assert.equal(imported.replay.base.scoringRule, "chinese");
+  assert.equal(imported.metadata.blackPlayer, "Alice");
+  assert.equal(imported.metadata.whitePlayer, "Bob");
+  assert.equal(imported.metadata.result, "W+R");
+  assert.equal(buildReplayFrames(imported.replay).frames.at(-1).board[0][0], "black");
+  const exported = exportSgf(imported);
+  assert.match(exported.sgf, /KM\[7\.5\]RU\[Chinese\]/u);
+  assert.match(exported.sgf, /PB\[Alice\]PW\[Bob\]RE\[W\+R\]/u);
+
+  assert.throws(() => importSgf(
+    "(;FF[4]GM[1]SZ[5]KM[7.5];B[aa]RE[W+R])",
+  ), { code: "INVALID_GAME_INFO" });
+  assert.throws(() => importSgf(sgf.replace("KM[7.5]", "KM[7.5][100]")), {
+    code: "INVALID_GAME_INFO",
+  });
+});
+
+test("partial SGF binds its baseline to non-root game-info without ambiguous rules", () => {
+  const game = new GoEngine({ size: 5, komi: 6.5, scoringRule: "japanese" });
+  const legacy = game.exportState();
+  delete legacy.replay;
+  const sgf = exportSgf(GoEngine.fromState(legacy).getReplayState()).sgf;
+  const komi = /KM\[[^\]]*\]/u.exec(sgf)?.[0];
+  const rules = /RU\[[^\]]*\]/u.exec(sgf)?.[0];
+  assert.ok(komi && rules);
+  const moved = `${sgf.replace(komi, "").replace(rules, "").replace(/\)$/u, "")};${komi}${rules})`;
+  assert.equal(importSgf(moved).replay.base.komi, 6.5);
+  assert.throws(() => importSgf(moved.replace(komi, `${komi}[100]`)), {
+    code: "INVALID_PARTIAL_BASE",
+  });
+  assert.throws(() => importSgf(moved.replace(rules, `${rules}${rules}`)), {
+    code: "INVALID_PARTIAL_BASE",
+  });
+  assert.throws(() => importSgf(moved.replace(komi, "KM[7.5]")), {
+    code: "INVALID_PARTIAL_BASE",
+  });
+});
+
 test("partial SGF preserves captures and superko history from a legacy saved game", () => {
   const game = new GoEngine({ size: 5, komi: 0, scoringRule: "japanese" });
   for (const [row, col] of [

@@ -212,4 +212,22 @@ export function buildReplayStateAtStep(replay, requestedStep) {
   return game.exportState({ includeReplay: false });
 }
 
+/** Preserve the full move history when reviewing a live online position. */
+export function buildLiveReviewState(game, { online = false, replay, moveCount } = {}) {
+  if (online) {
+    const state = buildReplayStateAtStep(replay, moveCount);
+    const visible = game.getState();
+    const publicFields = [
+      "width", "height", "topology", "komi", "scoringRule", "currentPlayer",
+      "phase", "consecutivePasses", "captures", "board",
+    ];
+    if (publicFields.some((field) =>
+      JSON.stringify(state[field]) !== JSON.stringify(visible[field]))) {
+      throw new TypeError("Replay does not match the current public position");
+    }
+    return state;
+  }
+  return game.exportSearchState();
+}
+
 export default buildReplayFrames;

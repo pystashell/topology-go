@@ -226,6 +226,12 @@ test("online AI undo routes directly while human online undo negotiates", () => 
     ...base,
     controllerByColor: { black: "human", white: "ai" },
   });
+  const aiSelfPlay = createMatchSession({
+    ...base,
+    controllerByColor: { black: "ai", white: "ai" },
+    controllerOperatorByColor: { black: "host", white: "host" },
+    identity: { id: "host", role: "player", color: "black" },
+  });
   const human = createMatchSession({
     ...base,
     controllerByColor: { black: "human", white: "human" },
@@ -237,6 +243,7 @@ test("online AI undo routes directly while human online undo negotiates", () => 
     identity: { id: "host", role: "player", color: "black" },
   });
   assert.equal(routeMatchAction(ai, "undo").command, "direct_undo_ai_round");
+  assert.equal(routeMatchAction(aiSelfPlay, "undo").command, "direct_undo_ai_move");
   assert.equal(routeMatchAction(human, "undo").command, "request_undo");
   assert.equal(
     routeMatchAction(sameBrowserHumans, "undo").command,

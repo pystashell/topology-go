@@ -276,9 +276,12 @@ export function routeMatchAction(session, action, payload = {}, options = {}) {
     return {
       allowed: true,
       target: MATCH_TRANSPORT_ONLINE,
-      command: session.opponentController === MATCH_CONTROLLER_AI
-        ? "direct_undo_ai_round"
-        : "request_undo",
+      command: session.controllerByColor.black === MATCH_CONTROLLER_AI &&
+          session.controllerByColor.white === MATCH_CONTROLLER_AI
+        ? "direct_undo_ai_move"
+        : session.opponentController === MATCH_CONTROLLER_AI
+          ? "direct_undo_ai_round"
+          : "request_undo",
       payload,
     };
   }

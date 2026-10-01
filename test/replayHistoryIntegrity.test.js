@@ -8,6 +8,7 @@ import {
   MOVE_ERRORS,
   WHITE,
 } from "../src/game/goEngine.js";
+import { buildLiveReviewState } from "../src/game/replay.js";
 
 function boardFromRows(rows) {
   return rows.map((row) =>
@@ -112,4 +113,45 @@ test("legacy cylindrical saves still validate a present complete replay", () => 
     () => GoEngine.fromState(legacy),
     /replay events do not reconstruct positionHistory/u,
   );
+});
+
+test("live online review retains superko history and rejects a mismatched replay", () => {
+  const authoritative = new GoEngine({ size: 5, topology: "cylinder" });
+  for (const [row, col] of [
+    [0, 1], [0, 2], [1, 0], [1, 1], [2, 1],
+    [2, 2], [4, 4], [1, 3], [1, 2],
+  ]) {
+    assert.equal(authoritative.play(row, col).ok, true);
+  }
+  const publicState = authoritative.getState();
+  const publicGame = new GoEngine({
+    size: 5,
+    topology: "cylinder",
+    initialBoard: publicState.board,
+    currentPlayer: publicState.currentPlayer,
+  });
+  publicGame.phase = publicState.phase;
+  publicGame.consecutivePasses = publicState.consecutivePasses;
+  publicGame.captures = { ...publicState.captures };
+  const reviewState = buildLiveReviewState(publicGame, {
+    online: true,
+    replay: authoritative.getReplayState(),
+    moveCount: 9,
+  });
+  assert.equal(reviewState.positionHistory.length, 10);
+  assert.deepEqual(GoEngine.fromSearchState(reviewState).play(1, 1), {
+    ok: false,
+    reason: MOVE_ERRORS.SUPERKO,
+  });
+  assert.equal(publicGame.play(1, 1).ok, true, "public hydration alone loses ko history");
+
+  assert.throws(() => buildLiveReviewState(publicGame, {
+    online: true,
+    replay: authoritative.getReplayState(),
+    moveCount: 9,
+  }), /does not match the current public position/u);
+  assert.throws(() => buildLiveReviewState(publicGame, {
+    online: true,
+    moveCount: 9,
+  }), /replay must be an object/u);
 });

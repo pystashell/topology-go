@@ -76,7 +76,14 @@ export class BadukLobby {
   }
 
   async persist() {
-    await this.ctx.storage.put(STORAGE_KEY, sortLobbyRooms(this.rooms.values()));
+    try {
+      await this.ctx.storage.put(STORAGE_KEY, sortLobbyRooms(this.rooms.values()));
+    } catch (error) {
+      // A rejected write may have committed. Reset the instance so the next
+      // request reloads the authoritative index before comparing revisions.
+      this.ctx.abort("Lobby storage outcome unknown");
+      throw error;
+    }
   }
 }
 
