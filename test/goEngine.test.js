@@ -764,7 +764,7 @@ test("score regions classify black, white and neutral points for every renderer"
   assert.deepEqual(regionsByOwner.get(EMPTY), ["2,2"]);
 });
 
-test("Japanese territory and Chinese area scoring use the same cylindrical regions", () => {
+test("simplified territory and Chinese area scoring use the same cylindrical regions", () => {
   const game = new GoEngine({
     size: 5,
     komi: 0,

@@ -24,10 +24,15 @@ function waitFor(client, type, predicate, label, timeoutMs = 15_000) {
 }
 
 function makeClient() {
+  const values = new Map();
   return new RoomClient({
     baseUrl: target,
     locationHref: target,
-    storage: null,
+    storage: {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, String(value)),
+      removeItem: (key) => values.delete(key),
+    },
     reconnect: { maxAttempts: 2 },
   });
 }
@@ -258,8 +263,14 @@ try {
     ({ room }) => room?.game?.board?.[0]?.[1] === "white",
     "white move on black client",
   );
+  const whiteSawOwnMove = waitFor(
+    white,
+    "state",
+    ({ room }) => room?.game?.board?.[0]?.[1] === "white",
+    "white move on sender client",
+  );
   await white.command("play", { row: 0, col: 1 });
-  const beforeUndo = await blackSawWhiteMove;
+  const [beforeUndo] = await Promise.all([blackSawWhiteMove, whiteSawOwnMove]);
 
   requireCondition(
     beforeUndo.room.moveCount === 2 &&

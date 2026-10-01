@@ -38,7 +38,12 @@ export class RuntimeRoom extends BadukRoom {
       const messages = [];
       const attachment = { identity: { playerId: "black", role: "player", color: "black" } };
       const socket = { readyState: 1, send: value => messages.push(JSON.parse(value)), deserializeAttachment: () => attachment };
-      await this.handleCommand(socket, attachment, { id: "move-1", sequence: 1, action: "play", payload: { row: 0, col: 0 } });
+      const current = this.engine?.snapshot();
+      await this.handleCommand(socket, attachment, { id: "move-1", sequence: 1, action: "play", payload: {
+        row: 0, col: 0,
+        expectedMoveCount: current?.moveCount ?? 0,
+        expectedPositionToken: current?.positionToken ?? "unavailable",
+      } });
       return Response.json({ messages, unavailable: this.unavailableError?.code ?? null, failure: this.runtimeFailure });
     }
     return super.fetch(request);

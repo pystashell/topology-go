@@ -298,6 +298,11 @@ test("public lobby and online invitation copy is available in English", () => {
     ["等待受邀玩家回应", "Waiting for the invited player"],
     ["使用当前设置发起对局邀请", "Send invitation with these settings"],
     ["使用当前设置开始在线对局", "Start online game with these settings"],
+    ["放弃所选恢复凭据", "Discard selected recovery credentials"],
+    [
+      "已放弃房间 AB23CD 的恢复凭据；若房间已创建，将无法用原房主身份恢复。现在可按当前设置创建新房间。",
+      "Discarded recovery credentials for room AB23CD. If it already exists, its original host identity cannot be recovered. You can now create a room with the current settings.",
+    ],
     [
       "白方席位目前为空。请先让朋友进入房间并成为白方，然后才能发送对局邀请。",
       "The White seat is empty. Ask your friend to enter and take White before sending the game invitation.",
@@ -340,11 +345,19 @@ test("long AI, SGF, replay and scoring status sentences translate before generic
       "Black KataGo b10 plays and captures 2 stones (200 ms neural evaluation).",
     ],
     ["KataGo b10 停一手，轮到你落子。", "KataGo b10 passes. Your turn."],
+    [
+      "房间 AB12CD 已创建，但浏览器未保存房主凭据；请勿刷新，并检查浏览器存储设置。",
+      "Room AB12CD was created, but your browser did not save the host credentials. Do not refresh; check browser storage settings.",
+    ],
     ["D4 · 胜率 55% · 访问 20%", "D4 · win rate 55% · visits 20%"],
     ["选", "Pick"],
     [
       "已导出 game.sgf。普通 SGF 阅读器可读取棋步；异形接缝保存在 X* 扩展属性中。",
       "Exported game.sgf. Standard SGF readers can read the moves; unusual-board seams are stored in X* extension properties.",
+    ],
+    [
+      "已导出 game.sgf。普通 SGF 阅读器可读取棋步；异形接缝保存在 X* 扩展属性中。本局采用简化领地计分，双活中的眼仍计地。",
+      "Exported game.sgf. Standard SGF readers can read the moves; unusual-board seams are stored in X* extension properties. This game uses simplified territory scoring; seki eyes still count as territory.",
     ],
     [
       "已导入 game.sgf，共 20 手；可播放、切换视图或做 AI 分析。",

@@ -384,7 +384,7 @@ P(u,v) = ((R + v cos(u/2)) sin u,
 
 ### 7.6 计分公式
 
-日本数目规则 `japanese`：
+简化领地计分 `japanese`（旧协议名称；按领地和提子计分，未排除双活中的眼，不等同于完整日本规则）：
 
 ~~~text
 black = 黑地 + 黑方已提子 + 白方标死子
@@ -786,7 +786,7 @@ candidateLimit = 24（Worker 强制）
 - 缺 `SZ` 时假定 19×19。当前 `SGF_DEFAULT_LIMITS.maxBoardDimension = 30`，导入/复盘和底层 GoEngine 允许宽、高各 3–30；新建棋盘 UI/公开建房请求允许 5–30。FF[4] 坐标字母表理论可表达到 52，但这不是当前产品上限。
 - 缺 `XTOP` 时，采用用户当前待选拓扑，默认竹筒，并明确警告“原谱未写异形拓扑”。
 - 未知拓扑值拒绝，绝不猜测。
-- `RU` 中 Chinese/AGA/New Zealand/Tromp 归为中国面积；Japanese/Korean 归为日本数目；未知规则回退日本并警告。
+- `RU` 中 Chinese/AGA/New Zealand/Tromp 归为中国面积；Japanese/Korean 归为简化领地计分并提示规则差异；未知规则回退简化领地计分并警告。导出简化计分时使用 `RU[Simplified territory scoring (seki eyes counted)]`，避免误标为完整日本规则；显式传入的原始规则元数据保持原值。
 - `B[]/W[]` 是停着；19×19 及以下兼容旧 `tt` 停着并警告。
 - 根节点 `AB/AW/PL` 转为 replay base；压缩点列表可展开。
 - 中盘 `AB/AW/AE` 和中盘任意改行棋方无法表达为当前线性 replay，必须忽略并警告，不能静默执行。

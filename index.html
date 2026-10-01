@@ -800,6 +800,30 @@
           <input id="player-name" type="text" maxlength="20" autocomplete="nickname" placeholder="例如：竹友" required />
         </label>
 
+        <section id="stored-session-panel" class="pending-create-panel" aria-label="恢复已有身份" hidden>
+          <strong>此浏览器保存了房间身份</strong>
+          <p>请选择要恢复的身份；若要以新身份观战或加入，请使用下方按钮。</p>
+          <select id="stored-session-select" aria-label="选择房间身份"></select>
+          <button id="resume-stored-session" class="secondary-button" type="button">恢复所选身份</button>
+        </section>
+
+        <section id="pending-join-panel" class="pending-create-panel" aria-label="待确认加入" hidden>
+          <strong>有待确认的加入请求</strong>
+          <p>服务器可能已经接纳该身份。选择原请求核对，或在下方用新身份加入。</p>
+          <select id="pending-join-select" aria-label="选择待确认加入身份"></select>
+          <button id="retry-pending-join" class="secondary-button" type="button">核对并恢复加入</button>
+        </section>
+
+        <section id="pending-create-panel" class="pending-create-panel" aria-label="待确认建房" hidden>
+          <strong>有待确认的建房请求</strong>
+          <p>可能已经建成。先用原凭据核对；放弃后若已建成，将无法找回该房主身份。</p>
+          <select id="pending-create-select" aria-label="选择待确认的房间"></select>
+          <div>
+            <button id="retry-pending-create" class="secondary-button" type="button">核对并恢复</button>
+            <button id="abandon-pending-create" class="text-button" type="button">放弃所选恢复凭据</button>
+          </div>
+        </section>
+
         <button id="create-room" class="primary-button dialog-wide-button" type="button">
           创建房间
         </button>

@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { RoomClient } from "../src/multiplayer/roomClient.js";
 
 const target = process.argv[2] ?? "http://127.0.0.1:8787/";
-const clients = Array.from({ length: 2 }, () => new RoomClient({ baseUrl: target, locationHref: target, storage: null }));
+const clients = Array.from({ length: 2 }, () => {
+  const values = new Map();
+  return new RoomClient({ baseUrl: target, locationHref: target, storage: {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+  } });
+});
 const [black, white] = clients;
 function waitFor(client, predicate, label) {
   if (predicate(client.room)) return Promise.resolve(client.room);

@@ -591,11 +591,10 @@ export class GoEngine {
         : [],
     );
 
-    if (
-      Object.prototype.hasOwnProperty.call(snapshot, "replay") &&
-      Object.prototype.hasOwnProperty.call(snapshot, "topology")
-    ) {
-      game.replay = game.#copyAndValidateReplay(snapshot.replay);
+    if (Object.prototype.hasOwnProperty.call(snapshot, "replay")) {
+      game.replay = game.#copyAndValidateReplay(snapshot.replay, {
+        legacyTopology: !Object.prototype.hasOwnProperty.call(snapshot, "topology"),
+      });
     } else {
       // A state saved before replay support cannot reconstruct moves that have
       // already happened. It remains useful as a replay baseline for every
@@ -662,7 +661,7 @@ export class GoEngine {
     };
   }
 
-  #copyAndValidateReplay(replay) {
+  #copyAndValidateReplay(replay, { legacyTopology = false } = {}) {
     requirePlainObject(replay, "replay");
     for (const field of ["version", "complete", "base", "events"]) {
       requireOwnProperty(replay, field, "replay");
@@ -682,7 +681,16 @@ export class GoEngine {
     }
 
     const base = cloneSerializable(replay.base, "replay.base");
+    // A snapshot without topology predates topology-aware saves and is
+    // cylindrical. Its replay must be interpreted under the same rules;
+    // dropping the replay here would also bypass superko-history validation.
+    if (legacyTopology) base.topology = TOPOLOGY_CYLINDER;
     const replayGame = GoEngine.fromState(base);
+    if (replay.complete && replayGame.positionHistory.size !== 1) {
+      throw new TypeError(
+        "complete replay base must contain only its starting position",
+      );
+    }
     // Persist replay baselines in the same canonical dimension format as new
     // top-level states, even when a restored square replay used legacy `size`
     // alone. This keeps every newly serialized state self-describing.
@@ -752,6 +760,18 @@ export class GoEngine {
           `replay events do not reconstruct the current ${field}`,
         );
       }
+    }
+
+    // Superko depends on every position reached before this frame, not just
+    // the visible board. A valid replay (including a partial replay with its
+    // saved baseline) must rebuild the same history as the persisted state.
+    if (
+      replayGame.positionHistory.size !== this.positionHistory.size ||
+      [...replayGame.positionHistory].some(
+        (hash) => !this.positionHistory.has(hash),
+      )
+    ) {
+      throw new TypeError("replay events do not reconstruct positionHistory");
     }
 
     return {
@@ -1564,7 +1584,8 @@ export class GoEngine {
   /**
    * Calculate a score without mutating the game.
    *
-   * Japanese: surrounded territory + prisoners + marked-dead prisoners.
+   * Simplified territory scoring (`japanese` wire value): surrounded territory
+   * + prisoners + marked-dead prisoners; seki eyes are not excluded.
    * Chinese: living stones + surrounded territory. White receives komi in
    * either rule set.
    */

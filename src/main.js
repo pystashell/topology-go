@@ -338,7 +338,17 @@ const elements = {
   onlineRoomCodeField: $("#online-room-code-field"),
   playerName: $("#player-name"),
   roomCodeInput: $("#room-code-input"),
+  storedSessionPanel: $("#stored-session-panel"),
+  storedSessionSelect: $("#stored-session-select"),
+  resumeStoredSession: $("#resume-stored-session"),
+  pendingJoinPanel: $("#pending-join-panel"),
+  pendingJoinSelect: $("#pending-join-select"),
+  retryPendingJoin: $("#retry-pending-join"),
   createRoom: $("#create-room"),
+  pendingCreatePanel: $("#pending-create-panel"),
+  pendingCreateSelect: $("#pending-create-select"),
+  retryPendingCreate: $("#retry-pending-create"),
+  abandonPendingCreate: $("#abandon-pending-create"),
   joinRoom: $("#join-room"),
   watchRoom: $("#watch-room"),
   appVersion: $("#app-version"),
@@ -1020,6 +1030,7 @@ function sgfImportWarningSummary(warnings) {
     IGNORED_MIDGAME_SETUP: "忽略了中盘摆子",
     IGNORED_MIDGAME_PLAYER: "忽略了中盘改行棋方",
     NON_ALTERNATING_MOVE: "棋谱中存在非交替行棋",
+    SIMPLIFIED_TERRITORY_SCORING: "已按简化领地计分解释，双活中的眼仍计地",
     UNKNOWN_RULE: "未知规则已按简化领地计分解释",
     NON_FF4: "已按 FF[4] 兼容方式解析",
     CHARSET_ASSUMED_UTF8: "文本已按 UTF-8 读取",
@@ -1027,11 +1038,15 @@ function sgfImportWarningSummary(warnings) {
     MISSING_SIZE: "缺少尺寸，已按 19 × 19 解释",
     MISSING_GM: "缺少棋类标记，已按围棋解释",
     NORMALIZED_PROPERTY_ID: "属性名已规范化",
+    PARTIAL_BASE_MISSING: "旧版部分棋谱缺少提子与劫争历史，仅能近似复盘",
   };
   const relevant = (Array.isArray(warnings) ? warnings : [])
     .filter((item) => item?.code !== "TOPOLOGY_ASSUMED");
   if (relevant.length === 0) return "";
-  const details = [...new Set(relevant.map((item) => labels[item?.code]).filter(Boolean))];
+  const details = [...new Set(relevant
+    .sort((a, b) => Number(b.code === "PARTIAL_BASE_MISSING") -
+      Number(a.code === "PARTIAL_BASE_MISSING"))
+    .map((item) => labels[item?.code]).filter(Boolean))];
   const visible = details.slice(0, 2);
   const hiddenCount = Math.max(0, relevant.length - visible.length);
   const detailText = visible.length > 0 ? visible.join("；") : "存在格式兼容处理";
@@ -1069,11 +1084,13 @@ function exportCurrentSgf() {
     link.click();
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    setMessage(
-      warnings.length > 0
-        ? `已导出 ${filename}。普通 SGF 阅读器可读取棋步；异形接缝保存在 X* 扩展属性中。`
-        : `已导出 ${filename}。`,
-    );
+    const topologyNote = warnings.some((item) => item.code === "NONSTANDARD_TOPOLOGY")
+      ? "普通 SGF 阅读器可读取棋步；异形接缝保存在 X* 扩展属性中。"
+      : "";
+    const scoringNote = warnings.some((item) => item.code === "SIMPLIFIED_TERRITORY_SCORING")
+      ? "本局采用简化领地计分，双活中的眼仍计地。"
+      : "";
+    setMessage(`已导出 ${filename}。${topologyNote}${scoringNote}`);
   } catch (error) {
     console.error("Unable to export SGF", error);
     setMessage(`导出 SGF 失败：${error.message || "棋谱格式无法生成"}`, true);
@@ -3092,7 +3109,7 @@ function updateLobbyRoomCard(card, room) {
     join.textContent = resumable ? "返回房间" : "加入对局";
     view.actions.append(join);
   }
-  if (!resumable && room.watchable) {
+  if (room.watchable) {
     const watch = document.createElement("button");
     watch.type = "button";
     watch.className = "secondary-button";
@@ -3215,9 +3232,15 @@ function updateRoomUrl(code = "") {
 function setOnlineBusy(busy, action = "") {
   onlineBusy = busy;
   elements.createRoom.disabled = busy;
+  elements.resumeStoredSession.disabled = busy;
+  elements.retryPendingJoin.disabled = busy;
+  elements.retryPendingCreate.disabled = busy;
+  elements.abandonPendingCreate.disabled = busy;
   elements.joinRoom.disabled = busy;
   elements.watchRoom.disabled = busy;
-  elements.createRoom.textContent = busy && action === "create" ? "正在创建…" : "创建房间";
+  elements.createRoom.textContent = busy && action === "create"
+    ? "正在创建…"
+    : roomClient.pendingCreateCode ? "重试上次建房" : "创建房间";
   elements.joinRoom.textContent = busy && action === "join" ? "正在加入…" : "加入房间";
   elements.watchRoom.textContent = busy && action === "watch" ? "正在进入观战…" : "进入观战";
   updateRoomUI();
@@ -3226,6 +3249,55 @@ function setOnlineBusy(busy, action = "") {
 function showOnlineError(message = "") {
   elements.onlineError.textContent = message;
   elements.onlineError.hidden = !message;
+}
+
+function renderPendingCreatePanel() {
+  const pending = roomClient.listPendingCreates();
+  const selectedId = elements.pendingCreateSelect.value;
+  elements.pendingCreateSelect.replaceChildren(...pending.map((entry) => {
+    const option = document.createElement("option");
+    option.value = entry.playerId;
+    option.textContent = `${entry.roomCode} · ${entry.name} · ${entry.width} × ${entry.height}`;
+    return option;
+  }));
+  if (pending.some((entry) => entry.playerId === selectedId)) {
+    elements.pendingCreateSelect.value = selectedId;
+  }
+  elements.pendingCreatePanel.hidden = elements.createRoom.hidden || pending.length === 0;
+  if (!onlineBusy) {
+    elements.createRoom.textContent = roomClient.pendingCreateCode
+      ? "重试上次建房" : "创建房间";
+  }
+}
+
+function renderStoredIdentityPanels() {
+  const code = sanitizeRoomCode(elements.roomCodeInput.value);
+  const sessions = code.length === 6 ? roomClient.listStoredSessions(code) : [];
+  const joins = code.length === 6 ? roomClient.listPendingJoins(code) : [];
+  const selectedSession = elements.storedSessionSelect.value;
+  const selectedJoin = elements.pendingJoinSelect.value;
+  elements.storedSessionSelect.replaceChildren(...sessions.map((entry) => {
+    const option = document.createElement("option");
+    option.value = entry.playerId;
+    option.textContent = `${entry.playerName || "未命名"} · ${entry.color === BLACK ? "黑方" :
+      entry.color === WHITE ? "白方" : "观众"}`;
+    return option;
+  }));
+  if (sessions.some((entry) => entry.playerId === selectedSession)) {
+    elements.storedSessionSelect.value = selectedSession;
+  }
+  elements.pendingJoinSelect.replaceChildren(...joins.map((entry) => {
+    const option = document.createElement("option");
+    option.value = entry.playerId;
+    option.textContent = `${entry.name || "未命名"} · ${entry.role === "spectator" ? "观战" : "玩家"}`;
+    return option;
+  }));
+  if (joins.some((entry) => entry.playerId === selectedJoin)) {
+    elements.pendingJoinSelect.value = selectedJoin;
+  }
+  const entering = !elements.onlineRoomCodeField.hidden;
+  elements.storedSessionPanel.hidden = !entering || sessions.length === 0;
+  elements.pendingJoinPanel.hidden = !entering || joins.length === 0;
 }
 
 function savedPlayerName() {
@@ -3322,6 +3394,8 @@ function showOnlineDialog(roomCode = "", { intent = "all" } = {}) {
   elements.onlineRoomCodeField.hidden = creating;
   elements.joinRoom.hidden = creating || spectatorOnly;
   elements.watchRoom.hidden = creating || playerOnly;
+  renderPendingCreatePanel();
+  renderStoredIdentityPanels();
   elements.cancelOnline.textContent = appRouteMode === "online" ? "返回大厅" : "取消";
   if (typeof elements.onlineDialog.showModal === "function") {
     if (!elements.onlineDialog.open) elements.onlineDialog.showModal();
@@ -6116,8 +6190,11 @@ function normalizedPlayerName() {
   return elements.playerName.value.replace(/\s+/g, " ").trim().slice(0, 20);
 }
 
-async function createOnlineRoom() {
-  const name = normalizedPlayerName();
+async function createOnlineRoom({ pendingPlayerId = "" } = {}) {
+  const pendingRequest = pendingPlayerId
+    ? roomClient.listPendingCreates().find((entry) => entry.playerId === pendingPlayerId)
+    : null;
+  const name = pendingPlayerId ? pendingRequest?.name ?? "" : normalizedPlayerName();
   if (!name) {
     showOnlineError("请先填写你的名字。");
     elements.playerName.focus();
@@ -6131,15 +6208,24 @@ async function createOnlineRoom() {
   showOnlineError();
   setOnlineBusy(true, "create");
   try {
-    const result = await roomClient.createRoom({ name, ...getNewGameOptions() });
+    const result = pendingPlayerId
+      ? await roomClient.retryPendingCreate(pendingRequest.roomCode, pendingPlayerId)
+      : await roomClient.createRoom({ name, ...getNewGameOptions() });
     if (matchLifecycle === MATCH_LIFECYCLE_LOBBY) {
       matchLifecycle = MATCH_LIFECYCLE_WAITING;
     }
     resetChatSessionState();
     updateRoomUrl(result.roomCode);
+    elements.playerName.value = result.session.playerName;
+    rememberPlayerName(result.session.playerName);
     closeOnlineDialog();
     setSidebarTab("settings");
-    setMessage(`房间 ${result.roomCode} 已创建，把邀请链接发给朋友吧。`);
+    setMessage(result.recoverable === false
+      ? `房间 ${result.roomCode} 已创建，但浏览器未保存房主凭据；请勿刷新，并检查浏览器存储设置。`
+      : result.resumedPending
+        ? `房间 ${result.roomCode} 已恢复上次建房请求，房主为 ${result.session.playerName}；请核对棋盘设置。`
+        : `房间 ${result.roomCode} 已创建，把邀请链接发给朋友吧。`,
+      result.recoverable === false);
     // The HTTP result installs the session after the first room snapshot may
     // already have rendered. Refresh once more with the authoritative role so
     // host-only and turn-only controls cannot retain their offline state.
@@ -6148,14 +6234,22 @@ async function createOnlineRoom() {
     restoreOfflineGame();
     updateUI();
     maybeStartAITurn();
-    showOnlineError(error.message || "创建房间失败，请稍后重试。");
+    const pending = roomClient.pendingCreateCode;
+    showOnlineError(pending
+      ? `${error.message || "创建房间失败"} 已保留房间 ${pending} 的建房凭据；可点击“核对并恢复”重试原请求。若要修改设置，请先放弃所选恢复凭据。`
+      : error.message || "创建房间失败，请稍后重试。");
   } finally {
     setOnlineBusy(false);
+    renderPendingCreatePanel();
   }
 }
 
-async function joinOnlineRoom(role = "player") {
-  const name = normalizedPlayerName();
+async function joinOnlineRoom(role = "player", pendingPlayerId = "") {
+  const pendingJoin = pendingPlayerId
+    ? roomClient.listPendingJoins(sanitizeRoomCode(elements.roomCodeInput.value))
+      .find((entry) => entry.playerId === pendingPlayerId)
+    : null;
+  const name = pendingJoin?.name || normalizedPlayerName();
   const code = sanitizeRoomCode(elements.roomCodeInput.value);
   if (!name) {
     showOnlineError("请先填写你的名字。");
@@ -6175,7 +6269,9 @@ async function joinOnlineRoom(role = "player") {
   showOnlineError();
   setOnlineBusy(true, role === "spectator" ? "watch" : "join");
   try {
-    const result = await roomClient.joinRoom({ code, name, role });
+    const result = await roomClient.joinRoom({
+      code, name, role: pendingJoin?.role ?? role, pendingPlayerId,
+    });
     if (matchLifecycle === MATCH_LIFECYCLE_LOBBY) {
       matchLifecycle = MATCH_LIFECYCLE_WAITING;
     }
@@ -6183,6 +6279,10 @@ async function joinOnlineRoom(role = "player") {
     updateRoomUrl(result.roomCode);
     closeOnlineDialog();
     const identity = result.session ?? roomClient.identity;
+    if (identity?.playerName) {
+      elements.playerName.value = identity.playerName;
+      rememberPlayerName(identity.playerName);
+    }
     const roleText = identity?.color === BLACK
       ? "黑方"
       : identity?.color === WHITE
@@ -6205,6 +6305,37 @@ async function joinOnlineRoom(role = "player") {
     showOnlineError(error.message || "加入房间失败，请检查房间号。");
   } finally {
     setOnlineBusy(false);
+  }
+}
+
+function resumeStoredOnlineRoom() {
+  const code = sanitizeRoomCode(elements.roomCodeInput.value);
+  const playerId = elements.storedSessionSelect.value;
+  if (!code || !playerId) {
+    showOnlineError("请先选择要恢复的房间身份。");
+    return;
+  }
+  rememberOfflineGame();
+  cancelAIThinking();
+  cancelReplayAIReview({ terminate: true });
+  aiActive = false;
+  try {
+    if (!roomClient.resumeRoom(code, playerId)) {
+      throw new Error("所选身份的恢复凭据已失效。可使用下方按钮以新身份进入。");
+    }
+    resetChatSessionState();
+    updateRoomUrl(code);
+    if (roomClient.identity?.playerName) {
+      elements.playerName.value = roomClient.identity.playerName;
+      rememberPlayerName(roomClient.identity.playerName);
+    }
+    closeOnlineDialog();
+    setMessage(`正在以 ${roomClient.identity?.playerName || "所选身份"} 的身份恢复房间 ${code}…`);
+    updateUI();
+  } catch (error) {
+    restoreOfflineGame();
+    updateUI();
+    showOnlineError(error.message || "恢复房间身份失败。");
   }
 }
 
@@ -6267,8 +6398,10 @@ async function leaveOnlineRoom() {
       "当前无法通知服务器释放座位。忘记房间只会清除本机凭据，原座位可能继续保留。确定继续吗？",
     ));
     if (!abandon) return;
-    roomClient.abandonRoom();
-    returnToOffline("已停止重连并忘记这个房间。");
+    const forgotten = roomClient.abandonRoom();
+    returnToOffline(forgotten
+      ? "已停止重连并忘记这个房间。"
+      : "已停止重连，但本地房间凭据未能删除，恢复入口可能再次出现；请检查浏览器存储设置。");
     return;
   }
   const confirmed = window.confirm(translateText("退出房间会释放你的座位，确定退出吗？"));
@@ -6277,7 +6410,9 @@ async function leaveOnlineRoom() {
   try {
     await roomClient.leave();
     setOnlineBusy(false);
-    returnToOffline("已退出联机房间，回到之前的单机棋盘。");
+    returnToOffline(roomClient.lastCredentialCleanupFailed
+      ? "已退出联机房间，但本地凭据未能删除，恢复入口可能再次出现；请检查浏览器存储设置。"
+      : "已退出联机房间，回到之前的单机棋盘。");
   } catch (error) {
     setOnlineBusy(false);
     setMessage(
@@ -6356,6 +6491,31 @@ elements.onlineModifySettings.addEventListener("click", () => {
 });
 elements.onlineForm.addEventListener("submit", (event) => event.preventDefault());
 elements.createRoom.addEventListener("click", () => void createOnlineRoom());
+elements.resumeStoredSession.addEventListener("click", resumeStoredOnlineRoom);
+elements.retryPendingJoin.addEventListener("click", () => {
+  const code = sanitizeRoomCode(elements.roomCodeInput.value);
+  const pending = roomClient.listPendingJoins(code)
+    .find((entry) => entry.playerId === elements.pendingJoinSelect.value);
+  if (!pending) {
+    showOnlineError("所选加入请求已失效，请重新选择。");
+    return;
+  }
+  void joinOnlineRoom(pending.role, pending.playerId);
+});
+elements.retryPendingCreate.addEventListener("click", () => {
+  void createOnlineRoom({ pendingPlayerId: elements.pendingCreateSelect.value });
+});
+elements.abandonPendingCreate.addEventListener("click", () => {
+  const selected = roomClient.listPendingCreates()
+    .find((entry) => entry.playerId === elements.pendingCreateSelect.value);
+  if (!selected) return;
+  if (!roomClient.abandonPendingCreate(selected.roomCode, selected.playerId)) {
+    showOnlineError("无法删除所选恢复凭据；请检查浏览器存储设置后重试。");
+    return;
+  }
+  renderPendingCreatePanel();
+  showOnlineError(`已放弃房间 ${selected.roomCode} 的恢复凭据；若房间已创建，将无法用原房主身份恢复。现在可按当前设置创建新房间。`);
+});
 elements.joinRoom.addEventListener("click", () => void joinOnlineRoom());
 elements.watchRoom.addEventListener("click", () => void joinOnlineRoom("spectator"));
 elements.lobbyCreateRoom.addEventListener("click", () => {
@@ -6468,15 +6628,26 @@ elements.toggleSound.addEventListener("click", () => {
 });
 elements.roomCodeInput.addEventListener("input", () => {
   elements.roomCodeInput.value = sanitizeRoomCode(elements.roomCodeInput.value);
+  renderStoredIdentityPanels();
   showOnlineError();
 });
 elements.onlineForm.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" || onlineBusy) return;
+  if (event.target.closest?.("button, select")) return;
   event.preventDefault();
-  if (sanitizeRoomCode(elements.roomCodeInput.value).length === 6) {
-    void joinOnlineRoom();
-  } else {
+  if (elements.onlineRoomCodeField.hidden) {
     void createOnlineRoom();
+  } else if (sanitizeRoomCode(elements.roomCodeInput.value).length === 6 &&
+      !elements.joinRoom.hidden) {
+    void joinOnlineRoom();
+  } else if (sanitizeRoomCode(elements.roomCodeInput.value).length === 6 &&
+      !elements.watchRoom.hidden) {
+    void joinOnlineRoom("spectator");
+  } else if (!elements.createRoom.hidden) {
+    void createOnlineRoom();
+  } else {
+    showOnlineError("请输入六位房间号。");
+    elements.roomCodeInput.focus();
   }
 });
 
@@ -6485,9 +6656,12 @@ roomClient.on("connection", (event) => {
   // unlock actions until a welcome/state message for this socket arrives.
   onlineStateSynchronized = false;
   if (event.terminal && [4401, 4404].includes(event.code) && !hasOnlineSession()) {
-    returnToOffline(event.code === 4404
+    const reason = event.code === 4404
       ? "房间已因长时间无活动而关闭。"
-      : "房间身份已经失效，请重新加入。");
+      : "房间身份已经失效，请重新加入。";
+    returnToOffline(roomClient.lastCredentialCleanupFailed
+      ? `${reason}本地凭据未能删除，恢复入口可能再次出现；请检查浏览器存储设置。`
+      : reason);
     return;
   }
   if (!roomClient.isConnected && aiWorkerContext?.kind === MATCH_TRANSPORT_ONLINE) {
@@ -6582,14 +6756,31 @@ if (initialRoute.mode === "online" && initialRoute.roomCode.length === 6) {
     updateRoomUrl(sharedRoomCode);
     setMessage(`正在恢复房间 ${sharedRoomCode}…`);
     updateRoomUI();
+  } else if (roomClient.pendingCreateCode === sharedRoomCode) {
+    setMessage(`正在恢复房间 ${sharedRoomCode}…`);
+    void roomClient.retryPendingCreate(sharedRoomCode).then((result) => {
+      updateRoomUrl(result.roomCode);
+      elements.playerName.value = result.session.playerName;
+      rememberPlayerName(result.session.playerName);
+      setMessage(`房间 ${result.roomCode} 已恢复上次建房请求，房主为 ${result.session.playerName}；请核对棋盘设置。`);
+      updateUI();
+    }).catch((error) => {
+      showOnlineDialog("", { intent: "create" });
+      showOnlineError(error.message || "恢复建房请求失败，请重试。");
+    });
   } else {
     showOnlineDialog(sharedRoomCode, { intent: initialRoute.role });
-    if (initialRoute.role === "spectator") {
+    if (roomClient.hasStoredSession(sharedRoomCode)) {
+      setMessage("此浏览器保存了该房间的身份；请选择要恢复的身份，或以新身份进入。");
+    } else if (initialRoute.role === "spectator") {
       setMessage("这是观战入口；填写名字后请选择“进入观战”。");
     } else {
       setMessage("这是大厅的玩家入口；填写名字后申请空余的对手席位。");
     }
   }
+}
+if (initialRoute.mode !== "online" && roomClient.listPendingCreates().length > 0) {
+  setMessage("有待确认的建房请求；打开创建房间对话框可核对并恢复。");
 }
 
 const unlockGameSounds = () => void gameSounds.unlock();

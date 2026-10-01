@@ -3020,7 +3020,7 @@ export class RoomEngine {
       payload.expectedPositionToken !== positionToken(this.game, this.state)
     ) {
       throw new RoomEngineError(
-        "AI 思考期间棋局已经变化，请按最新局面重新计算。",
+          "棋局已变化，请同步后重试。",
         409,
         "STALE_GAME_STATE",
       );

@@ -10,9 +10,9 @@ import { hashRoomToken } from "../src/multiplayer/roomEngine.js";
 
 export { BadukLobby, BadukRoom };
 
-const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const MAX_BODY_BYTES = 4 * 1024;
-const MAX_ROOM_CODE_ATTEMPTS = 12;
+const JOIN_TOKEN_PATTERN = /^[0-9a-f]{64}$/u;
+const JOIN_PLAYER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -33,16 +33,6 @@ function normalizeName(value) {
   if (typeof value !== "string") return null;
   const name = value.replace(/\s+/g, " ").trim();
   return name && [...name].length <= 20 ? name : null;
-}
-
-function createRoomCode() {
-  const bytes = crypto.getRandomValues(new Uint8Array(6));
-  return Array.from(bytes, (byte) => ROOM_CODE_ALPHABET[byte & 31]).join("");
-}
-
-function createToken() {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 async function readJsonBody(request) {
@@ -130,55 +120,87 @@ async function createRoom(request, env) {
   }
   const name = normalizeName(body.name);
   if (!name) return jsonResponse({ error: "请填写 1 到 20 个字的名字。" }, 400);
+  const hasCredentials = ["roomCode", "playerId", "token"]
+    .map((key) => Object.prototype.hasOwnProperty.call(body, key));
+  if (hasCredentials.every((present) => !present)) {
+    return jsonResponse({
+      error: "客户端版本过旧，请刷新页面后重新建房。",
+      code: "PROTOCOL_UPGRADE_REQUIRED",
+    }, 426);
+  }
+  if (hasCredentials.some((present) => !present) ||
+      !isRoomCode(body.roomCode) ||
+      typeof body.playerId !== "string" ||
+      typeof body.token !== "string" ||
+      !JOIN_PLAYER_ID_PATTERN.test(body.playerId) ||
+      !JOIN_TOKEN_PATTERN.test(body.token)) {
+    return jsonResponse({ error: "建房凭据无效。", code: "BAD_REQUEST" }, 400);
+  }
 
-  const token = createToken();
-  const playerId = crypto.randomUUID();
+  const { roomCode, playerId, token } = body;
   const tokenHash = await hashRoomToken(token);
-
-  for (let attempt = 0; attempt < MAX_ROOM_CODE_ATTEMPTS; attempt += 1) {
-    const roomCode = createRoomCode();
-    const stub = env.BADUK_ROOMS.getByName(roomCode);
-    const result = await callRoom(
-      stub,
-      new Request(new URL("/internal/init", request.url), {
+  const stub = env.BADUK_ROOMS.getByName(roomCode);
+  let result;
+  try {
+    result = await callRoom(stub, new Request(new URL("/internal/init", request.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code: roomCode,
+        name,
+        size: body.size,
+        width: body.width,
+        height: body.height,
+        mainTimeSeconds: body.mainTimeSeconds,
+        byoYomiPeriods: body.byoYomiPeriods,
+        byoYomiSeconds: body.byoYomiSeconds,
+        komi: body.komi,
+        scoringRule: body.scoringRule,
+        topology: body.topology,
+        playerId,
+        tokenHash,
+        // Online rooms open in reusable setup state until an invitation starts a round.
+        startImmediately: false,
+      }),
+    }));
+  } catch (error) {
+    console.error("Room creation response failed", error);
+    result = {
+      ok: false,
+      response: jsonResponse({
+        error: "建房结果暂时无法确认，请使用原凭据重试。",
+        code: "CREATE_COMMIT_UNCERTAIN",
+        retryable: true,
+      }, 503),
+    };
+  }
+  if (!result.ok && result.response.status === 409) {
+    return jsonResponse({ error: "房间码已被使用，请重试建房。", code: "ROOM_CODE_TAKEN" }, 409);
+  }
+  if (!result.ok && result.response.status >= 500) {
+    try {
+      const checked = await callRoom(stub, new Request(new URL("/internal/join-status", request.url), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          code: roomCode,
-          name,
-          size: body.size,
-          width: body.width,
-          height: body.height,
-          mainTimeSeconds: body.mainTimeSeconds,
-          byoYomiPeriods: body.byoYomiPeriods,
-          byoYomiSeconds: body.byoYomiSeconds,
-          komi: body.komi,
-          scoringRule: body.scoringRule,
-          topology: body.topology,
-          playerId,
-          tokenHash,
-          // Online rooms always open in the reusable setup state. A round is
-          // created only after request_game (and, for a friend match, after
-          // the invited player accepts it).
-          startImmediately: false,
-        }),
-      }),
-    );
-    if (!result.ok) {
-      if (result.response.status === 409) continue;
-      return result.response;
+        body: JSON.stringify({ playerId, tokenHash }),
+      }));
+      if (checked.ok && checked.payload?.identity?.playerId === playerId &&
+          checked.payload.identity.code === roomCode &&
+          checked.payload.identity.role === "player" &&
+          checked.payload.identity.color === "black") {
+        return jsonResponse(sessionBody(checked.payload.identity, token, checked.payload.room), 201);
+      }
+    } catch (error) {
+      console.error("Unable to reconcile uncertain room creation", error);
     }
-    const identity = {
-      code: roomCode,
-      playerId,
-      playerName: name,
-      name,
-      role: "player",
-      color: "black",
-    };
-    return jsonResponse(sessionBody(identity, token, result.payload.room), 201);
   }
-  return jsonResponse({ error: "暂时无法分配房间码，请重试。" }, 503);
+  if (!result.ok) {
+    return result.response;
+  }
+  const identity = result.payload.identity ?? {
+    code: roomCode, playerId, playerName: name, name, role: "player", color: "black",
+  };
+  return jsonResponse(sessionBody(identity, token, result.payload.room), 201);
 }
 
 async function joinRoom(request, env, roomCode) {
@@ -193,18 +215,60 @@ async function joinRoom(request, env, roomCode) {
     return jsonResponse({ error: "名字或房间身份不正确。" }, 400);
   }
 
-  const token = createToken();
-  const playerId = crypto.randomUUID();
+  // The client keeps these values until it receives the session. A join
+  // without retryable credentials could reserve a seat and lose its response,
+  // leaving the caller with no way to recover that identity.
+  const hasToken = Object.prototype.hasOwnProperty.call(body, "token");
+  const hasPlayerId = Object.prototype.hasOwnProperty.call(body, "playerId");
+  if (!hasToken && !hasPlayerId) {
+    return jsonResponse({
+      error: "客户端版本过旧，请刷新页面后重新加入。",
+      code: "PROTOCOL_UPGRADE_REQUIRED",
+    }, 426);
+  }
+  if (!hasToken || !hasPlayerId ||
+      typeof body.token !== "string" ||
+      typeof body.playerId !== "string" ||
+      !JOIN_TOKEN_PATTERN.test(body.token) ||
+      !JOIN_PLAYER_ID_PATTERN.test(body.playerId)) {
+    return jsonResponse({ error: "加入凭据无效。", code: "BAD_REQUEST" }, 400);
+  }
+  const token = body.token;
+  const playerId = body.playerId;
   const tokenHash = await hashRoomToken(token);
   const stub = env.BADUK_ROOMS.getByName(roomCode);
-  const result = await callRoom(
-    stub,
-    new Request(new URL("/internal/join", request.url), {
+  let result;
+  try {
+    result = await callRoom(stub, new Request(new URL("/internal/join", request.url), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, role, playerId, tokenHash }),
-    }),
-  );
+    }));
+  } catch (error) {
+    console.error("Room join response failed", error);
+    result = {
+      ok: false,
+      response: jsonResponse({
+        error: "加入结果暂时无法确认，请使用原凭据重试。",
+        code: "JOIN_COMMIT_UNCERTAIN",
+        retryable: true,
+      }, 503),
+    };
+  }
+  if (!result.ok && result.response.status >= 500) {
+    try {
+      const checked = await callRoom(stub, new Request(new URL("/internal/join-status", request.url), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playerId, tokenHash }),
+      }));
+      if (checked.ok && checked.payload?.identity?.playerId === playerId) {
+        return jsonResponse(sessionBody(checked.payload.identity, token, checked.payload.room), 201);
+      }
+    } catch (error) {
+      console.error("Unable to reconcile uncertain room join", error);
+    }
+  }
   if (!result.ok) return result.response;
   return jsonResponse(
     sessionBody(result.payload.identity, token, result.payload.room),

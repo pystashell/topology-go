@@ -48,6 +48,8 @@ test("standard FF4 metadata and square replay round-trip into GoEngine frames", 
   );
   assert.match(exported.sgf, /^\(;FF\[4\]GM\[1\]CA\[UTF-8\]/u);
   assert.match(exported.sgf, /SZ\[9\]/u);
+  assert.match(exported.sgf, /RU\[Simplified territory scoring \(seki eyes counted\)\]/u);
+  assert.equal(exported.warnings.some(({ code }) => code === "SIMPLIFIED_TERRITORY_SCORING"), true);
   assert.match(exported.sgf, /PB\[Alice\]PW\[Bob\]RE\[W\+R\]/u);
 
   const imported = importSgf(exported.sgf);
@@ -57,10 +59,142 @@ test("standard FF4 metadata and square replay round-trip into GoEngine frames", 
   assert.equal(imported.metadata.whitePlayer, "Bob");
   assert.equal(imported.metadata.result, "W+R");
   assert.deepEqual(imported.replay.events, game.getReplayState().events);
+  assert.equal(imported.replay.base.scoringRule, "japanese");
+  assert.equal(imported.warnings.some(({ code }) => code === "UNKNOWN_RULE"), false);
   assert.deepEqual(
     buildReplayFrames(imported.replay).frames.at(-1),
     game.getState(),
   );
+});
+
+test("partial SGF preserves captures and superko history from a legacy saved game", () => {
+  const game = new GoEngine({ size: 5, komi: 0, scoringRule: "japanese" });
+  for (const [row, col] of [
+    [0, 0], [1, 1], [1, 0], [4, 4], [0, 1],
+    [4, 3], [2, 1], [3, 4], [1, 2],
+  ]) {
+    assert.equal(game.play(row, col).ok, true);
+  }
+  const legacy = game.exportState();
+  delete legacy.replay;
+  const partial = GoEngine.fromState(legacy).getReplayState();
+  assert.equal(partial.complete, false);
+  assert.equal(partial.base.captures.black, 1);
+  const { sgf } = exportSgf(partial);
+  assert.match(sgf, /XBADUKBASE\[1\]/u);
+  const imported = importSgf(sgf);
+  assert.deepEqual(imported.replay.base.captures, partial.base.captures);
+  assert.deepEqual(imported.replay.base.positionHistory, partial.base.positionHistory);
+  assert.deepEqual(
+    GoEngine.fromState(imported.replay.base).score("japanese"),
+    GoEngine.fromState(partial.base).score("japanese"),
+  );
+  assert.deepEqual(buildReplayFrames(imported.replay).frames.at(-1).captures,
+    game.getState().captures);
+});
+
+test("partial SGF retains a scoring baseline needed by later scoring events", () => {
+  const game = new GoEngine({ size: 5, komi: 0, scoringRule: "japanese" });
+  assert.equal(game.pass().ok, true);
+  assert.equal(game.pass().ok, true);
+  const legacy = game.exportState();
+  delete legacy.replay;
+  const partialGame = GoEngine.fromState(legacy);
+  assert.equal(partialGame.finishScoring().ok, true);
+  const { sgf } = exportSgf(partialGame.getReplayState());
+  const imported = importSgf(sgf);
+  assert.equal(imported.replay.base.phase, "scoring");
+  assert.equal(imported.replay.base.consecutivePasses, 2);
+  assert.equal(buildReplayFrames(imported.replay).frames.at(-1).phase, PHASE_FINISHED);
+});
+
+test("partial SGF records its original player to move before later resume events", () => {
+  const game = new GoEngine({ size: 5 });
+  assert.equal(game.pass().ok, true);
+  assert.equal(game.pass().ok, true);
+  const legacy = game.exportState();
+  delete legacy.replay;
+  const partialGame = GoEngine.fromState(legacy);
+  const originalPlayer = partialGame.getReplayState().base.currentPlayer;
+  assert.equal(originalPlayer, "black");
+  assert.equal(partialGame.resumePlay("white").ok, true);
+  assert.equal(partialGame.play(0, 0).ok, true);
+  const { sgf } = exportSgf(partialGame.getReplayState());
+  assert.match(sgf, /PL\[B\]/u);
+  const imported = importSgf(sgf);
+  assert.equal(imported.replay.base.currentPlayer, originalPlayer);
+  assert.equal(buildReplayFrames(imported.replay).frames.at(-1).board[0][0], "white");
+});
+
+test("legacy partial SGF warns about missing baseline and rejects scoring-only events", () => {
+  const imported = importSgf("(;FF[4]GM[1]SZ[5]XTOP[cylinder]XCOMPLETE[0]AB[aa];W[bb])");
+  assert.equal(imported.warnings.some(({ code }) => code === "PARTIAL_BASE_MISSING"), true);
+  assert.equal(buildReplayFrames(imported.replay).frames.at(-1).board[1][1], "white");
+  assert.throws(() => importSgf(
+    "(;FF[4]GM[1]SZ[5]XTOP[cylinder]XCOMPLETE[0];XFINISH[japanese])",
+  ), { code: "PARTIAL_BASE_REQUIRED" });
+  const legalLegacy = importSgf(
+    "(;FF[4]GM[1]SZ[5]RU[Chinese]XTOP[cylinder]XCOMPLETE[0];B[];W[];XRESUME[B];B[aa])",
+  );
+  assert.equal(legalLegacy.warnings.some(({ code }) => code === "PARTIAL_BASE_MISSING"), true);
+  assert.equal(buildReplayFrames(legalLegacy.replay).frames.at(-1).board[0][0], "black");
+});
+
+test("partial baseline extensions reject malformed or conflicting state", () => {
+  for (const sgf of [
+    "(;FF[4]GM[1]SZ[5]XTOP[cylinder]XBADUKBASE[1][{}])",
+    "(;FF[4]GM[1]SZ[5]XTOP[cylinder]XCOMPLETE[0]XBADUKBASE[2][{}])",
+    "(;FF[4]GM[1]SZ[5]XTOP[cylinder]XCOMPLETE[0]XBADUKBASE[1][not-json])",
+    "(;FF[4]GM[1]SZ[5]XTOP[cylinder]XCOMPLETE[0]XBADUKBASE[1][{}]XBADUKBASE[1][{}])",
+    `(;FF[4]GM[1]SZ[5]XTOP[cylinder]XCOMPLETE[0]XBADUKBASE[1][${JSON.stringify({
+      "captures,consecutivePasses,deadStones,lastMove,phase,positionHistory,result,undoHistory": "ignored",
+    })}])`,
+    "(;FF[4]GM[1]SZ[5]RU[Chinese]XTOP[cylinder]XCOMPLETE[0];XBADUKBASE[1][{}];B[aa])",
+  ]) {
+    assert.throws(() => importSgf(sgf), { code: "INVALID_PARTIAL_BASE" });
+  }
+  const game = new GoEngine({ size: 5 });
+  const legacy = game.exportState();
+  delete legacy.replay;
+  const partial = GoEngine.fromState(legacy).getReplayState();
+  assert.throws(() => exportSgf(partial, { topology: "torus" }), {
+    code: "INVALID_PARTIAL_BASE",
+  });
+  const { sgf } = exportSgf(partial, { limits: { maxValueLength: 64 } });
+  assert.match(sgf, /XBADUKBASE\[1\]\[[^\]]{1,64}\]\[/u);
+  assert.deepEqual(importSgf(sgf, { limits: { maxValueLength: 64 } }).replay.base.positionHistory,
+    partial.base.positionHistory);
+  assert.throws(() => importSgf(sgf.replace(/XCOMPLETE\[0\]/u, "XCOMPLETE[0][1]")), {
+    code: "INVALID_PARTIAL_BASE",
+  });
+  assert.throws(() => importSgf(sgf.replace(/XTOP\[cylinder\]/u, "XTOP[torus]")), {
+    code: "INVALID_PARTIAL_BASE",
+  });
+  assert.throws(() => importSgf(sgf.replace(/XTOP\[cylinder\]/u, "XTOP[cylinder][torus]")), {
+    code: "INVALID_PARTIAL_BASE",
+  });
+  const occupied = new GoEngine({ size: 5, scoringRule: "chinese" });
+  assert.equal(occupied.play(0, 0).ok, true);
+  assert.equal(occupied.play(1, 1).ok, true);
+  const oldState = occupied.exportState();
+  delete oldState.replay;
+  const occupiedSgf = exportSgf(GoEngine.fromState(oldState).getReplayState()).sgf;
+  assert.throws(() => importSgf(occupiedSgf.replace("AB[aa]AW[bb]", "")), {
+    code: "INVALID_PARTIAL_BASE",
+  });
+});
+
+test("explicit SGF rules metadata is retained with a simplified-scoring warning", () => {
+  const game = new GoEngine({ size: 5, scoringRule: "japanese" });
+  const exported = exportSgf({
+    replay: game.getReplayState(),
+    metadata: { rules: "Japanese" },
+  });
+  assert.match(exported.sgf, /RU\[Japanese\]/u);
+  assert.equal(exported.warnings.some(({ code }) => code === "SIMPLIFIED_TERRITORY_SCORING"), true);
+  const imported = importSgf(exported.sgf);
+  assert.equal(imported.replay.base.scoringRule, "japanese");
+  assert.equal(imported.warnings.some(({ code }) => code === "SIMPLIFIED_TERRITORY_SCORING"), true);
 });
 
 test("timeout outcomes use the standard SGF time-forfeit result", () => {

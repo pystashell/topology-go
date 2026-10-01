@@ -10,11 +10,13 @@
  *   XFINISH[chinese|japanese]    finish scoring with the selected rule
  *   XCONFIRM[B|W]                online score confirmation (not a GoEngine event)
  *   XCOMPLETE[0|1]               whether the replay starts at the true beginning
+ *   XBADUKBASE[1][chunks...]     versioned partial-replay baseline state
  *
  * Unknown X* properties are preserved as metadata by importSgf().
  */
 
 import { MAX_BOARD_DIMENSION } from "./boardDimensions.js";
+import { GoEngine } from "./goEngine.js";
 
 const BLACK = "black";
 const WHITE = "white";
@@ -24,6 +26,15 @@ const REPLAY_VERSION = 1;
 const VALID_COLORS = new Set([BLACK, WHITE]);
 const VALID_TOPOLOGIES = new Set(["cylinder", "torus", "mobius"]);
 const VALID_SCORING_RULES = new Set(["chinese", "japanese"]);
+const SIMPLIFIED_TERRITORY_RULE = "Simplified territory scoring (seki eyes counted)";
+const PARTIAL_BASE_FIELDS = Object.freeze([
+  "captures", "positionHistory", "phase", "consecutivePasses",
+  "deadStones", "lastMove", "result", "undoHistory",
+]);
+const PARTIAL_STANDARD_FIELDS = Object.freeze([
+  "boardHash", "width", "height", "komi", "scoringRule", "topology", "currentPlayer",
+]);
+const PARTIAL_BASE_CHUNK_LENGTH = 32 * 1024;
 const SGF_COORDINATE_ALPHABET =
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -34,6 +45,7 @@ export const SGF_EXTENSION_PROPERTIES = Object.freeze({
   finishScoring: "XFINISH",
   scoreConfirmation: "XCONFIRM",
   replayComplete: "XCOMPLETE",
+  partialBase: "XBADUKBASE",
 });
 
 export const SGF_DEFAULT_LIMITS = Object.freeze({
@@ -99,6 +111,28 @@ function property(identifier, values) {
   return `${identifier}${list.map((value) => `[${escapeSgfValue(value)}]`).join("")}`;
 }
 
+function chunkPropertyValue(value, maxLength) {
+  const chunks = [];
+  let chunk = "";
+  let escapedLength = 0;
+  const limit = Math.min(PARTIAL_BASE_CHUNK_LENGTH, maxLength);
+  for (const character of value) {
+    const length = escapeSgfValue(character).length;
+    if (length > limit) {
+      throw new SgfError("Partial baseline exceeds a property value limit", "SGF_TOO_LARGE");
+    }
+    if (escapedLength + length > limit) {
+      chunks.push(chunk);
+      chunk = "";
+      escapedLength = 0;
+    }
+    chunk += character;
+    escapedLength += length;
+  }
+  if (chunk) chunks.push(chunk);
+  return chunks;
+}
+
 function colorToSgf(color, label = "color") {
   if (color === BLACK || color === "B") return "B";
   if (color === WHITE || color === "W") return "W";
@@ -119,6 +153,7 @@ function oppositeColor(color) {
 function normalizeRule(value, warnings, context = {}) {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (!normalized) return "japanese";
+  if (normalized === SIMPLIFIED_TERRITORY_RULE.toLowerCase()) return "japanese";
   if (
     normalized.includes("chinese") ||
     normalized.includes("aga") ||
@@ -132,12 +167,17 @@ function normalizeRule(value, warnings, context = {}) {
     normalized.includes("korean") ||
     normalized === "japan"
   ) {
+    warnings.push(warning(
+      "SIMPLIFIED_TERRITORY_SCORING",
+      `SGF rules '${value}' were imported using simplified territory scoring; seki eyes are counted.`,
+      context,
+    ));
     return "japanese";
   }
   warnings.push(
     warning(
       "UNKNOWN_RULE",
-      `Unknown SGF rules '${value}'; Japanese scoring was selected for replay.`,
+      `Unknown SGF rules '${value}'; simplified territory scoring was selected for replay.`,
       context,
     ),
   );
@@ -145,7 +185,9 @@ function normalizeRule(value, warnings, context = {}) {
 }
 
 function ruleToSgf(value) {
-  return String(value ?? "").toLowerCase() === "chinese" ? "Chinese" : "Japanese";
+  return String(value ?? "").toLowerCase() === "chinese"
+    ? "Chinese"
+    : SIMPLIFIED_TERRITORY_RULE;
 }
 
 function formatNumber(value, label) {
@@ -221,6 +263,18 @@ function boardHash(board) {
       row.map((point) => (point === BLACK ? "B" : point === WHITE ? "W" : ".")).join(""),
     )
     .join("/");
+}
+
+function partialStandardIdentity(base) {
+  return {
+    boardHash: boardHash(base.board),
+    width: base.width,
+    height: base.height,
+    komi: base.komi,
+    scoringRule: base.scoringRule,
+    topology: base.topology,
+    currentPlayer: base.currentPlayer,
+  };
 }
 
 function validateBoard(base, width, height) {
@@ -304,7 +358,14 @@ export function exportSgf(input, options = {}) {
   if (!VALID_SCORING_RULES.has(scoringRule)) {
     throw new SgfError(`Unknown scoring rule '${scoringRule}'`, "INVALID_RULE");
   }
+  if (scoringRule === "japanese") {
+    warnings.push(warning(
+      "SIMPLIFIED_TERRITORY_SCORING",
+      "This replay uses simplified territory scoring; seki eyes are counted.",
+    ));
+  }
 
+  const rules = metadataValue(record, options, "rules", "rule") ?? ruleToSgf(scoringRule);
   const root = [
     property("FF", "4"),
     property("GM", "1"),
@@ -312,7 +373,7 @@ export function exportSgf(input, options = {}) {
     property("AP", "3D Baduk:1"),
     property("SZ", width === height ? width : `${width}:${height}`),
     property("KM", formatNumber(base.komi ?? 0, "komi")),
-    property("RU", metadataValue(record, options, "rules", "rule") ?? ruleToSgf(scoringRule)),
+    property("RU", rules),
     property(SGF_EXTENSION_PROPERTIES.topology, topology),
   ];
 
@@ -328,7 +389,27 @@ export function exportSgf(input, options = {}) {
     );
   }
   if (replay.complete === false) {
+    if (topology !== base.topology || scoringRule !== base.scoringRule ||
+        normalizeRule(rules, []) !== base.scoringRule) {
+      throw new SgfError("Partial replay rules must match its saved baseline", "INVALID_PARTIAL_BASE");
+    }
+    let canonicalBase;
+    try {
+      canonicalBase = GoEngine.fromState(base).exportState({ includeReplay: false });
+    } catch (error) {
+      throw new SgfError(`Invalid partial replay baseline: ${error.message}`, "INVALID_PARTIAL_BASE");
+    }
+    const preserved = Object.fromEntries(PARTIAL_BASE_FIELDS.map((field) => [
+      field, canonicalBase[field],
+    ]));
+    preserved.standardBase = partialStandardIdentity(canonicalBase);
+    const serialized = JSON.stringify(preserved);
+    const chunks = chunkPropertyValue(serialized, limits.maxValueLength);
+    if (chunks.length + 1 > limits.maxPropertyValues) {
+      throw new SgfError("Partial baseline has too many chunks", "SGF_TOO_LARGE");
+    }
     root.push(property(SGF_EXTENSION_PROPERTIES.replayComplete, "0"));
+    root.push(property(SGF_EXTENSION_PROPERTIES.partialBase, ["1", ...chunks]));
   }
 
   const blackName = metadataValue(record, options, "blackPlayer", "blackName", "PB");
@@ -348,7 +429,7 @@ export function exportSgf(input, options = {}) {
   }
   if (blackSetup.length) root.push(property("AB", blackSetup));
   if (whiteSetup.length) root.push(property("AW", whiteSetup));
-  if (base.currentPlayer && base.currentPlayer !== BLACK) {
+  if (base.currentPlayer && (base.currentPlayer !== BLACK || replay.complete === false)) {
     root.push(property("PL", colorToSgf(base.currentPlayer, "base.currentPlayer")));
   }
 
@@ -700,6 +781,76 @@ function makeReplayBase({ width, height, board, komi, scoringRule, topology, cur
   };
 }
 
+function restorePartialReplayBase(root, replay, warnings) {
+  const entries = root.properties.filter(({ identifier }) =>
+    identifier === SGF_EXTENSION_PROPERTIES.partialBase);
+  if (entries.length > 1 || (entries.length && replay.complete)) {
+    throw new SgfError("Partial baseline extension is misplaced or repeated", "INVALID_PARTIAL_BASE");
+  }
+  if (replay.complete) return;
+  if (!entries.length) {
+    let phase = "play";
+    let passes = 0;
+    for (const event of replay.events) {
+      if (event.type === "play") {
+        passes = 0;
+      } else if (event.type === "pass") {
+        passes += 1;
+        if (passes >= 2) phase = "scoring";
+      } else if (["finish_scoring", "toggle_dead", "resume_play"].includes(event.type)) {
+        if (phase !== "scoring") {
+          throw new SgfError(
+            "Legacy partial SGF lacks the scoring baseline needed to replay its events",
+            "PARTIAL_BASE_REQUIRED",
+          );
+        }
+        if (event.type === "finish_scoring") phase = "finished";
+        if (event.type === "resume_play") {
+          phase = "play";
+          passes = 0;
+        }
+      }
+    }
+    warnings.push(warning(
+      "PARTIAL_BASE_MISSING",
+      "Legacy partial SGF has no saved captures, position history, or scoring baseline; replay is approximate.",
+    ));
+    return;
+  }
+  const [version, ...chunks] = entries[0].values;
+  if (version !== "1" || chunks.length === 0 || chunks.some((chunk) => !chunk)) {
+    throw new SgfError("Partial baseline extension has an invalid version or payload", "INVALID_PARTIAL_BASE");
+  }
+  let payload;
+  try {
+    payload = JSON.parse(chunks.join(""));
+  } catch {
+    throw new SgfError("Partial baseline extension is not valid JSON", "INVALID_PARTIAL_BASE");
+  }
+  const keys = isPlainObject(payload) ? Object.keys(payload).sort() : [];
+  const expectedKeys = [...PARTIAL_BASE_FIELDS, "standardBase"].sort();
+  if (!isPlainObject(payload) || keys.length !== expectedKeys.length ||
+      !keys.every((key, index) => key === expectedKeys[index])) {
+    throw new SgfError("Partial baseline extension has invalid fields", "INVALID_PARTIAL_BASE");
+  }
+  const standardKeys = isPlainObject(payload.standardBase)
+    ? Object.keys(payload.standardBase).sort() : [];
+  const expectedStandardKeys = [...PARTIAL_STANDARD_FIELDS].sort();
+  if (standardKeys.length !== expectedStandardKeys.length ||
+      !standardKeys.every((key, index) => key === expectedStandardKeys[index]) ||
+      JSON.stringify(payload.standardBase) !== JSON.stringify(partialStandardIdentity(replay.base))) {
+    throw new SgfError("Partial baseline conflicts with standard SGF properties", "INVALID_PARTIAL_BASE");
+  }
+  try {
+    replay.base = GoEngine.fromState({
+      ...replay.base,
+      ...Object.fromEntries(PARTIAL_BASE_FIELDS.map((field) => [field, payload[field]])),
+    }).exportState({ includeReplay: false });
+  } catch (error) {
+    throw new SgfError(`Invalid partial baseline: ${error.message}`, "INVALID_PARTIAL_BASE");
+  }
+}
+
 /**
  * Parse an SGF collection and import the first game tree's main branch.
  * Returns replay-ready data plus metadata, dimensions, extension events and
@@ -736,6 +887,15 @@ export function importSgf(input, options = {}) {
 
   const nodes = flattenMainLine(collection[0]);
   const root = nodes[0];
+  if (root.properties.some(({ identifier }) =>
+    identifier === SGF_EXTENSION_PROPERTIES.partialBase)) {
+    for (const identifier of ["SZ", "KM", "RU", SGF_EXTENSION_PROPERTIES.topology, "PL"]) {
+      const entries = root.properties.filter((property) => property.identifier === identifier);
+      if (entries.length > 1 || entries.some(({ values }) => values.length !== 1)) {
+        throw new SgfError(`Partial baseline has ambiguous ${identifier}`, "INVALID_PARTIAL_BASE");
+      }
+    }
+  }
   const gm = firstProperty(root, "GM");
   if (gm !== undefined && gm !== "1") {
     throw new SgfError(`Unsupported SGF game type GM[${gm}]`, "UNSUPPORTED_GAME");
@@ -811,6 +971,9 @@ export function importSgf(input, options = {}) {
     }
     for (const entry of node.properties) {
       const { identifier, values } = entry;
+      if (identifier === SGF_EXTENSION_PROPERTIES.partialBase && nodeIndex > 0) {
+        throw new SgfError("Partial baseline extension must be in the root node", "INVALID_PARTIAL_BASE");
+      }
       if (identifier === "B" || identifier === "W") {
         if (values.length !== 1) {
           throw new SgfError(`${identifier} must have exactly one value`, "INVALID_MOVE", { nodeIndex });
@@ -878,10 +1041,18 @@ export function importSgf(input, options = {}) {
     }
   }
 
-  const completeValue = firstProperty(root, SGF_EXTENSION_PROPERTIES.replayComplete);
+  const completeEntries = root.properties.filter(({ identifier }) =>
+    identifier === SGF_EXTENSION_PROPERTIES.replayComplete);
+  if (completeEntries.length > 1 ||
+      (completeEntries.length === 1 &&
+        (completeEntries[0].values.length !== 1 ||
+          !["0", "1"].includes(completeEntries[0].values[0])))) {
+    throw new SgfError("Replay completeness flag is ambiguous", "INVALID_PARTIAL_BASE");
+  }
+  const completeValue = completeEntries[0]?.values[0];
   const replay = {
     version: REPLAY_VERSION,
-    complete: completeValue === undefined ? true : !["0", "false", "no"].includes(completeValue.toLowerCase()),
+    complete: completeValue === undefined ? true : completeValue === "1",
     base: makeReplayBase({
       width,
       height,
@@ -893,6 +1064,7 @@ export function importSgf(input, options = {}) {
     }),
     events: replayEvents,
   };
+  restorePartialReplayBase(root, replay, warnings);
 
   return {
     replay,

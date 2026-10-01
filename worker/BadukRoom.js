@@ -19,6 +19,14 @@ import { CHAT_CHANNEL_SPECTATORS } from "../src/multiplayer/chat.js";
 const STORAGE_KEY = "room";
 const MAX_SOCKET_CONNECTIONS = 64;
 const MAX_CLIENT_MESSAGE_BYTES = 8 * 1024;
+const POSITION_BOUND_ACTIONS = new Set([
+  "play",
+  "pass",
+  "resign",
+  "toggle_dead",
+  "resume_play",
+  "request_undo",
+]);
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -95,8 +103,17 @@ export class BadukRoom {
   }
 
   async fetch(request) {
-    if (this.unavailableError) return this.errorResponse(this.unavailableError);
     const url = new URL(request.url);
+    // A failed join write can have committed even when its promise rejected.
+    // This lookup reads the stored snapshot before deciding whether the caller
+    // can recover the same reserved identity; it is allowed while stopped.
+    if (request.method === "POST" && url.pathname === "/internal/join-status") {
+      return this.enqueue(() => this.lookupCommittedJoin(request));
+    }
+    if (this.unavailableError?.code === "ROOM_COMMIT_FAILED") {
+      await this.enqueue(() => this.recoverCommittedRoom());
+    }
+    if (this.unavailableError) return this.errorResponse(this.unavailableError);
     if (request.method === "GET" && url.pathname === "/internal/health") {
       return jsonResponse({ ok: true, service: "bamboo-baduk-room" });
     }
@@ -230,18 +247,57 @@ export class BadukRoom {
 
   async initialize(request) {
     if (this.unavailableError) return this.errorResponse(this.unavailableError);
-    if (this.engine || this.retiring) {
+    if (this.retiring) {
       return jsonResponse({ error: "房间已经存在。", code: "CONFLICT" }, 409);
     }
+    let createdEngine = false;
     try {
       const body = await request.json();
+      if (this.engine) {
+        const member = this.engine.member(body.playerId);
+        if (member?.color === "black" && member.tokenHash === body.tokenHash) {
+          return jsonResponse({
+            room: this.engine.snapshotFor(member.playerId),
+            identity: this.engine.identityFor(member),
+          }, 201);
+        }
+        return jsonResponse({ error: "房间已经存在。", code: "CONFLICT" }, 409);
+      }
       this.engine = RoomEngine.create(body);
+      createdEngine = true;
       await this.persist();
       await this.scheduleAlarmAfterCommit();
-      return jsonResponse({ room: this.engine.snapshot() }, 201);
+      const member = this.engine.member(body.playerId);
+      return jsonResponse({
+        room: this.engine.snapshotFor(member.playerId),
+        identity: this.engine.identityFor(member),
+      }, 201);
     } catch (error) {
-      this.engine = null;
+      if (createdEngine && !this.unavailableError) {
+        // Even response construction can fail after the first snapshot was
+        // committed. Reopen from storage through join-status before serving.
+        this.markUnavailable("ROOM_COMMIT_FAILED", error);
+      }
       return this.errorResponse(error);
+    }
+  }
+
+  async recoverCommittedRoom() {
+    if (this.unavailableError?.code !== "ROOM_COMMIT_FAILED") return;
+    let stored;
+    try {
+      stored = await this.ctx.storage.get(STORAGE_KEY);
+      if (!stored) {
+        this.engine = null;
+        this.unavailableError = null;
+        return;
+      }
+      this.engine = RoomEngine.restore(stored);
+      this.unavailableError = null;
+      await this.scheduleAlarmAfterCommit();
+    } catch (error) {
+      if (stored) this.markUnavailable("ROOM_RESTORE_FAILED", error, stored);
+      else console.error("Unable to read room after uncertain commit", error);
     }
   }
 
@@ -253,19 +309,96 @@ export class BadukRoom {
         404,
       );
     }
+    let enteredJoin = false;
+    let result;
+    let changed;
     try {
       const body = await request.json();
-      const result = this.engine.join(body);
-      await this.persist();
-      await this.scheduleAlarmAfterCommit();
-      this.broadcastState();
-      this.broadcastPresence();
-      return jsonResponse(
-        { room: result.room, identity: result.identity },
-        201,
-      );
+      const revisionBefore = this.engine.state.revision;
+      enteredJoin = true;
+      result = this.engine.join(body);
+      // prepare() can advance a clock or expire a reservation even when the
+      // credential is an idempotent retry. Persist those real revisions only.
+      changed = result.changed || this.engine.state.revision !== revisionBefore;
     } catch (error) {
+      // join() may mutate before building its response. An unexpected failure
+      // must not let a later request persist that speculative membership.
+      if (enteredJoin && (!(error instanceof RoomEngineError) || error.status >= 500)) {
+        this.markUnavailable("ROOM_COMMIT_FAILED", error);
+        return this.errorResponse(this.unavailableError);
+      }
       return this.errorResponse(error);
+    }
+    if (changed) {
+      try {
+        await this.persist();
+      } catch (error) {
+        return this.errorResponse(error);
+      }
+      await this.scheduleAlarmAfterCommit();
+      try {
+        this.broadcastState();
+        this.broadcastPresence();
+      } catch (error) {
+        console.error("Unable to notify committed room join", error);
+      }
+    }
+    return jsonResponse({ room: result.room, identity: result.identity }, 201);
+  }
+
+  async lookupCommittedJoin(request) {
+    if (this.unavailableError && this.unavailableError.code !== "ROOM_COMMIT_FAILED") {
+      return this.errorResponse(this.unavailableError);
+    }
+    try {
+      const body = await request.json();
+      const { playerId, tokenHash } = isRecord(body) ? body : {};
+      if (
+        typeof playerId !== "string" ||
+        typeof tokenHash !== "string" ||
+        !/^[0-9a-f]{64}$/u.test(tokenHash)
+      ) {
+        return jsonResponse({ error: "加入凭据无效。", code: "BAD_REQUEST" }, 400);
+      }
+      const stored = await this.ctx.storage.get(STORAGE_KEY);
+      if (!stored) {
+        if (this.unavailableError?.code === "ROOM_COMMIT_FAILED") {
+          // A failed first-room write was confirmed not to have committed.
+          // Reopen the empty object so the same create credential can retry.
+          this.engine = null;
+          this.unavailableError = null;
+        }
+        return jsonResponse({ error: "加入结果尚未确认。", code: "JOIN_NOT_COMMITTED" }, 404);
+      }
+      let recovered;
+      try {
+        recovered = RoomEngine.restore(stored);
+      } catch (error) {
+        this.markUnavailable("ROOM_RESTORE_FAILED", error, stored);
+        return this.errorResponse(this.unavailableError);
+      }
+      // A confirmed read is the source of truth after an uncertain write.
+      // Discard the speculative engine and reopen from that exact snapshot.
+      if (this.unavailableError?.code === "ROOM_COMMIT_FAILED") {
+        this.engine = recovered;
+        this.unavailableError = null;
+        await this.scheduleAlarmAfterCommit();
+      }
+      const member = recovered.member(playerId);
+      if (!member || member.tokenHash !== tokenHash) {
+        return jsonResponse({ error: "加入结果尚未确认。", code: "JOIN_NOT_COMMITTED" }, 404);
+      }
+      return jsonResponse({
+        identity: recovered.identityFor(member),
+        room: recovered.snapshotFor(member.playerId),
+      });
+    } catch (error) {
+      console.error("Unable to verify uncertain room join", error);
+      return jsonResponse({
+        error: "加入结果暂时无法确认，请使用原凭据重试。",
+        code: "JOIN_COMMIT_UNCERTAIN",
+        retryable: true,
+      }, 503);
     }
   }
 
@@ -410,6 +543,20 @@ export class BadukRoom {
 
     let result;
     try {
+      if (
+        POSITION_BOUND_ACTIONS.has(command.action) &&
+        this.engine.member(playerId)?.role === "player"
+      ) {
+        if (!Object.prototype.hasOwnProperty.call(command.payload, "expectedMoveCount") ||
+            !Object.prototype.hasOwnProperty.call(command.payload, "expectedPositionToken")) {
+          throw new RoomEngineError(
+            "客户端版本过旧，请刷新页面后重试。",
+            426,
+            "PROTOCOL_UPGRADE_REQUIRED",
+          );
+        }
+        this.engine.assertFreshPosition(command.payload);
+      }
       result = command.action === "chat"
         ? this.engine.postChat({
             playerId,
@@ -455,7 +602,9 @@ export class BadukRoom {
         this.broadcastState();
         await this.scheduleAlarmAfterCommit();
       }
-      if (normalized.code === "STALE_SCORING") this.sendState(socket);
+      if (normalized.code === "STALE_SCORING" || normalized.code === "STALE_GAME_STATE") {
+        this.sendState(socket);
+      }
       return;
     }
 
