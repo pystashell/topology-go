@@ -842,7 +842,8 @@ export class RoomClient {
     return true;
   }
 
-  async retryPendingCreate(roomCode, playerId = "") {
+  async retryPendingCreate(roomCode, playerId = "", { signal } = {}) {
+    signal?.throwIfAborted();
     const code = normalizeRoomCode(roomCode);
     const candidates = this.listPendingCreates().filter((item) => item.roomCode === code);
     const selected = playerId || (candidates.length === 1 ? candidates[0].playerId : "");
@@ -858,12 +859,13 @@ export class RoomClient {
         code: "CREATE_CREDENTIAL_STORAGE_UNAVAILABLE",
       });
     }
-    return this.createRoom({ name: pending.request.name });
+    return this.createRoom({ name: pending.request.name, signal });
   }
 
   async createRoom(options = {}) {
     const config = typeof options === "string" ? { name: options } : options;
-    const { options: gameOptions = {}, ...requestConfig } = config;
+    const { options: gameOptions = {}, signal, ...requestConfig } = config;
+    signal?.throwIfAborted();
     const name = normalizePlayerName(config.name);
     if (!name) {
       throw new RoomClientError("请输入你的名字。", { code: "INVALID_NAME" });
@@ -893,6 +895,7 @@ export class RoomClient {
         try {
           response = await this._post(this.createRoomPath, pending.request);
         } catch (error) {
+          if (signal?.aborted) throw error;
           if (error instanceof RoomClientError && error.code === "ROOM_CODE_TAKEN") {
             if (!this._clearPendingCreate(pending)) {
               throw new RoomClientError("无法移除已冲突的建房凭据，请检查浏览器存储设置。", {
@@ -904,6 +907,9 @@ export class RoomClient {
           }
           throw error;
         }
+        // Cancellation stops this page from adopting the result. The server
+        // may have committed it, so retain the credential for explicit recovery.
+        signal?.throwIfAborted();
         const session = responseSession(response, pending.roomCode, pending.request.name);
         if (session.code !== pending.roomCode ||
             session.playerId !== pending.playerId || session.token !== pending.token) {
@@ -938,8 +944,18 @@ export class RoomClient {
         retryable: true,
       });
     } catch (error) {
+      if (signal?.aborted) throw error;
       this._setStatus(CONNECTION_STATUS.DISCONNECTED);
       throw this._emitError(error);
+    }
+  }
+
+  _clearPendingJoin(code, pending) {
+    const stored = this.pendingJoinIdentityStore.get(code, pending.playerId);
+    if (stored && !this.pendingJoinIdentityStore.remove(code, pending.playerId, pending.token)) return;
+    const pointer = this.activeJoinStore.get(code);
+    if (pointer?.playerId === pending.playerId && pointer.token === pending.token) {
+      this.activeJoinStore.remove(code);
     }
   }
 
@@ -950,6 +966,8 @@ export class RoomClient {
       config = roomCode;
       requestedCode = roomCode.roomCode ?? roomCode.code;
     }
+    const { signal } = config;
+    signal?.throwIfAborted();
 
     const code = normalizeRoomCode(requestedCode);
     const name = normalizePlayerName(config.name);
@@ -962,11 +980,12 @@ export class RoomClient {
       throw new RoomClientError("请输入你的名字。", { code: "INVALID_NAME" });
     }
 
+    let pending;
     this._setStatus(CONNECTION_STATUS.JOINING, { roomCode: code });
     try {
       const role = config.role === "spectator" ? "spectator" : "player";
       this._migrateLegacy(code);
-      let pending = config.pendingPlayerId
+      pending = config.pendingPlayerId
         ? this.pendingJoinIdentityStore.get(code, config.pendingPlayerId) : null;
       if (config.pendingPlayerId && !isPendingJoin(pending)) {
         throw new RoomClientError("没有可恢复的加入请求。", { code: "MISSING_PENDING_JOIN" });
@@ -1006,6 +1025,7 @@ export class RoomClient {
         playerId: pending.playerId,
         token: pending.token,
       });
+      signal?.throwIfAborted();
       const session = responseSession(response, code, name);
       if (session.code !== code || session.playerId !== pending.playerId ||
           session.token !== pending.token) {
@@ -1021,10 +1041,7 @@ export class RoomClient {
           code: "SESSION_STORAGE_UNAVAILABLE",
         });
       }
-      this.pendingJoinIdentityStore.remove(code, pending.playerId, pending.token);
-      if (this.activeJoinStore.get(code)?.playerId === pending.playerId) {
-        this.activeJoinStore.remove(code);
-      }
+      this._clearPendingJoin(code, pending);
       this.connect();
       return {
         ...response,
@@ -1033,6 +1050,13 @@ export class RoomClient {
         shareUrl: this.getShareUrl(),
       };
     } catch (error) {
+      // A typed 404 confirms this request could not change a room. Network,
+      // proxy and storage failures remain uncertain and must stay recoverable.
+      if (pending && error instanceof RoomClientError &&
+          error.code === "ROOM_NOT_FOUND" && error.status === 404) {
+        this._clearPendingJoin(code, pending);
+      }
+      if (signal?.aborted) throw error;
       this._setStatus(CONNECTION_STATUS.DISCONNECTED, { roomCode: code });
       throw this._emitError(error);
     }

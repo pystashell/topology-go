@@ -43,6 +43,7 @@ function joinHarness({ prior = [], fail }) {
   };
   const noop = () => {};
   const context = {
+    AbortController, onlineBusy: false, onlineEntryController: null,
     BLACK: "black", WHITE: "white", elements, roomClient,
     document: { createElement: () => ({ value: "", textContent: "" }) },
     sanitizeRoomCode: (value) => String(value).toUpperCase().replace(/[^A-HJ-NP-Z2-9]/gu, "").slice(0, 6),

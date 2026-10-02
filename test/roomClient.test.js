@@ -17,6 +17,190 @@ import {
   parseShareUrl,
 } from "../src/multiplayer/roomClient.js";
 
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function entryResponse(body, code = body.roomCode) {
+  return jsonResponse({ roomCode: code, session: {
+    code, playerId: body.playerId, token: body.token, playerName: body.name,
+    role: body.role ?? "player", color: body.role === "spectator" ? null : "black",
+  }, room: { code, revision: 0 } }, 201);
+}
+
+for (const action of ["create", "player", "spectator"]) {
+  test(`cancelled ${action} ignores late success and can recover the exact identity in a new tab`, async () => {
+    MockWebSocket.instances = [];
+    const storage = createMemoryStorage();
+    const delayed = deferred();
+    const requests = [];
+    const options = { storage, WebSocketImpl: MockWebSocket, roomCodeFactory: () => "AB23CD",
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(init.body);
+        requests.push(body);
+        return requests.length === 1 ? delayed.promise : entryResponse(body, "AB23CD");
+      } };
+    const client = new RoomClient({ ...options, attemptStorage: createMemoryStorage() });
+    const controller = new AbortController();
+    const request = action === "create"
+      ? client.createRoom({ name: "Alice", signal: controller.signal })
+      : client.joinRoom("AB23CD", { name: "Alice", role: action, signal: controller.signal });
+    const rejected = assert.rejects(request, { name: "AbortError" });
+    controller.abort();
+    client.disconnect({ preserveSession: false });
+    const events = [];
+    for (const type of ["state", "error", "connection"]) client.on(type, () => events.push(type));
+    delayed.resolve(entryResponse(requests[0], "AB23CD"));
+    await rejected;
+    assert.deepEqual(events, []);
+    assert.equal(client.session, null);
+    assert.equal(client.roomCode, "");
+    assert.equal(MockWebSocket.instances.length, 0);
+    assert.equal(identityRecord(storage, "session", "AB23CD"), null);
+    assert.equal("signal" in requests[0], false, "the cancellation control is never sent to the server");
+    const retry = new RoomClient({ ...options, attemptStorage: createMemoryStorage() });
+    const pending = action === "create" ? retry.listPendingCreates() : retry.listPendingJoins("AB23CD");
+    assert.equal(pending.length, 1);
+    const result = action === "create"
+      ? await retry.retryPendingCreate("AB23CD", pending[0].playerId)
+      : await retry.joinRoom("AB23CD", { name: "Alice", role: action, pendingPlayerId: pending[0].playerId });
+    assert.equal(result.session.playerId, requests[0].playerId);
+    assert.equal(result.session.token, requests[0].token);
+    assert.equal(requests[1].playerId, requests[0].playerId);
+    assert.equal(requests[1].token, requests[0].token);
+    retry.disconnect();
+  });
+
+  for (const outcome of ["success", "network failure"]) {
+    test(`cancelled ${action} late ${outcome} cannot replace a newer session`, async () => {
+      MockWebSocket.instances = [];
+      const delayed = deferred();
+      const requests = [];
+      const client = new RoomClient({ storage: createMemoryStorage(), attemptStorage: createMemoryStorage(),
+        WebSocketImpl: MockWebSocket, roomCodeFactory: () => "AB23CD",
+        fetchImpl: async (_url, init) => {
+          const body = JSON.parse(init.body);
+          requests.push(body);
+          return requests.length === 1 ? delayed.promise : entryResponse(body, "EF34GH");
+        } });
+      const controller = new AbortController();
+      const oldRequest = action === "create"
+        ? client.createRoom({ name: "Old", signal: controller.signal })
+        : client.joinRoom("AB23CD", { name: "Old", role: action, signal: controller.signal });
+      const rejected = assert.rejects(oldRequest);
+      controller.abort();
+      client.disconnect({ preserveSession: false });
+      const newer = await client.joinRoom("EF34GH", { name: "New", role: "spectator" });
+      const events = [];
+      for (const type of ["state", "error", "connection"]) client.on(type, () => events.push(type));
+      if (outcome === "success") delayed.resolve(entryResponse(requests[0], "AB23CD"));
+      else delayed.reject(new Error("response lost after commit"));
+      await rejected;
+      assert.equal(client.session.playerId, newer.session.playerId);
+      assert.equal(client.roomCode, "EF34GH");
+      assert.equal(client.status, CONNECTION_STATUS.CONNECTING);
+      assert.equal(MockWebSocket.instances.length, 1);
+      assert.deepEqual(events, []);
+      assert.equal(action === "create" ? client.listPendingCreates().length : client.listPendingJoins("AB23CD").length, 1);
+      client.disconnect();
+    });
+  }
+}
+
+test("repeated typed ROOM_NOT_FOUND responses remove only their pending join and tab pointer", async () => {
+  const storage = createMemoryStorage();
+  const attemptStorage = createMemoryStorage();
+  const options = { storage, attemptStorage, fetchImpl: async () =>
+    jsonResponse({ code: "ROOM_NOT_FOUND", message: "missing" }, 404) };
+  const client = new RoomClient(options);
+  for (let i = 0; i < 3; i += 1) {
+    await assert.rejects(client.joinRoom("ZZZZZZ", { name: "Alice" }), { code: "ROOM_NOT_FOUND" });
+    assert.deepEqual(client.listPendingJoins("ZZZZZZ"), []);
+    assert.equal(client.activeJoinStore.get("ZZZZZZ"), null);
+  }
+  const reloaded = new RoomClient(options);
+  assert.deepEqual(reloaded.listPendingJoins("ZZZZZZ"), []);
+  assert.equal(reloaded.activeJoinStore.get("ZZZZZZ"), null);
+});
+
+test("a definite 404 preserves other identities, rooms, and a newer active join", async () => {
+  const storage = createMemoryStorage();
+  const attemptStorage = createMemoryStorage();
+  const delayed = deferred();
+  let count = 0;
+  const options = { storage, attemptStorage, fetchImpl: async () => {
+    if (++count === 3) return delayed.promise;
+    throw new Error("lost response");
+  } };
+  const client = new RoomClient(options);
+  await assert.rejects(client.joinRoom("AB23CD", { name: "Other identity" }));
+  await assert.rejects(client.joinRoom("EF34GH", { name: "Other room" }));
+  const first = client.listPendingJoins("AB23CD")[0];
+  const failing = assert.rejects(client.joinRoom("AB23CD", { name: "Missing" }), { code: "ROOM_NOT_FOUND" });
+  await assert.rejects(client.joinRoom("AB23CD", { name: "Newer" }));
+  const newestPointer = client.activeJoinStore.get("AB23CD");
+  delayed.resolve(jsonResponse({ code: "ROOM_NOT_FOUND" }, 404));
+  await failing;
+  const reloaded = new RoomClient(options);
+  assert.deepEqual(reloaded.listPendingJoins("AB23CD").map(p => p.playerId).sort(),
+    [first.playerId, newestPointer.playerId].sort());
+  assert.deepEqual(reloaded.activeJoinStore.get("AB23CD"), newestPointer);
+  assert.equal(reloaded.listPendingJoins("EF34GH").length, 1);
+});
+
+test("a late response clears its tab pointer even after another tab recovered the join", async () => {
+  const storage = createMemoryStorage();
+  const delayed = deferred();
+  let original;
+  const first = new RoomClient({ storage, attemptStorage: createMemoryStorage(), WebSocketImpl: MockWebSocket,
+    fetchImpl: (_url, init) => { original = JSON.parse(init.body); return delayed.promise; } });
+  const firstJoin = first.joinRoom("AB23CD", { name: "Alice" });
+  const second = new RoomClient({ storage, attemptStorage: createMemoryStorage(), WebSocketImpl: MockWebSocket,
+    fetchImpl: (_url, init) => entryResponse(JSON.parse(init.body), "AB23CD") });
+  await second.joinRoom("AB23CD", { name: "Alice", pendingPlayerId: original.playerId });
+  assert.deepEqual(first.listPendingJoins("AB23CD"), []);
+  assert.equal(first.activeJoinStore.get("AB23CD").playerId, original.playerId);
+  delayed.resolve(entryResponse(original, "AB23CD"));
+  await firstJoin;
+  assert.equal(first.activeJoinStore.get("AB23CD"), null);
+  first.disconnect();
+  second.disconnect();
+});
+
+for (const replaceRecord of [false, true]) {
+  test(`404 cleanup checks the exact token for ${replaceRecord ? "identity and pointer" : "pointer"}`, async () => {
+    const storage = createMemoryStorage();
+    const client = new RoomClient({ storage, attemptStorage: createMemoryStorage(), fetchImpl: () => delayed.promise });
+    const delayed = deferred();
+    const rejected = assert.rejects(client.joinRoom("AB23CD", { name: "Alice" }), { code: "ROOM_NOT_FOUND" });
+    const pending = identityRecord(storage, "pending-join", "AB23CD");
+    const replacement = { ...pending, token: "f".repeat(64) };
+    if (replaceRecord) client.pendingJoinIdentityStore.set("AB23CD", replacement);
+    client.activeJoinStore.set("AB23CD", { playerId: pending.playerId, token: replacement.token });
+    delayed.resolve(jsonResponse({ code: "ROOM_NOT_FOUND" }, 404));
+    await rejected;
+    assert.equal(client.activeJoinStore.get("AB23CD").token, replacement.token);
+    assert.equal(client.listPendingJoins("AB23CD").length, replaceRecord ? 1 : 0);
+  });
+}
+
+for (const response of [
+  () => jsonResponse({ message: "proxy 404" }, 404),
+  () => jsonResponse({ code: "ROOM_NOT_FOUND" }, 500),
+  () => { throw new Error("lost response after commit"); },
+]) {
+  test("uncertain join failure retains a discoverable identity across tabs", async () => {
+    const storage = createMemoryStorage();
+    const client = new RoomClient({ storage, fetchImpl: response });
+    await assert.rejects(client.joinRoom("AB23CD", { name: "Alice" }));
+    const nextTab = new RoomClient({ storage, attemptStorage: createMemoryStorage() });
+    assert.equal(nextTab.listPendingJoins("AB23CD").length, 1);
+    assert.equal(nextTab.listPendingJoins("AB23CD")[0].playerId, client.listPendingJoins("AB23CD")[0].playerId);
+  });
+}
+
 function createMemoryStorage() {
   const values = new Map();
   return {

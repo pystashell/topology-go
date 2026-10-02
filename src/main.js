@@ -412,6 +412,7 @@ let lastPlayedPoint = null;
 let onlineRoom = null;
 let onlineStateSynchronized = false;
 let onlineBusy = false;
+let onlineEntryController = null;
 let onlineCommandPending = false;
 let onlineCommandRevision = null;
 let onlineAIPauseIntent = null;
@@ -3469,6 +3470,25 @@ function closeOnlineDialog() {
   else elements.onlineDialog.removeAttribute("open");
 }
 
+function cancelOnlineDialog() {
+  if (onlineEntryController) {
+    onlineEntryController.abort();
+    onlineEntryController = null;
+    // Do not send leave or discard credentials: cancellation cannot undo a
+    // request the server may already have committed.
+    if (hasOnlineSession()) roomClient.detachRoom();
+    else roomClient.disconnect({ preserveSession: false });
+    onlineRoom = null;
+    onlineStateSynchronized = false;
+    setOnlineBusy(false);
+    restoreOfflineGame();
+    updateUI();
+    maybeStartAITurn();
+  }
+  closeOnlineDialog();
+  if (appRouteMode === "online" && !hasOnlineSession()) navigateAppPath("/lobby");
+}
+
 function roomSeat(color) {
   return onlineRoom?.players?.find((player) => player.color === color) ?? null;
 }
@@ -6317,6 +6337,7 @@ function normalizedPlayerName() {
 }
 
 async function createOnlineRoom({ pendingPlayerId = "" } = {}) {
+  if (onlineBusy) return;
   const pendingRequest = pendingPlayerId
     ? roomClient.listPendingCreates().find((entry) => entry.playerId === pendingPlayerId)
     : null;
@@ -6332,11 +6353,15 @@ async function createOnlineRoom({ pendingPlayerId = "" } = {}) {
   aiActive = false;
   rememberPlayerName(name);
   showOnlineError();
+  const request = new AbortController();
+  onlineEntryController = request;
+  const { signal } = request;
   setOnlineBusy(true, "create");
   try {
     const result = pendingPlayerId
-      ? await roomClient.retryPendingCreate(pendingRequest.roomCode, pendingPlayerId)
-      : await roomClient.createRoom({ name, ...getNewGameOptions() });
+      ? await roomClient.retryPendingCreate(pendingRequest.roomCode, pendingPlayerId, { signal })
+      : await roomClient.createRoom({ name, ...getNewGameOptions(), signal });
+    if (signal.aborted) return;
     if (matchLifecycle === MATCH_LIFECYCLE_LOBBY) {
       matchLifecycle = MATCH_LIFECYCLE_WAITING;
     }
@@ -6357,6 +6382,7 @@ async function createOnlineRoom({ pendingPlayerId = "" } = {}) {
     // host-only and turn-only controls cannot retain their offline state.
     updateUI();
   } catch (error) {
+    if (signal.aborted) return;
     restoreOfflineGame();
     updateUI();
     maybeStartAITurn();
@@ -6365,12 +6391,16 @@ async function createOnlineRoom({ pendingPlayerId = "" } = {}) {
       ? `${error.message || "创建房间失败"} 已保留房间 ${pending} 的建房凭据；可点击“核对并恢复”重试原请求。若要修改设置，请先放弃所选恢复凭据。`
       : error.message || "创建房间失败，请稍后重试。");
   } finally {
-    setOnlineBusy(false);
-    renderPendingCreatePanel();
+    if (onlineEntryController === request) {
+      onlineEntryController = null;
+      setOnlineBusy(false);
+      renderPendingCreatePanel();
+    }
   }
 }
 
 async function joinOnlineRoom(role = "player", pendingPlayerId = "") {
+  if (onlineBusy) return;
   const pendingJoin = pendingPlayerId
     ? roomClient.listPendingJoins(sanitizeRoomCode(elements.roomCodeInput.value))
       .find((entry) => entry.playerId === pendingPlayerId)
@@ -6394,11 +6424,15 @@ async function joinOnlineRoom(role = "player", pendingPlayerId = "") {
   aiActive = false;
   rememberPlayerName(name);
   showOnlineError();
+  const request = new AbortController();
+  onlineEntryController = request;
+  const { signal } = request;
   setOnlineBusy(true, role === "spectator" ? "watch" : "join");
   try {
     const result = await roomClient.joinRoom({
-      code, name, role: pendingJoin?.role ?? role, pendingPlayerId,
+      code, name, role: pendingJoin?.role ?? role, pendingPlayerId, signal,
     });
+    if (signal.aborted) return;
     if (matchLifecycle === MATCH_LIFECYCLE_LOBBY) {
       matchLifecycle = MATCH_LIFECYCLE_WAITING;
     }
@@ -6426,6 +6460,7 @@ async function joinOnlineRoom(role = "player", pendingPlayerId = "") {
     // immediately read-only and player controls reflect the assigned seat.
     updateUI();
   } catch (error) {
+    if (signal.aborted) return;
     restoreOfflineGame();
     updateUI();
     maybeStartAITurn();
@@ -6440,8 +6475,11 @@ async function joinOnlineRoom(role = "player", pendingPlayerId = "") {
         ? `${error.message || "加入房间失败。"} 此房间仍有其他可恢复的加入请求，请核对身份后再恢复。`
         : error.message || "加入房间失败，请检查房间号。");
   } finally {
-    setOnlineBusy(false);
-    renderStoredIdentityPanels();
+    if (onlineEntryController === request) {
+      onlineEntryController = null;
+      setOnlineBusy(false);
+      renderStoredIdentityPanels();
+    }
   }
 }
 
@@ -6616,15 +6654,13 @@ elements.aiReviewModel.addEventListener("change", () => {
   }
   setReplayAnalysisModel(requested);
 });
-elements.cancelOnline.addEventListener("click", () => {
-  if (appRouteMode === "online" && !hasOnlineSession()) {
-    navigateAppPath("/lobby");
-    return;
-  }
-  closeOnlineDialog();
+elements.cancelOnline.addEventListener("click", cancelOnlineDialog);
+elements.onlineDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelOnlineDialog();
 });
 elements.onlineModifySettings.addEventListener("click", () => {
-  closeOnlineDialog();
+  cancelOnlineDialog();
   setSidebarTab("settings", { focus: true });
   setMessage("先在“棋盘设置”中调整棋盘；创建房间时会使用这里的同一套设置。");
 });
