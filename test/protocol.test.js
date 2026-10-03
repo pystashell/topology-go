@@ -48,7 +48,12 @@ test("protocol v2 is explicit while stale socket names remain detectable", () =>
 });
 
 test("undo room actions pass through the WebSocket command whitelist", () => {
-  for (const action of ["request_undo", "respond_undo", "cancel_undo"]) {
+  for (const action of [
+    "request_undo",
+    "respond_undo",
+    "cancel_undo",
+    "direct_undo_local_round",
+  ]) {
     assert.ok(ROOM_ACTIONS.includes(action));
     assert.deepEqual(
       normalizeCommandMessage({
@@ -68,6 +73,98 @@ test("undo room actions pass through the WebSocket command whitelist", () => {
         payload: action === "respond_undo"
           ? { accept: true, targetMoveCount: 2 }
           : {},
+      },
+    );
+  }
+});
+
+test("resignation is a reconnect-safe room command", () => {
+  assert.ok(ROOM_ACTIONS.includes("resign"));
+  assert.deepEqual(
+    normalizeCommandMessage({
+      v: 2,
+      type: "command",
+      id: "resign-1",
+      sequence: 3,
+      action: "resign",
+      payload: {},
+    }),
+    {
+      id: "resign-1",
+      sequence: 3,
+      action: "resign",
+      payload: {},
+    },
+  );
+});
+
+test("seat claim and release commands pass through the reconnect-safe whitelist", () => {
+  for (const action of ["claim_seat", "release_seat"]) {
+    assert.ok(ROOM_ACTIONS.includes(action));
+    assert.deepEqual(
+      normalizeCommandMessage({
+        v: 2,
+        type: "command",
+        id: `seat-${action}`,
+        sequence: 2,
+        action,
+        payload: {},
+      }),
+      {
+        id: `seat-${action}`,
+        sequence: 2,
+        action,
+        payload: {},
+      },
+    );
+  }
+});
+
+test("online AI seat commands pass through the reconnect-safe whitelist", () => {
+  const commands = [
+    ["attach_ai", { modelId: "b10" }],
+    ["detach_ai", {}],
+    ["ai_play", {
+      row: 3,
+      col: 4,
+      expectedMoveCount: 1,
+      expectedPositionToken: "pos-v1-0123456789abcdef-1",
+    }],
+    ["ai_pass", {
+      expectedMoveCount: 1,
+      expectedPositionToken: "pos-v1-0123456789abcdef-1",
+    }],
+    ["direct_undo_ai_round", {
+      expectedMoveCount: 2,
+      expectedPositionToken: "pos-v1-fedcba9876543210-2",
+    }],
+    ["direct_undo_ai_move", {
+      expectedMoveCount: 2,
+      expectedPositionToken: "pos-v1-fedcba9876543210-2",
+    }],
+    ["set_ai_autoplay_paused", {
+      paused: true,
+      expectedMoveCount: 2,
+      expectedPositionToken: "pos-v1-fedcba9876543210-2",
+    }],
+  ];
+
+  for (const [action, payload] of commands) {
+    assert.ok(ROOM_ACTIONS.includes(action));
+    assert.deepEqual(
+      normalizeCommandMessage({
+        v: 2,
+        type: "command",
+        id: `online-ai-${action}`,
+        sequence: 4,
+        action,
+        payload,
+      }),
+      {
+        id: `online-ai-${action}`,
+        sequence: 4,
+        action,
+        payload,
       },
     );
   }

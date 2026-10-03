@@ -1,5 +1,21 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import {
+  invalidatePendingTapOnAdditionalPointer,
+  pointerGestureRoles,
+  preventBoardContextMenu,
+} from "./pointerGestures.js";
+import { translateText } from "../i18n.js";
+import {
+  createAnalysisVariationMarker,
+  placeAnalysisVariationMarker,
+} from "./analysisVariationMarkers.js";
+import {
+  createTerritoryMarkerLayer,
+  disposeTerritoryMarkerLayer,
+  territoryPointsForPosition,
+  territoryPointsSignature,
+} from "./territoryMarkers.js";
 
 const TAU = Math.PI * 2;
 const CELL = 1;
@@ -68,18 +84,28 @@ function starIndices(size) {
 }
 
 export class CylinderBoard {
-  constructor(container, { size = 19, onPoint, onHover } = {}) {
+  constructor(container, { size, width, height, onPoint, onHover } = {}) {
+    const fallbackDimension = size ?? width ?? height ?? 19;
+    const boardWidth = width ?? fallbackDimension;
+    const boardHeight = height ?? fallbackDimension;
     this.container = container;
     this.onPoint = onPoint;
     this.onHover = onHover;
-    this.size = size;
+    this.width = boardWidth;
+    this.height = boardHeight;
+    this.size = boardWidth === boardHeight ? boardWidth : undefined;
     this.board = [];
     this.phase = "play";
     this.currentPlayer = "black";
     this.lastMove = null;
     this.analysisMove = null;
+    this.analysisCandidates = [];
+    this.analysisVariation = [];
     this.referencePoint = null;
     this.deadKeys = new Set();
+    this.territoryPoints = [];
+    this.territorySignature = "";
+    this.territoryGroup = null;
     this.pointerStart = null;
     this.hoveredPoint = null;
     this.movePreviewEnabled = true;
@@ -100,6 +126,12 @@ export class CylinderBoard {
     this.renderer.toneMappingExposure = 1.05;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      translateText(
+        "左右相接的三维竹筒围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+      ),
+    );
     this.container.appendChild(this.renderer.domElement);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -111,6 +143,8 @@ export class CylinderBoard {
     this.controls.minPolarAngle = 0.42;
     this.controls.maxPolarAngle = Math.PI - 0.42;
     this.controls.autoRotateSpeed = 0.72;
+    this.controls.mouseButtons.LEFT = -1;
+    this.controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
@@ -136,37 +170,58 @@ export class CylinderBoard {
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.container);
 
-    this.onPointerDown = (event) => {
-      this.pointerStart = { x: event.clientX, y: event.clientY };
-    };
+    this.onPointerDown = (event) => this.handlePointerDown(event);
     this.onPointerMove = (event) => this.handlePointerMove(event);
     this.onPointerUp = (event) => this.handlePointerUp(event);
-    this.onPointerLeave = () => this.setHoveredPoint(null);
+    this.onPointerCancel = (event) => this.handlePointerCancel(event);
+    this.onContextMenu = (event) => preventBoardContextMenu(event);
+    this.onPointerLeave = () => {
+      if (!this.pointerStart) this.setHoveredPoint(null);
+    };
 
     const canvas = this.renderer.domElement;
     canvas.addEventListener("pointerdown", this.onPointerDown);
     canvas.addEventListener("pointermove", this.onPointerMove);
     canvas.addEventListener("pointerup", this.onPointerUp);
+    canvas.addEventListener("pointercancel", this.onPointerCancel);
     canvas.addEventListener("pointerleave", this.onPointerLeave);
+    canvas.addEventListener("contextmenu", this.onContextMenu);
 
-    this.rebuild(size);
+    this.rebuild(boardWidth, boardHeight);
     this.animate();
   }
 
-  rebuild(size) {
-    this.size = size;
+  refreshLanguage() {
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      translateText(
+        "左右相接的三维竹筒围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+      ),
+    );
+  }
+
+  rebuild(width, height = width) {
+    this.width = width;
+    this.height = height;
+    this.size = width === height ? width : undefined;
     this.analysisMove = null;
+    this.analysisCandidates = [];
+    this.analysisVariation = [];
     this.referencePoint = null;
-    this.radius = (size * CELL) / TAU;
-    this.gridHeight = (size - 1) * CELL;
+    this.radius = (width * CELL) / TAU;
+    this.gridHeight = (height - 1) * CELL;
     this.edgeMargin = 0.52;
     this.surfaceHeight = this.gridHeight + this.edgeMargin * 2;
-    this.radialSegments = Math.max(96, size * 8);
+    this.radialSegments = Math.max(96, width * 8);
+    this.board = Array.from({ length: height }, () => Array(width).fill(null));
 
     if (this.boardGroup) {
       this.scene.remove(this.boardGroup);
       disposeObject(this.boardGroup);
     }
+    this.territoryPoints = [];
+    this.territorySignature = "";
+    this.territoryGroup = null;
     this.boardGroup = new THREE.Group();
     this.scene.add(this.boardGroup);
 
@@ -239,7 +294,7 @@ export class CylinderBoard {
     });
     const gridRadius = this.radius + 0.015;
 
-    for (let row = 0; row < this.size; row += 1) {
+    for (let row = 0; row < this.height; row += 1) {
       const ring = new THREE.Mesh(
         new THREE.TorusGeometry(gridRadius, 0.0155, 5, this.radialSegments),
         gridMaterial,
@@ -249,7 +304,7 @@ export class CylinderBoard {
       this.boardGroup.add(ring);
     }
 
-    for (let col = 0; col < this.size; col += 1) {
+    for (let col = 0; col < this.width; col += 1) {
       const theta = this.colTheta(col);
       const meridian = new THREE.Mesh(
         new THREE.CylinderGeometry(0.0155, 0.0155, this.gridHeight, 5),
@@ -267,9 +322,10 @@ export class CylinderBoard {
       color: 0x1c1510,
       roughness: 0.65,
     });
-    const stars = starIndices(this.size);
-    for (const row of stars) {
-      for (const col of stars) {
+    const rowStars = starIndices(this.height);
+    const columnStars = starIndices(this.width);
+    for (const row of rowStars) {
+      for (const col of columnStars) {
         const frame = this.frame(row, col, 0.052);
         const star = new THREE.Mesh(
           new THREE.SphereGeometry(0.074, 12, 8),
@@ -343,7 +399,7 @@ export class CylinderBoard {
   }
 
   colTheta(col) {
-    return (col * TAU) / this.size;
+    return (col * TAU) / this.width;
   }
 
   frame(row, col, offset = 0) {
@@ -362,28 +418,46 @@ export class CylinderBoard {
 
   setPosition({
     board,
+    size,
+    width,
+    height,
     currentPlayer,
     phase,
     lastMove,
     deadStones = [],
+    territoryRegions = [],
     analysisMove = null,
+    analysisCandidates = [],
+    analysisVariation = [],
     referencePoint = null,
   }) {
+    const nextWidth = width ?? size ?? this.width;
+    const nextHeight = height ?? size ?? this.height;
+    if (nextWidth !== this.width || nextHeight !== this.height) {
+      this.rebuild(nextWidth, nextHeight);
+    }
     this.board = board;
     this.currentPlayer = currentPlayer;
     this.phase = phase;
     this.lastMove = lastMove;
     this.analysisMove = analysisMove?.type === "play" ? analysisMove : null;
+    this.analysisCandidates = Array.isArray(analysisCandidates)
+      ? analysisCandidates.slice(0, 5)
+      : [];
+    this.analysisVariation = Array.isArray(analysisVariation)
+      ? analysisVariation.slice(0, 8)
+      : [];
     this.referencePoint =
       Number.isInteger(referencePoint?.row) &&
       Number.isInteger(referencePoint?.col) &&
       referencePoint.row >= 0 &&
-      referencePoint.row < this.size &&
+      referencePoint.row < this.height &&
       referencePoint.col >= 0 &&
-      referencePoint.col < this.size
+      referencePoint.col < this.width
         ? { row: referencePoint.row, col: referencePoint.col }
         : null;
     this.deadKeys = new Set(deadStones.map(({ row, col }) => `${row},${col}`));
+    this.syncTerritoryMarkers(territoryRegions, deadStones);
 
     while (this.stonesGroup.children.length > 0) {
       this.stonesGroup.remove(this.stonesGroup.children[0]);
@@ -395,8 +469,8 @@ export class CylinderBoard {
       marker.material.dispose();
     }
 
-    for (let row = 0; row < this.size; row += 1) {
-      for (let col = 0; col < this.size; col += 1) {
+    for (let row = 0; row < this.height; row += 1) {
+      for (let col = 0; col < this.width; col += 1) {
         const color = board[row][col];
         if (!color) continue;
         const dead = this.deadKeys.has(`${row},${col}`);
@@ -419,17 +493,34 @@ export class CylinderBoard {
       this.addLastMoveMarker(lastMove.row, lastMove.col);
     }
     if (
+      this.analysisCandidates.length === 0 &&
       this.analysisMove &&
       Number.isInteger(this.analysisMove.row) &&
       Number.isInteger(this.analysisMove.col) &&
       this.analysisMove.row >= 0 &&
-      this.analysisMove.row < this.size &&
+      this.analysisMove.row < this.height &&
       this.analysisMove.col >= 0 &&
-      this.analysisMove.col < this.size &&
+      this.analysisMove.col < this.width &&
       !board[this.analysisMove.row]?.[this.analysisMove.col]
     ) {
       this.addAnalysisMarker(this.analysisMove.row, this.analysisMove.col);
     }
+    this.analysisCandidates.forEach((candidate, index) => {
+      const move = candidate?.move ?? candidate;
+      if (
+        move?.type === "play" &&
+        Number.isInteger(move.row) && Number.isInteger(move.col) &&
+        move.row >= 0 && move.row < this.height &&
+        move.col >= 0 && move.col < this.width &&
+        !board[move.row]?.[move.col]
+      ) {
+        this.addAnalysisMarker(move.row, move.col, candidate, index);
+      }
+    });
+    this.analysisVariation.forEach((entry, index) => {
+      const move = entry?.move ?? entry;
+      if (move?.type === "play") this.addVariationMarker(move.row, move.col, entry, index);
+    });
     if (this.referencePoint) {
       this.addReferenceMarker(
         this.referencePoint.row,
@@ -438,6 +529,29 @@ export class CylinderBoard {
       );
     }
     this.refreshHover();
+  }
+
+  syncTerritoryMarkers(territoryRegions, deadStones) {
+    const points = territoryPointsForPosition({
+      territoryRegions,
+      phase: this.phase,
+      width: this.width,
+      height: this.height,
+      board: this.board,
+      deadStones,
+    });
+    const signature = territoryPointsSignature(points);
+    if (signature === this.territorySignature) return;
+
+    disposeTerritoryMarkerLayer(this.territoryGroup);
+    this.territoryPoints = points;
+    this.territorySignature = signature;
+    this.territoryGroup = createTerritoryMarkerLayer(points, {
+      frameAt: (row, col) => this.frame(row, col, 0),
+      radius: 0.2,
+      surfaceOffset: 0.058,
+    });
+    if (this.territoryGroup) this.boardGroup.add(this.territoryGroup);
   }
 
   positionStone(stone, row, col) {
@@ -462,12 +576,14 @@ export class CylinderBoard {
     this.markersGroup.add(marker);
   }
 
-  addAnalysisMarker(row, col) {
+  addAnalysisMarker(row, col, candidate = null, index = 0) {
+    const palette = [0x38e4c5, 0x6c9eff, 0xb58cff, 0xe7a853, 0xe96f78];
+    const active = Boolean(candidate?.active);
     const diamondFrame = this.frame(row, col, 0.07);
     const diamond = new THREE.Mesh(
-      new THREE.CircleGeometry(0.27, 4),
+      new THREE.CircleGeometry(active ? 0.31 : 0.24, 4),
       new THREE.MeshBasicMaterial({
-        color: 0x38e4c5,
+        color: palette[Math.min(index, palette.length - 1)],
         transparent: true,
         opacity: 0.82,
         side: THREE.DoubleSide,
@@ -492,6 +608,21 @@ export class CylinderBoard {
     center.position.copy(centerFrame.position);
     center.quaternion.setFromUnitVectors(LOCAL_FORWARD, centerFrame.normal);
     this.markersGroup.add(center);
+  }
+
+  addVariationMarker(row, col, entry = null, index = 0) {
+    if (
+      !Number.isInteger(row) || !Number.isInteger(col) ||
+      row < 0 || row >= this.height || col < 0 || col >= this.width
+    ) return;
+    const frame = this.frame(row, col, 0);
+    const marker = createAnalysisVariationMarker(entry, index, { radius: 0.19 });
+    placeAnalysisVariationMarker(marker, {
+      position: frame.position,
+      normal: frame.normal,
+      surfaceOffset: 0.286,
+    });
+    this.markersGroup.add(marker);
   }
 
   addReferenceMarker(row, col, occupied) {
@@ -539,15 +670,38 @@ export class CylinderBoard {
     const point = this.boardGroup.worldToLocal(hit.point.clone());
     let theta = Math.atan2(point.x, point.z);
     theta = ((theta % TAU) + TAU) % TAU;
-    const col = Math.round(theta / (TAU / this.size)) % this.size;
+    const col = Math.round(theta / (TAU / this.width)) % this.width;
     const row = Math.round((this.gridHeight / 2 - point.y) / CELL);
-    if (row < 0 || row >= this.size) return null;
+    if (row < 0 || row >= this.height) return null;
     if (Math.abs(point.y - this.rowY(row)) > CELL * 0.5) return null;
     return { row, col };
   }
 
+  handlePointerDown(event) {
+    const guardedPointer = invalidatePendingTapOnAdditionalPointer(
+      this.pointerStart,
+      event,
+    );
+    if (guardedPointer !== this.pointerStart) {
+      this.pointerStart = guardedPointer;
+      this.setHoveredPoint(null);
+      return;
+    }
+    const roles = pointerGestureRoles(event);
+    if (!this.active || !roles || this.pointerStart) return;
+    if (event.pointerType === "mouse" && roles.canDrag) event.preventDefault();
+    this.pointerStart = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      canPlace: roles.canPlace,
+    };
+    this.renderer.domElement.setPointerCapture?.(event.pointerId);
+  }
+
   handlePointerMove(event) {
-    if (this.pointerStart) {
+    if (!this.active) return;
+    if (this.pointerStart?.id === event.pointerId) {
       const distance = Math.hypot(
         event.clientX - this.pointerStart.x,
         event.clientY - this.pointerStart.y,
@@ -561,15 +715,26 @@ export class CylinderBoard {
   }
 
   handlePointerUp(event) {
-    if (!this.pointerStart) return;
+    if (!this.pointerStart || this.pointerStart.id !== event.pointerId) return;
+    const canPlace = this.pointerStart.canPlace;
     const distance = Math.hypot(
       event.clientX - this.pointerStart.x,
       event.clientY - this.pointerStart.y,
     );
     this.pointerStart = null;
-    if (distance > 6) return;
+    const canvas = this.renderer.domElement;
+    if (canvas.hasPointerCapture?.(event.pointerId)) {
+      canvas.releasePointerCapture(event.pointerId);
+    }
+    if (!canPlace || distance > 6) return;
     const point = this.raycastPoint(event);
     if (point && this.onPoint) this.onPoint(point);
+  }
+
+  handlePointerCancel(event) {
+    if (!this.pointerStart || this.pointerStart.id !== event.pointerId) return;
+    this.pointerStart = null;
+    this.setHoveredPoint(null);
   }
 
   setHoveredPoint(point) {
@@ -632,9 +797,9 @@ export class CylinderBoard {
       !Number.isInteger(point?.row) ||
       !Number.isInteger(point?.col) ||
       point.row < 0 ||
-      point.row >= this.size ||
+      point.row >= this.height ||
       point.col < 0 ||
-      point.col >= this.size
+      point.col >= this.width
     ) {
       return;
     }
@@ -693,7 +858,9 @@ export class CylinderBoard {
     canvas.removeEventListener("pointerdown", this.onPointerDown);
     canvas.removeEventListener("pointermove", this.onPointerMove);
     canvas.removeEventListener("pointerup", this.onPointerUp);
+    canvas.removeEventListener("pointercancel", this.onPointerCancel);
     canvas.removeEventListener("pointerleave", this.onPointerLeave);
+    canvas.removeEventListener("contextmenu", this.onContextMenu);
     this.controls.dispose();
     disposeObject(this.boardGroup);
     this.woodTexture.dispose();

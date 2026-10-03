@@ -1,0 +1,33 @@
+{
+  "recordedAt": "2026-09-30T20:30:25.329Z",
+  "branch": "codex/大厅版",
+  "codeCandidate": "b4954c0ef3eb9bc27400c48ecf308c971e11eb9e",
+  "integratedMain": "ac9e82dece9ace9f0ea49188fbb6c0c1387e0966",
+  "node": "v24.14.0",
+  "platform": "win32",
+  "releaseCandidate": "0.2.0-rc.9",
+  "checks": [
+    {
+      "command": "npm run release:check -- 0.2.0-rc.9",
+      "passed": true,
+      "tests": 372,
+      "failed": 0,
+      "build": true,
+      "strictDeployDryRun": true
+    },
+    {
+      "command": "node scripts/live-room-smoke.mjs http://127.0.0.1:8788/",
+      "passed": true
+    },
+    {
+      "command": "node scripts/live-scoring-smoke.mjs http://127.0.0.1:8788/",
+      "passed": true,
+      "delayedConfirmationRejected": true
+    }
+  ],
+  "remaining": [
+    "Remote PR CI has not run.",
+    "No preproduction rollout or physical mobile/Safari test."
+  ],
+  "published": false
+}

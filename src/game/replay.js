@@ -1,6 +1,7 @@
 import {
   BLACK,
   GoEngine,
+  PHASE_FINISHED,
   REPLAY_VERSION,
   WHITE,
 } from "./goEngine.js";
@@ -47,6 +48,11 @@ function applyReplayEvent(game, event, index) {
     result = game.toggleDead(event.row, event.col);
   } else if (event.type === "finish_scoring") {
     result = game.finishScoring(event.rule);
+  } else if (event.type === "resign") {
+    if (!VALID_COLORS.has(event.color)) {
+      throw new TypeError(`replay.events[${index}] has an invalid color`);
+    }
+    result = game.resign(event.color);
   } else {
     throw new TypeError(
       `Unknown replay event type at replay.events[${index}]: ${event.type}`,
@@ -79,6 +85,57 @@ function createReplayGame(replay) {
   return GoEngine.fromState(replay.base);
 }
 
+function replayOutcomeResult(replay) {
+  const outcome = replay?.outcome;
+  if (outcome === undefined || outcome === null) return null;
+  requireReplayObject(outcome, "replay.outcome");
+  if (outcome.reason === "timeout") {
+    if (
+      !VALID_COLORS.has(outcome.winner) ||
+      !VALID_COLORS.has(outcome.loser) ||
+      outcome.winner === outcome.loser ||
+      !Number.isFinite(outcome.finishedAt)
+    ) {
+      throw new TypeError("replay.outcome must be a valid timeout result");
+    }
+    return {
+      winner: outcome.winner,
+      loser: outcome.loser,
+      margin: 0,
+      reason: "timeout",
+      finishedAt: outcome.finishedAt,
+    };
+  }
+  if (outcome.reason === "resign") {
+    if (
+      !VALID_COLORS.has(outcome.winner) ||
+      !VALID_COLORS.has(outcome.loser) ||
+      outcome.winner === outcome.loser ||
+      (outcome.margin !== undefined && outcome.margin !== 0) ||
+      (outcome.resignation !== undefined && outcome.resignation !== true)
+    ) {
+      throw new TypeError("replay.outcome must be a valid resignation result");
+    }
+    return {
+      winner: outcome.winner,
+      loser: outcome.loser,
+      margin: 0,
+      reason: "resign",
+      resignation: true,
+    };
+  }
+  throw new TypeError("replay.outcome must be a supported terminal result");
+}
+
+function finishReplayFrameByOutcome(frame, result) {
+  if (!result) return frame;
+  return {
+    ...frame,
+    phase: PHASE_FINISHED,
+    result: structuredClone(result),
+  };
+}
+
 /**
  * Expand a compact replay into render-ready positions.
  *
@@ -92,6 +149,7 @@ export function buildReplayFrames(replay) {
   const game = createReplayGame(replay);
   const frames = [game.getState()];
   const steps = [];
+  const outcomeResult = replayOutcomeResult(replay);
 
   replay.events.forEach((event, eventIndex) => {
     const result = applyReplayEvent(game, event, eventIndex);
@@ -113,6 +171,13 @@ export function buildReplayFrames(replay) {
       steps.push({ type: "pass", color: result.color });
     }
   });
+
+  if (outcomeResult) {
+    frames[frames.length - 1] = finishReplayFrameByOutcome(
+      frames[frames.length - 1],
+      outcomeResult,
+    );
+  }
 
   return { frames, steps, complete: replay.complete };
 }
@@ -145,6 +210,24 @@ export function buildReplayStateAtStep(replay, requestedStep) {
     );
   }
   return game.exportState({ includeReplay: false });
+}
+
+/** Preserve the full move history when reviewing a live online position. */
+export function buildLiveReviewState(game, { online = false, replay, moveCount } = {}) {
+  if (online) {
+    const state = buildReplayStateAtStep(replay, moveCount);
+    const visible = game.getState();
+    const publicFields = [
+      "width", "height", "topology", "komi", "scoringRule", "currentPlayer",
+      "phase", "consecutivePasses", "captures", "board",
+    ];
+    if (publicFields.some((field) =>
+      JSON.stringify(state[field]) !== JSON.stringify(visible[field]))) {
+      throw new TypeError("Replay does not match the current public position");
+    }
+    return state;
+  }
+  return game.exportSearchState();
 }
 
 export default buildReplayFrames;

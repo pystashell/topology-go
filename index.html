@@ -13,7 +13,7 @@
   <body>
     <div id="app">
       <header class="topbar">
-        <a class="brand" href="/" aria-label="3D Baduk 首页">
+        <a class="brand" href="/single" aria-label="3D Baduk 首页">
           <span class="brand-mark" aria-hidden="true">
             <span></span><span></span><span></span>
           </span>
@@ -22,22 +22,112 @@
             <small>奇异棋盘围棋</small>
           </span>
         </a>
-        <div class="topology-switch" role="group" aria-label="棋盘形状">
-          <button type="button" data-board-topology="cylinder" class="active" aria-pressed="true">竹筒</button>
-          <button type="button" data-board-topology="torus" aria-pressed="false">甜甜圈</button>
-          <button type="button" data-board-topology="mobius" aria-pressed="false">莫比乌斯</button>
+        <div class="topbar-actions">
+          <div class="topology-switch" role="group" aria-label="棋盘形状">
+            <button type="button" data-board-topology="cylinder" class="active" aria-pressed="true">竹筒</button>
+            <button type="button" data-board-topology="torus" aria-pressed="false">甜甜圈</button>
+            <button type="button" data-board-topology="mobius" aria-pressed="false">莫比乌斯</button>
+          </div>
+          <div class="language-switch" role="group" aria-label="界面语言">
+            <button type="button" data-language="zh-CN" lang="zh-CN" class="active" aria-pressed="true">中文</button>
+            <button type="button" data-language="en" lang="en" aria-pressed="false">EN</button>
+          </div>
         </div>
       </header>
 
-      <main class="game-layout">
-        <section class="board-stage" data-view-mode="arc" data-topology="cylinder" aria-label="3D Baduk 棋盘区域">
+      <main id="lobby-screen" class="online-lobby" aria-labelledby="lobby-title" hidden>
+        <section class="lobby-hero">
+          <div>
+            <span class="eyebrow">3D Baduk Online</span>
+            <h1 id="lobby-title">奇异棋盘在线大厅</h1>
+            <p>创建竹筒、甜甜圈或莫比乌斯棋局；好友、人机、AI 自对弈和同机双人都可实时同步并开放观战。</p>
+          </div>
+          <div class="lobby-primary-actions">
+            <button id="lobby-create-room" class="primary-button" type="button">创建房间</button>
+            <button id="lobby-join-room" class="secondary-button" type="button">输入房间号</button>
+            <a class="secondary-button" href="/single">返回单人模式</a>
+          </div>
+        </section>
+
+        <section class="lobby-browser" aria-labelledby="lobby-browser-title">
+          <div class="lobby-browser-heading">
+            <div>
+              <span class="eyebrow">公开房间</span>
+              <h2 id="lobby-browser-title">选择一盘棋</h2>
+            </div>
+            <button id="lobby-refresh" class="secondary-button" type="button">刷新</button>
+          </div>
+
+          <div class="lobby-status-tabs" role="group" aria-label="房间状态">
+            <button type="button" data-lobby-status="all" class="active" aria-pressed="true">全部</button>
+            <button type="button" data-lobby-status="joinable" aria-pressed="false">可加入</button>
+            <button type="button" data-lobby-status="playing" aria-pressed="false">正在进行</button>
+            <button type="button" data-lobby-status="finished" aria-pressed="false">已结束</button>
+          </div>
+
+          <div class="lobby-filters">
+            <label>
+              <span>棋盘形状</span>
+              <select id="lobby-topology-filter">
+                <option value="all">全部形状</option>
+                <option value="cylinder">竹筒</option>
+                <option value="torus">甜甜圈</option>
+                <option value="mobius">莫比乌斯</option>
+              </select>
+            </label>
+            <label>
+              <span>棋盘尺寸</span>
+              <select id="lobby-size-filter">
+                <option value="all">全部尺寸</option>
+                <option value="9">9 × 9</option>
+                <option value="13">13 × 13</option>
+                <option value="19">19 × 19</option>
+                <option value="custom">自定义长宽</option>
+              </select>
+            </label>
+            <label>
+              <span>对局方式</span>
+              <select id="lobby-mode-filter">
+                <option value="all">全部方式</option>
+                <option value="friend">好友对战</option>
+                <option value="human-ai">人机对战</option>
+                <option value="ai-ai">AI 自对弈</option>
+                <option value="local">同机双人</option>
+              </select>
+            </label>
+          </div>
+
+          <p id="lobby-status" class="lobby-status" role="status">正在读取公开房间…</p>
+          <div id="lobby-room-list" class="lobby-room-list"></div>
+          <div id="lobby-empty" class="lobby-empty" hidden>
+            <strong>暂时没有符合条件的房间</strong>
+            <span>可以创建一盘新的异形棋局，第一位对手或观众很快就能加入。</span>
+          </div>
+        </section>
+      </main>
+
+      <main id="game-screen" class="game-layout" hidden>
+        <section
+          class="board-stage"
+          data-view-mode="arc"
+          data-topology="cylinder"
+          data-chat-pick-hint="📍 点击一个棋点引用到聊天（不会落子）"
+          data-analysis-pick-hint="◇ 点击棋点，只在本页建立分析分支"
+          aria-label="3D Baduk 棋盘区域"
+        >
           <div id="flat-scene" class="view-surface" aria-label="可横向滑动的竹筒表面平面展开棋盘" hidden></div>
           <div id="arc-scene" class="view-surface" aria-label="可横向循环滑动的3D弧面棋盘"></div>
           <div id="scene" class="view-surface" aria-label="可旋转的3D竹筒围棋棋盘" hidden></div>
           <div id="torus-scene" class="view-surface" aria-label="可旋转的3D甜甜圈围棋棋盘" hidden></div>
           <div id="mobius-scene" class="view-surface" aria-label="可旋转的3D莫比乌斯围棋棋盘" hidden></div>
 
-          <div class="view-switch" role="group" aria-label="棋盘视图">
+          <div
+            class="view-switch"
+            role="group"
+            aria-label="棋盘视图"
+            data-torus-width-label="◉ 立体甜甜圈"
+            data-mobius-width-label="◉ 立体莫比乌斯"
+          >
             <button type="button" data-view-mode="flat" aria-pressed="false">
               <span aria-hidden="true">▦</span>
               平面展开
@@ -67,11 +157,11 @@
             </button>
           </div>
           <div class="gesture-hint" aria-hidden="true">
-            <span id="gesture-primary">横向拖动</span>
+            <span id="gesture-primary">右键横向拖动</span>
             <i></i>
             <span id="gesture-secondary">弧面循环 · 滚轮缩放</span>
             <i></i>
-            <span>点击落子</span>
+            <span id="gesture-place">左键点击落子</span>
           </div>
           <div id="coordinate-hint" class="coordinate-hint" aria-live="polite"></div>
         </section>
@@ -82,41 +172,112 @@
               <div class="room-heading">
                 <span id="room-status-dot" class="room-status-dot offline" aria-hidden="true"></span>
                 <span>
-                  <span id="room-mode" class="eyebrow">单机模式</span>
-                  <strong id="room-title">和朋友一起下棋</strong>
+                  <span id="room-mode" class="eyebrow">我的房间</span>
+                  <strong id="room-title">还没有发起对局</strong>
                 </span>
               </div>
-              <div id="offline-opponent-actions" class="room-main-actions">
-                <button id="open-ai-dialog" class="secondary-button room-main-action ai-main-action" type="button">
-                  AI 对战
-                </button>
-                <button id="open-online-dialog" class="secondary-button room-main-action" type="button">
-                  联机
-                </button>
-              </div>
+            </div>
+            <div id="offline-opponent-actions" class="room-main-actions">
+              <button class="primary-button room-invite-action" type="button" data-open-invite>
+                <strong>邀请对局</strong>
+                <small>选择 AI、好友、本地双人或 AI 自对弈</small>
+              </button>
+              <button id="join-invitation" class="secondary-button room-main-action" type="button">
+                进入在线大厅
+              </button>
             </div>
 
             <div id="room-connected" class="room-connected" hidden>
-              <div class="room-code-row">
+              <section id="online-match-options" class="online-match-options" hidden>
+                <div class="section-heading compact-heading">
+                  <h3>在线对局方式</h3>
+                  <span>棋局会同步并可供观战</span>
+                </div>
+                <label class="input-row" for="online-match-mode">
+                  <span>
+                    <strong>双方控制方式</strong>
+                    <small>好友需要接受邀请；其他模式由本浏览器控制</small>
+                  </span>
+                  <select id="online-match-mode">
+                    <option value="friend">邀请好友</option>
+                    <option value="human-ai">我和 AI</option>
+                    <option value="ai-ai">AI 对 AI</option>
+                    <option value="local">同机双人</option>
+                  </select>
+                </label>
+                <label id="online-match-ai-model-field" class="input-row" for="online-match-ai-model" hidden>
+                  <span>
+                    <strong>白方 AI</strong>
+                    <small>b18 更强，但下载和显存占用明显更高</small>
+                  </span>
+                  <select id="online-match-ai-model">
+                    <option value="b10">b10 · 快速</option>
+                    <option value="b18">b18 · 增强（高耗资源）</option>
+                  </select>
+                </label>
+                <label id="online-match-black-ai-model-field" class="input-row" for="online-match-black-ai-model" hidden>
+                  <span>
+                    <strong>黑方 AI</strong>
+                    <small>AI 对 AI 时黑白双方可分别选择模型</small>
+                  </span>
+                  <select id="online-match-black-ai-model">
+                    <option value="b10">b10 · 快速</option>
+                    <option value="b18">b18 · 增强（高耗资源）</option>
+                  </select>
+                </label>
+              </section>
+              <div id="friend-room-code-row" class="room-code-row">
                 <span>房间</span>
                 <strong id="room-code">------</strong>
                 <span id="local-role" class="role-badge">旁观</span>
               </div>
               <div class="room-actions">
                 <button id="copy-room-link" class="secondary-button" type="button">复制邀请链接</button>
-                <button id="leave-room" class="text-button" type="button">退出</button>
+                <button id="toggle-online-ai-autoplay" class="secondary-button" type="button" hidden>暂停对弈</button>
+                <button
+                  id="leave-room"
+                  class="secondary-button danger-button room-leave-action"
+                  type="button"
+                >
+                  退出房间
+                </button>
               </div>
-              <div class="seat-list" aria-label="房间座位">
+              <div class="room-ai-actions">
+                <button id="attach-room-ai" class="secondary-button" type="button" hidden>让 AI 接替白方</button>
+                <button id="detach-room-ai" class="text-button" type="button" hidden>移除在线 AI</button>
+                <small>在线 AI 由房主页面运行；服务器只验证棋步并同步给观众。</small>
+              </div>
+              <div id="friend-seat-list" class="seat-list" aria-label="房间座位">
                 <div>
                   <span class="stone black small" aria-hidden="true"></span>
                   <span id="black-seat">等待黑方</span>
                 </div>
-                <div>
+                <div class="seat-entry seat-entry-actionable">
                   <span class="stone white small" aria-hidden="true"></span>
                   <span id="white-seat">等待白方</span>
+                  <button
+                    id="opponent-seat-action"
+                    class="text-button room-seat-action"
+                    type="button"
+                    hidden
+                  >
+                    成为白方
+                  </button>
                 </div>
               </div>
               <p id="room-hint" class="room-hint">正在连接房间…</p>
+              <section id="game-invitation-panel" class="game-invitation-panel" hidden aria-live="polite">
+                <div>
+                  <span class="eyebrow">对局邀请</span>
+                  <strong id="game-invitation-title">等待回应</strong>
+                  <small id="game-invitation-summary"></small>
+                </div>
+                <div class="game-invitation-actions">
+                  <button id="accept-game-invitation" class="primary-button" type="button">接受并开始</button>
+                  <button id="decline-game-invitation" class="secondary-button" type="button">拒绝</button>
+                  <button id="cancel-game-invitation" class="secondary-button" type="button">取消邀请</button>
+                </div>
+              </section>
             </div>
 
             <div id="ai-connected" class="room-connected" hidden>
@@ -137,23 +298,77 @@
               </div>
               <div class="room-actions">
                 <button id="change-ai-settings" class="secondary-button" type="button">更换 AI 设置</button>
+                <button id="toggle-ai-autoplay" class="secondary-button" type="button" hidden>暂停对弈</button>
                 <button id="leave-ai" class="text-button" type="button">退出 AI</button>
               </div>
               <p id="ai-hint" class="room-hint">轮到你落子。</p>
             </div>
           </section>
 
+          <section id="clock-panel" class="clock-panel" aria-label="双方用时" hidden>
+            <article id="black-clock-card" class="clock-card active" data-color="black">
+              <span class="stone black" aria-hidden="true"></span>
+              <span class="clock-player">
+                <strong id="black-clock-name" data-i18n-ignore>黑方</strong>
+                <small id="black-clock-status">准备落子</small>
+              </span>
+              <span class="clock-reading">
+                <strong id="black-clock-time">不计时</strong>
+                <small id="black-clock-periods">自由用时</small>
+              </span>
+            </article>
+            <article id="white-clock-card" class="clock-card" data-color="white">
+              <span class="stone white" aria-hidden="true"></span>
+              <span class="clock-player">
+                <strong id="white-clock-name" data-i18n-ignore>白方</strong>
+                <small id="white-clock-status">等待黑方</small>
+              </span>
+              <span class="clock-reading">
+                <strong id="white-clock-time">不计时</strong>
+                <small id="white-clock-periods">自由用时</small>
+              </span>
+            </article>
+          </section>
+
+          <nav class="sidebar-tabs" role="tablist" aria-label="侧栏功能">
+            <button id="sidebar-tab-game" type="button" role="tab" data-sidebar-tab="game" aria-selected="false" aria-controls="sidebar-panel-game">
+              <span aria-hidden="true">●</span><b>对局</b>
+            </button>
+            <button id="sidebar-tab-analysis" type="button" role="tab" data-sidebar-tab="analysis" aria-selected="false" aria-controls="sidebar-panel-analysis">
+              <span aria-hidden="true">◇</span><b>分析</b>
+            </button>
+            <button id="sidebar-tab-chat" type="button" role="tab" data-sidebar-tab="chat" aria-selected="false" aria-controls="sidebar-panel-chat">
+              <span aria-hidden="true">✦</span><b>聊天</b>
+            </button>
+            <button id="sidebar-tab-record" type="button" role="tab" data-sidebar-tab="record" aria-selected="false" aria-controls="sidebar-panel-record">
+              <span aria-hidden="true">▶</span><b>棋谱</b>
+            </button>
+            <button id="sidebar-tab-settings" type="button" role="tab" data-sidebar-tab="settings" class="active" aria-label="棋盘设置" aria-selected="true" aria-controls="sidebar-panel-settings">
+              <span aria-hidden="true">⚙</span><b>棋盘设置</b>
+            </button>
+          </nav>
+
+          <div id="sidebar-panel-game" class="sidebar-panel" data-sidebar-panel="game" role="tabpanel" aria-labelledby="sidebar-tab-game" hidden></div>
+          <div id="sidebar-panel-analysis" class="sidebar-panel" data-sidebar-panel="analysis" role="tabpanel" aria-labelledby="sidebar-tab-analysis" hidden></div>
+          <div id="sidebar-panel-chat" class="sidebar-panel" data-sidebar-panel="chat" role="tabpanel" aria-labelledby="sidebar-tab-chat" hidden></div>
+          <div id="sidebar-panel-record" class="sidebar-panel" data-sidebar-panel="record" role="tabpanel" aria-labelledby="sidebar-tab-record" hidden></div>
+          <div id="sidebar-panel-settings" class="sidebar-panel" data-sidebar-panel="settings" role="tabpanel" aria-labelledby="sidebar-tab-settings"></div>
+
           <section id="chat-panel" class="chat-panel" aria-label="房间聊天" hidden>
             <div class="chat-heading">
               <span>
                 <span class="eyebrow">实时联机</span>
-                <strong>对局聊天</strong>
+                <strong id="chat-channel-title">对局聊天</strong>
               </span>
               <span id="chat-connection" class="chat-connection">连接中</span>
             </div>
+            <div id="chat-channel-tabs" class="chat-channel-tabs" role="group" aria-label="聊天频道" hidden>
+              <button type="button" data-chat-channel="spectators" aria-pressed="true">旁观聊天</button>
+              <button type="button" data-chat-channel="players" aria-pressed="false">对局聊天 · 只读</button>
+            </div>
 
             <div id="chat-messages" class="chat-messages" role="log" aria-live="polite" aria-relevant="additions">
-              <p id="chat-empty" class="chat-empty">还没有消息，先和对手打个招呼吧。</p>
+              <p id="chat-empty" class="chat-empty">聊天需要进入联机房间；本地棋局的其他功能仍然完整可用。</p>
             </div>
 
             <form id="chat-form" class="chat-composer">
@@ -184,20 +399,32 @@
 
           <section class="turn-card" aria-labelledby="turn-label">
             <div>
-              <span id="phase-label" class="eyebrow">对局中</span>
+              <span id="phase-label" class="eyebrow">准备大厅</span>
               <h1 id="turn-label">
-                <span id="turn-stone" class="stone black" aria-hidden="true"></span>
-                <span id="turn-text">黑方落子</span>
+                <span id="turn-stone" class="stone black" aria-hidden="true" hidden></span>
+                <span id="turn-text">尚未开始</span>
               </h1>
             </div>
-            <span id="move-number" class="move-number">第 1 手</span>
+            <span id="move-number" class="move-number">19 × 19 · 竹筒</span>
+          </section>
+
+          <section id="undo-request-panel" class="undo-request-panel" aria-live="assertive" hidden>
+            <div>
+              <span class="eyebrow">联机悔棋</span>
+              <strong id="undo-request-text">对方申请撤回上一手</strong>
+            </div>
+            <div id="undo-response-actions" class="undo-request-actions">
+              <button id="approve-undo" class="primary-button" type="button">同意</button>
+              <button id="decline-undo" class="secondary-button" type="button">拒绝</button>
+            </div>
+            <button id="cancel-undo-request" class="secondary-button" type="button" hidden>取消申请</button>
           </section>
 
           <div id="message" class="message" role="status" aria-live="polite">
-            点击棋盘交叉点落子
+            邀请对手并确认设置后开始对局
           </div>
 
-          <section class="score-strip" aria-label="提子数">
+          <section class="score-strip" aria-label="提子数" hidden>
             <div>
               <span class="stone black small" aria-hidden="true"></span>
               <span>黑方提子</span>
@@ -210,13 +437,23 @@
             </div>
           </section>
 
-          <section id="play-controls" class="primary-actions play-actions" aria-label="对局操作">
+          <section id="play-controls" class="primary-actions play-actions" aria-label="对局操作" hidden>
             <button id="pass-button" class="primary-button" type="button">停一手</button>
             <button id="undo-button" class="secondary-button" type="button">悔棋</button>
+            <button id="resign-button" class="secondary-button danger-button" type="button">认输</button>
             <button id="new-game-button" class="secondary-button" type="button">新棋盘</button>
           </section>
 
-          <button id="replay-button" class="secondary-button replay-entry-button" type="button">
+          <section id="post-game-actions" class="post-game-actions" aria-label="终局后的操作" hidden>
+            <button id="direct-rematch" class="primary-button direct-rematch-button" type="button">
+              直接进行下一局
+            </button>
+            <button id="adjust-next-game" class="secondary-button adjust-next-game-button" type="button">
+              调整下一局设置
+            </button>
+          </section>
+
+          <button id="replay-button" class="secondary-button replay-entry-button" type="button" hidden>
             <span class="replay-entry-icon" aria-hidden="true">▶</span>
             <span>
               <strong>复盘整局</strong>
@@ -224,6 +461,19 @@
             </span>
             <span class="replay-entry-arrow" aria-hidden="true">›</span>
           </button>
+
+          <section class="record-actions" data-sidebar-staged hidden aria-labelledby="record-actions-title">
+            <div>
+              <span class="eyebrow">SGF 棋谱</span>
+              <strong id="record-actions-title">保存或打开异形棋谱</strong>
+              <small>标准棋步保持兼容，接缝规则写入 3D Baduk 扩展属性</small>
+            </div>
+            <div class="record-action-buttons">
+              <button id="export-sgf" class="secondary-button" type="button">导出 SGF</button>
+              <button id="import-sgf" class="secondary-button" type="button">导入 SGF</button>
+              <input id="import-sgf-file" type="file" accept=".sgf,application/x-go-sgf,text/plain" hidden />
+            </div>
+          </section>
 
           <section id="replay-panel" class="replay-panel" aria-label="复盘播放器" hidden>
             <div class="replay-panel-heading">
@@ -247,11 +497,11 @@
               <button id="replay-last" class="secondary-button" type="button" aria-label="跳到结尾" title="跳到结尾">›|</button>
             </div>
 
-            <section id="ai-review-panel" class="ai-review-panel" aria-label="KataGo AI 复盘">
+            <section id="ai-review-panel" class="ai-review-panel" data-sidebar-staged hidden aria-label="KataGo AI 局势分析">
               <div class="ai-review-heading">
                 <span>
-                  <span class="eyebrow">AI 复盘</span>
-                  <strong>KataGo 棋局参考</strong>
+                  <span id="ai-review-eyebrow" class="eyebrow">AI 局势分析</span>
+                  <strong id="ai-review-title">KataGo 候选与变化</strong>
                 </span>
                 <label class="ai-review-model" for="ai-review-model">
                   <span>分析模型</span>
@@ -265,7 +515,7 @@
               <p id="ai-review-model-note" class="ai-review-model-note"></p>
 
               <p id="ai-review-status" class="ai-review-status" aria-live="polite">
-                停在任意一手，查看 AI 在当时更偏好的下法。
+                分析当前局面，棋盘会同时标出多个候选点。
               </p>
 
               <div class="ai-review-actions">
@@ -281,6 +531,12 @@
                 </div>
                 <p id="ai-review-comparison"></p>
                 <ol id="ai-review-candidates" class="ai-review-candidates"></ol>
+                <div id="ai-variation-preview" class="ai-variation-preview" hidden>
+                  <span>变化图</span>
+                  <strong id="ai-variation-title">候选 1</strong>
+                  <p id="ai-variation-line"></p>
+                  <small>悬停临时查看，点击候选可固定；再次点击取消。</small>
+                </div>
               </div>
 
               <p class="ai-review-disclaimer">
@@ -301,20 +557,13 @@
             </div>
           </section>
 
-          <section id="undo-request-panel" class="undo-request-panel" aria-live="polite" hidden>
-            <div>
-              <span class="eyebrow">联机悔棋</span>
-              <strong id="undo-request-text">对方申请撤回上一手</strong>
-            </div>
-            <div id="undo-response-actions" class="undo-request-actions">
-              <button id="approve-undo" class="primary-button" type="button">同意</button>
-              <button id="decline-undo" class="secondary-button" type="button">拒绝</button>
-            </div>
-            <button id="cancel-undo-request" class="secondary-button" type="button" hidden>取消申请</button>
-          </section>
-
           <section id="scoring-panel" class="scoring-panel" hidden>
-            <p>点击棋子可将整块棋标为死子；再次点击可恢复。</p>
+            <p>系统已保守预标较明确的死棋；点击棋子可修改整块棋的死活判断。</p>
+            <div class="scoring-legend" aria-label="点目棋盘标记说明">
+              <span><i class="territory-swatch black" aria-hidden="true"></i>黑方领地</span>
+              <span><i class="territory-swatch white" aria-hidden="true"></i>白方领地</span>
+              <span><i class="territory-swatch neutral" aria-hidden="true"></i>未定或公气</span>
+            </div>
             <div class="live-score" aria-label="当前点目结果">
               <div><span>黑</span><strong id="black-score">0</strong></div>
               <div><span>白</span><strong id="white-score">0</strong></div>
@@ -326,11 +575,22 @@
             </div>
           </section>
 
-          <section class="settings" aria-labelledby="settings-title">
+          <section class="settings" data-sidebar-staged hidden aria-labelledby="settings-title">
             <div class="section-heading">
               <h2 id="settings-title">棋盘设置</h2>
               <span id="board-topology">19 路 · 竹筒</span>
             </div>
+
+            <section id="next-game-setup" class="next-game-setup" aria-live="polite" hidden>
+              <div>
+                <span id="next-game-context" class="eyebrow">沿用上一局</span>
+                <strong>设置并发起下一局</strong>
+                <small id="next-game-hint">已沿用上一局设置；可以直接开始，也可以先调整棋盘。</small>
+              </div>
+              <button id="confirm-next-game" class="primary-button" type="button">
+                使用当前设置开始下一局
+              </button>
+            </section>
 
             <div class="field-group">
               <span class="field-label">棋盘形状</span>
@@ -356,13 +616,22 @@
               </div>
             </div>
 
-            <label class="input-row" for="custom-size">
-              <span>
-                <strong>自定义尺寸</strong>
-                <small>5–25路</small>
-              </span>
-              <input id="custom-size" type="number" min="5" max="25" step="1" value="19" inputmode="numeric" />
-            </label>
+            <div class="dimension-fields" role="group" aria-label="自定义棋盘宽度与高度">
+              <label class="input-row" for="custom-width">
+                <span>
+                  <strong>宽度</strong>
+                  <small>横向列数 · 5–30</small>
+                </span>
+                <input id="custom-width" type="number" min="5" max="30" step="1" value="19" inputmode="numeric" />
+              </label>
+              <label class="input-row" for="custom-height">
+                <span>
+                  <strong>高度</strong>
+                  <small>纵向行数 · 5–30</small>
+                </span>
+                <input id="custom-height" type="number" min="5" max="30" step="1" value="19" inputmode="numeric" />
+              </label>
+            </div>
 
             <label class="input-row" for="scoring-rule">
               <span>
@@ -371,9 +640,10 @@
               </span>
               <select id="scoring-rule">
                 <option value="chinese">中国规则 · 面积</option>
-                <option value="japanese">日本规则 · 数目</option>
+                <option value="japanese">简化领地计分 · 数目</option>
               </select>
             </label>
+            <p class="scoring-rule-note">简化领地计分按领地与提子计分，尚未排除双活中的眼，不等同于完整日本规则。</p>
 
             <label class="input-row" for="komi">
               <span>
@@ -382,13 +652,48 @@
               </span>
               <input id="komi" type="number" min="0" max="20" step="0.5" value="7.5" />
             </label>
+
+            <div class="time-control-settings" aria-labelledby="time-control-title">
+              <div class="section-heading compact-heading">
+                <h3 id="time-control-title">计时与读秒</h3>
+                <span>新棋盘时生效</span>
+              </div>
+              <label class="input-row" for="time-control-preset">
+                <span>
+                  <strong>用时方案</strong>
+                  <small>日本式读秒</small>
+                </span>
+                <select id="time-control-preset">
+                  <option value="none">不计时</option>
+                  <option value="blitz">快棋 · 5 分钟 + 3×20 秒</option>
+                  <option value="standard">标准 · 20 分钟 + 5×30 秒</option>
+                  <option value="long">长考 · 45 分钟 + 5×60 秒</option>
+                  <option value="custom">自定义</option>
+                </select>
+              </label>
+              <div id="custom-time-fields" class="time-fields" hidden>
+                <label>
+                  <span>基本时间（分钟）</span>
+                  <input id="main-time-minutes" type="number" min="0" max="180" step="1" value="20" inputmode="numeric" />
+                </label>
+                <label>
+                  <span>读秒次数</span>
+                  <input id="byo-yomi-periods" type="number" min="1" max="20" step="1" value="5" inputmode="numeric" />
+                </label>
+                <label>
+                  <span>每次读秒（秒）</span>
+                  <input id="byo-yomi-seconds" type="number" min="5" max="300" step="5" value="30" inputmode="numeric" />
+                </label>
+              </div>
+              <p class="time-control-note">基本时间耗尽后进入读秒；超出一整段会失去一次读秒，最后一次耗尽即判超时负。</p>
+            </div>
           </section>
 
-          <details class="rules-note">
+          <details class="rules-note" data-sidebar-staged hidden>
             <summary id="rules-summary">竹筒表面规则说明</summary>
             <ul id="cylinder-rules">
               <li>同一行最左与最右的棋点相邻。</li>
-              <li>平面与弧面视图横向拖动只会改变展开起点，不会改变棋子在局面中的位置。</li>
+              <li>桌面端右键横向拖动平面与弧面，触屏则用单指拖动；这些操作只改变展开起点，不改变棋子位置。</li>
               <li>弧面视图把完整一圈弯向玩家，左右边缘仍然相邻。</li>
               <li>上下两圈仍是棋盘边界，没有传统棋盘的四个角。</li>
               <li>禁自杀并采用位置超级劫，禁止重复任何旧局面。</li>
@@ -397,7 +702,7 @@
             <ul id="torus-rules" hidden>
               <li>同一行最左与最右相邻，同一列最上与最下也相邻。</li>
               <li>每一个棋点都有四个方向，没有边、角和一线。</li>
-              <li>平面视图可向上下左右或斜向拖动，改变两个方向的展开起点。</li>
+              <li>桌面端右键、触屏单指可向上下左右或斜向拖动平面，改变两个方向的展开起点。</li>
               <li>立体视图就是甜甜圈；数学上叫环面，内圈格子会比外圈更密。</li>
               <li>禁自杀并采用位置超级劫，提子、连通与点目都跨越四条接缝计算。</li>
               <li>双方连续停一手后进入点目，可先标记死子。</li>
@@ -405,64 +710,171 @@
             <ul id="mobius-rules" hidden>
               <li>最左与最右反向相接：左侧第 1 行连接右侧末行，左侧第 2 行连接右侧倒数第 2 行。</li>
               <li>上下仍是同一圈棋盘边界，因此边界点有三口气；原来的四个角不再是角。</li>
-              <li>平面视图可横向拖动；滑过完整一圈后棋盘会上下翻转，再滑一圈才恢复方向。</li>
+              <li>桌面端右键、触屏单指可横向拖动平面；滑过完整一圈后棋盘会上下翻转，再滑一圈才恢复方向。</li>
               <li>立体视图是一条只有一个面的莫比乌斯带，可旋转观察棋子如何跨越扭转接缝。</li>
               <li>禁自杀并采用位置超级劫，提子、连通、AI 判断与点目都按反向接缝计算。</li>
               <li>双方连续停一手后进入点目，可先标记死子；复盘可在平面与立体视图间切换。</li>
             </ul>
           </details>
 
-          <p class="legal-links">
+          <p class="legal-links" data-sidebar-staged hidden>
             <a href="/KATAGO_NETWORK_LICENSE.txt" target="_blank" rel="license noopener">
               KataGo 模型版权与许可
             </a>
+            <span id="app-version">开发版</span>
           </p>
         </aside>
       </main>
     </div>
 
+    <dialog
+      id="invite-dialog"
+      class="game-dialog invite-dialog"
+      aria-labelledby="invite-dialog-title"
+      aria-describedby="invite-dialog-intro"
+    >
+      <form id="invite-form">
+        <span class="eyebrow">我的房间</span>
+        <h2 id="invite-dialog-title">邀请一场对局</h2>
+        <p id="invite-dialog-intro">选择对手类型。只有确认设置并准备就绪后，棋局才会正式开始。</p>
+
+        <section class="invite-settings-summary" aria-label="本局设置">
+          <span>本局设置</span>
+          <strong id="invite-settings-summary">19 × 19 · 竹筒 · 中国规则 · 不计时</strong>
+          <button id="invite-modify-settings" class="text-button" type="button">修改棋盘设置</button>
+        </section>
+
+        <div class="invite-choice-group" role="group" aria-labelledby="invite-choice-title">
+          <h3 id="invite-choice-title">选择对手</h3>
+          <div class="invite-choice-grid">
+            <button id="invite-ai" class="invite-choice" type="button">
+              <span class="invite-choice-icon" aria-hidden="true">AI</span>
+              <span>
+                <strong>与 AI 对弈</strong>
+                <small>选择模型和你执哪一方</small>
+              </span>
+            </button>
+            <button id="invite-friend" class="invite-choice" type="button">
+              <span class="invite-choice-icon" aria-hidden="true">↗</span>
+              <span>
+                <strong>邀请好友</strong>
+                <small>创建在线房间并分享链接</small>
+              </span>
+            </button>
+            <button id="invite-local" class="invite-choice" type="button">
+              <span class="invite-choice-icon" aria-hidden="true">●○</span>
+              <span>
+                <strong>本地双人</strong>
+                <small>两个人在同一台设备轮流落子</small>
+              </span>
+            </button>
+            <button id="invite-self-play" class="invite-choice" type="button">
+              <span class="invite-choice-icon" aria-hidden="true">AI²</span>
+              <span>
+                <strong>AI 自对弈</strong>
+                <small>观看 KataGo 控制黑白双方</small>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <div class="dialog-actions">
+          <button id="cancel-invite" class="secondary-button" type="button">取消</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="online-dialog" class="game-dialog online-dialog">
       <form id="online-form">
-        <span class="eyebrow">在线对局</span>
-        <h2>邀请朋友加入 3D 棋局</h2>
-        <p>创建房间后分享链接；第三位及之后加入的玩家会成为旁观者。</p>
+        <span id="online-dialog-eyebrow" class="eyebrow">在线对局</span>
+        <h2 id="online-dialog-title">进入 3D 棋局</h2>
+        <p id="online-dialog-intro">创建房间，或以玩家、观众身份进入已有房间。</p>
+
+        <section id="online-board-summary-section" class="online-board-summary" aria-label="即将创建的棋盘">
+          <span>创建房间将使用</span>
+          <strong id="online-board-summary">19 × 19 · 竹筒 · 中国规则</strong>
+          <button id="online-modify-settings" class="text-button" type="button">修改棋盘设置</button>
+        </section>
 
         <label class="dialog-field" for="player-name">
           <span>你的名字</span>
           <input id="player-name" type="text" maxlength="20" autocomplete="nickname" placeholder="例如：竹友" required />
         </label>
 
+        <section id="stored-session-panel" class="pending-create-panel" aria-label="恢复已有身份" hidden>
+          <strong>此浏览器保存了房间身份</strong>
+          <p>请选择要恢复的身份；若要以新身份观战或加入，请使用下方按钮。</p>
+          <select id="stored-session-select" aria-label="选择房间身份"></select>
+          <button id="resume-stored-session" class="secondary-button" type="button">恢复所选身份</button>
+        </section>
+
+        <section id="pending-join-panel" class="pending-create-panel" aria-label="待确认加入" hidden>
+          <strong>有待确认的加入请求</strong>
+          <p>服务器可能已经接纳该身份。选择原请求核对，或在下方用新身份加入。</p>
+          <select id="pending-join-select" aria-label="选择待确认加入身份"></select>
+          <button id="retry-pending-join" class="secondary-button" type="button">核对并恢复加入</button>
+        </section>
+
+        <section id="pending-create-panel" class="pending-create-panel" aria-label="待确认建房" hidden>
+          <strong>有待确认的建房请求</strong>
+          <p>可能已经建成。先用原凭据核对；放弃后若已建成，将无法找回该房主身份。</p>
+          <select id="pending-create-select" aria-label="选择待确认的房间"></select>
+          <div>
+            <button id="retry-pending-create" class="secondary-button" type="button">核对并恢复</button>
+            <button id="abandon-pending-create" class="text-button" type="button">放弃所选恢复凭据</button>
+          </div>
+        </section>
+
         <button id="create-room" class="primary-button dialog-wide-button" type="button">
           创建房间
         </button>
 
-        <div class="dialog-divider"><span>或者加入朋友的房间</span></div>
+        <div id="online-join-divider" class="dialog-divider"><span>或者加入朋友的房间</span></div>
 
-        <label class="dialog-field" for="room-code-input">
+        <label id="online-room-code-field" class="dialog-field" for="room-code-input">
           <span>六位房间号</span>
           <input id="room-code-input" class="room-code-input" type="text" maxlength="6" autocomplete="off" autocapitalize="characters" placeholder="ABC123" />
         </label>
 
         <button id="join-room" class="secondary-button dialog-wide-button" type="button">
-          加入房间
+          加入对局
+        </button>
+        <button id="watch-room" class="secondary-button dialog-wide-button spectator-button" type="button">
+          仅观战
         </button>
 
         <p id="online-error" class="dialog-error" role="alert" hidden></p>
         <div class="dialog-actions">
-          <button id="cancel-online" class="text-button" type="button">暂不联机</button>
+          <button id="cancel-online" class="text-button" type="button">取消</button>
         </div>
       </form>
     </dialog>
 
     <dialog id="ai-dialog" class="game-dialog ai-dialog">
       <form id="ai-form">
-        <span class="eyebrow">本机 AI 对手</span>
-        <h2>和 KataGo 下一盘</h2>
-        <p>模型会在浏览器后台观察全盘，再按当前棋盘的接缝规则搜索落点。无需账号或第三方 API，服务器不承担推理。</p>
+        <span id="ai-dialog-eyebrow" class="eyebrow">本机 AI 对手</span>
+        <h2 id="ai-dialog-title">让人类或 KataGo 下一盘</h2>
+        <p id="ai-dialog-intro">模型会在浏览器后台观察全盘，再按当前棋盘的接缝规则搜索落点。无需账号或第三方 API，服务器不承担推理。</p>
+
+        <label class="dialog-field" for="ai-match-mode">
+          <span>对局方式</span>
+          <select id="ai-match-mode">
+            <option value="human-ai">你和 AI 对弈</option>
+            <option value="ai-ai">AI 和 AI 自动对弈</option>
+          </select>
+        </label>
 
         <label class="dialog-field" for="ai-model">
           <span>AI 模型</span>
           <select id="ai-model" aria-describedby="ai-model-warning">
+            <option value="b10">b10 快速（特殊棋盘段位未测）</option>
+            <option value="b18">b18 增强（高耗资源 · 段位未测）</option>
+          </select>
+        </label>
+
+        <label id="ai-black-model-field" class="dialog-field" for="ai-black-model" hidden>
+          <span>黑方 AI 模型</span>
+          <select id="ai-black-model">
             <option value="b10">b10 快速（特殊棋盘段位未测）</option>
             <option value="b18">b18 增强（高耗资源 · 段位未测）</option>
           </select>
@@ -474,7 +886,7 @@
           <span id="ai-model-warning-strength"></span>
         </div>
 
-        <label class="dialog-field" for="ai-human-color">
+        <label id="ai-human-color-field" class="dialog-field" for="ai-human-color">
           <span>你执哪一方</span>
           <select id="ai-human-color">
             <option value="black">黑方 · 你先行</option>
@@ -498,6 +910,18 @@
         <div class="dialog-actions">
           <button value="cancel" class="secondary-button">取消</button>
           <button id="confirm-new-game" value="confirm" class="primary-button">开始新局</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="resign-dialog" class="game-dialog">
+      <form method="dialog">
+        <span class="eyebrow">结束对局</span>
+        <h2>确定要认输吗？</h2>
+        <p id="resign-summary">认输后对手立即获胜，本局不能再继续。</p>
+        <div class="dialog-actions">
+          <button value="cancel" class="secondary-button">取消</button>
+          <button id="confirm-resign" value="confirm" class="secondary-button danger-button">确认认输</button>
         </div>
       </form>
     </dialog>

@@ -1,12 +1,28 @@
-import { trimStoredChatHistory } from "./chat.js";
+import { trimStoredChatHistories } from "./chat.js";
 import {
   BADUK_PROTOCOL_VERSION,
   BADUK_WS_PROTOCOL,
+  isRoomCode,
 } from "./protocol.js";
 
 const DEFAULT_ROOM_PATH = "/api/rooms";
 const DEFAULT_PROTOCOL = BADUK_WS_PROTOCOL;
 const DEFAULT_STORAGE_PREFIX = "bamboo-baduk.session.";
+const PENDING_JOIN_STORAGE_PREFIX = "bamboo-baduk.pending-join.";
+const PENDING_CREATE_STORAGE_PREFIX = "bamboo-baduk.pending-create.";
+const ACTIVE_CREATE_STORAGE_PREFIX = "bamboo-baduk.active-create.";
+const SESSION_V3_PREFIX = "bamboo-baduk.session-v3.";
+const PENDING_JOIN_V3_PREFIX = "bamboo-baduk.pending-join-v3.";
+const PENDING_CREATE_V3_PREFIX = "bamboo-baduk.pending-create-v3.";
+const ACTIVE_SESSION_PREFIX = "bamboo-baduk.active-session-v3.";
+const ACTIVE_JOIN_PREFIX = "bamboo-baduk.active-join-v3.";
+const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const MAX_CREATE_CODE_ATTEMPTS = 12;
+// These actions must remain bound to the exact round and position the player saw.
+const POSITION_BOUND_ACTIONS = new Set([
+  "play", "pass", "resign", "toggle_dead", "resume_play", "request_undo",
+  "set_ai_autoplay_paused",
+]);
 
 export const CONNECTION_STATUS = Object.freeze({
   IDLE: "idle",
@@ -53,8 +69,8 @@ function safeUrl(value, baseUrl) {
 }
 
 /**
- * Parse `?room=ABC123`, `#room=ABC123`, or `/room/ABC123` share links.
- * A plain room code is accepted as well.
+ * Parse canonical `/online/ABC123` links as well as the legacy query, hash,
+ * `/room/ABC123`, and `/join/ABC123` forms. A plain room code is accepted too.
  */
 export function parseShareUrl(value, baseUrl = "http://localhost/") {
   const plainCode = normalizeRoomCode(value);
@@ -66,7 +82,7 @@ export function parseShareUrl(value, baseUrl = "http://localhost/") {
   if (!url) return { roomCode: "", name: "", role: "" };
 
   const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
-  const pathMatch = url.pathname.match(/\/(?:rooms?|join)\/([^/]+)\/?$/iu);
+  const pathMatch = url.pathname.match(/\/(?:online|rooms?|join)\/([^/]+)\/?$/iu);
   const roomCode = normalizeRoomCode(
     url.searchParams.get("room") ??
       url.searchParams.get("code") ??
@@ -87,6 +103,40 @@ export function parseShareUrl(value, baseUrl = "http://localhost/") {
   };
 }
 
+/**
+ * Resolve the four top-level app routes without performing any navigation.
+ * Unknown routes deliberately fall back to the standalone app so a typo can
+ * never make the hidden lobby a dependency of ordinary play.
+ */
+export function parseAppRoute(value, baseUrl = "http://localhost/") {
+  const url = safeUrl(String(value ?? ""), baseUrl);
+  if (!url) return { mode: "single", roomCode: "", role: "" };
+
+  const pathname = url.pathname.replace(/\/+$/u, "") || "/";
+  if (pathname === "/") return { mode: "root", roomCode: "", role: "" };
+  if (pathname.toLowerCase() === "/lobby") {
+    return { mode: "lobby", roomCode: "", role: "" };
+  }
+  if (pathname.toLowerCase() === "/single") {
+    return { mode: "single", roomCode: "", role: "" };
+  }
+
+  const onlineMatch = pathname.match(/^\/online\/([^/]+)$/iu);
+  const roomCode = normalizeRoomCode(onlineMatch?.[1] ?? "");
+  if (roomCode) {
+    const role = String(url.searchParams.get("role") ?? "").toLowerCase();
+    return {
+      mode: "online",
+      roomCode,
+      // A bare room link is a safe public watching link. Only a link emitted
+      // by the lobby's Join action may claim an open player seat.
+      role: role === "player" ? "player" : "spectator",
+    };
+  }
+
+  return { mode: "single", roomCode: "", role: "" };
+}
+
 export function buildShareUrl(roomCode, baseUrl = "http://localhost/") {
   const code = normalizeRoomCode(roomCode);
   if (!code) {
@@ -101,7 +151,8 @@ export function buildShareUrl(roomCode, baseUrl = "http://localhost/") {
       code: "INVALID_BASE_URL",
     });
   }
-  url.searchParams.set("room", code);
+  url.pathname = `/online/${encodeURIComponent(code)}`;
+  url.search = "";
   url.hash = "";
   return url.toString();
 }
@@ -190,7 +241,116 @@ export function createTokenStore(storage, options = {}) {
         return false;
       }
     },
+
+    entries() {
+      const entries = [];
+      try {
+        if (typeof storage?.key !== "function") return entries;
+        for (let index = 0; index < storage.length; index += 1) {
+          const key = storage.key(index);
+          if (!key?.startsWith(prefix)) continue;
+          const code = key.slice(prefix.length);
+          entries.push({ code, value: this.get(code) });
+        }
+      } catch {
+        // A blocked storage API is treated as unavailable, like get/set.
+      }
+      return entries;
+    },
   });
+}
+
+/** Credentials are stored under the room and identity, never under the room alone. */
+function createIdentityStore(storage, prefix) {
+  const keyFor = (code, playerId) =>
+    isRoomCode(code) && typeof playerId === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(playerId)
+      ? `${prefix}${code}.${playerId}` : "";
+  const get = (code, playerId) => {
+    const key = keyFor(code, playerId);
+    if (!key || !storage?.getItem) return null;
+    try {
+      const value = storage.getItem(key);
+      const record = value ? JSON.parse(value) : null;
+      return record?.playerId === playerId &&
+        (record.code === code || record.roomCode === code) ? record : null;
+    } catch {
+      return null;
+    }
+  };
+  return Object.freeze({
+    get,
+    set(code, record) {
+      const key = keyFor(code, record?.playerId);
+      if (!key || !storage?.setItem) return false;
+      try {
+        storage.setItem(key, JSON.stringify(record));
+        return JSON.stringify(get(code, record.playerId)) === JSON.stringify(record);
+      } catch {
+        return false;
+      }
+    },
+    remove(code, playerId, token) {
+      const key = keyFor(code, playerId);
+      if (!key || !storage?.removeItem) return false;
+      const record = get(code, playerId);
+      if (!record || (token && record.token !== token)) return false;
+      try {
+        storage.removeItem(key);
+        return get(code, playerId) === null;
+      } catch {
+        return false;
+      }
+    },
+    entries(code = "") {
+      const found = [];
+      try {
+        if (typeof storage?.key !== "function") return found;
+        for (let index = 0; index < storage.length; index += 1) {
+          const key = storage.key(index);
+          if (!key?.startsWith(prefix)) continue;
+          const suffix = key.slice(prefix.length);
+          const dot = suffix.indexOf(".");
+          const roomCode = suffix.slice(0, dot);
+          const playerId = suffix.slice(dot + 1);
+          if (dot < 0 || (code && roomCode !== code)) continue;
+          const value = get(roomCode, playerId);
+          if (value) found.push({ code: roomCode, playerId, value });
+        }
+      } catch {
+        return found;
+      }
+      return found;
+    },
+  });
+}
+
+function ephemeralTabStorage() {
+  const values = new Map();
+  return {
+    getItem(key) { return values.get(key) ?? null; },
+    setItem(key, value) { values.set(key, String(value)); },
+    removeItem(key) { values.delete(key); },
+    key(index) { return [...values.keys()][index] ?? null; },
+    get length() { return values.size; },
+  };
+}
+
+function browserStorage(name) {
+  try { return globalThis[name]; } catch { return null; }
+}
+
+function usableTabStorage(candidate) {
+  const probe = "bamboo-baduk.tab-storage-probe";
+  try {
+    if (!candidate?.setItem || !candidate?.getItem || !candidate?.removeItem) return false;
+    candidate.setItem(probe, "ok");
+    const usable = candidate.getItem(probe) === "ok";
+    candidate.removeItem(probe);
+    return usable;
+  } catch {
+    return false;
+  }
 }
 
 export function buildSocketUrl(
@@ -261,6 +421,79 @@ function defaultIdFactory() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+function newJoinCredential(name, role) {
+  const crypto = globalThis.crypto;
+  if (!crypto?.getRandomValues) {
+    throw new RoomClientError("当前环境无法安全生成房间凭证。", {
+      code: "CRYPTO_UNAVAILABLE",
+    });
+  }
+  const idBytes = crypto.getRandomValues(new Uint8Array(16));
+  idBytes[6] = (idBytes[6] & 0x0f) | 0x40;
+  idBytes[8] = (idBytes[8] & 0x3f) | 0x80;
+  const idHex = Array.from(idBytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const tokenBytes = crypto.getRandomValues(new Uint8Array(32));
+  return {
+    name,
+    role,
+    playerId: `${idHex.slice(0, 8)}-${idHex.slice(8, 12)}-${idHex.slice(12, 16)}-${idHex.slice(16, 20)}-${idHex.slice(20)}`,
+    token: Array.from(tokenBytes, (byte) => byte.toString(16).padStart(2, "0")).join(""),
+  };
+}
+
+function isPendingJoin(value) {
+  return typeof value?.playerId === "string" &&
+    typeof value?.token === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.playerId) &&
+    /^[0-9a-f]{64}$/u.test(value.token);
+}
+
+function randomRoomCode() {
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(6));
+  return Array.from(bytes, (byte) => ROOM_CODE_ALPHABET[byte & 31]).join("");
+}
+
+function newCreateCredential(request, roomCodeFactory) {
+  const credentials = newJoinCredential(request.name, "player");
+  const roomCode = roomCodeFactory();
+  if (!isRoomCode(roomCode)) {
+    throw new RoomClientError("无法生成有效的房间号。", { code: "INVALID_ROOM_CODE" });
+  }
+  return {
+    roomCode,
+    playerId: credentials.playerId,
+    token: credentials.token,
+    createdAt: Date.now(),
+    request: {
+      ...request,
+      roomCode,
+      playerId: credentials.playerId,
+      token: credentials.token,
+    },
+  };
+}
+
+function isPendingCreate(value) {
+  return isRoomCode(value?.roomCode) && isPendingJoin(value) &&
+    value.request?.roomCode === value.roomCode &&
+    value.request?.playerId === value.playerId &&
+    value.request?.token === value.token &&
+    typeof value.request?.name === "string" && value.request.name.length > 0;
+}
+
+function mergeLegacyPending(legacy, current) {
+  if (!current) return legacy;
+  if (current.token !== legacy.token) return null;
+  const older = legacy.confirmedSession;
+  const newer = current.confirmedSession;
+  const confirmedSession = older?.token === legacy.token && newer?.token === legacy.token
+    ? { ...older, ...newer, nextSequence: Math.max(
+      Number(older.nextSequence) || 1, Number(newer.nextSequence) || 1,
+    ) }
+    : newer?.token === legacy.token ? newer : older?.token === legacy.token ? older : undefined;
+  return { ...legacy, ...current, confirmedSession };
+}
+
 function publicIdentity(session) {
   if (!session) return null;
   const { token: _token, nextSequence: _nextSequence, ...identity } = session;
@@ -283,8 +516,30 @@ export class RoomClient {
       options.locationHref ?? location?.href ?? `${this.baseUrl}/`;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch?.bind(globalThis);
     this.WebSocketImpl = options.WebSocketImpl ?? globalThis.WebSocket;
+    const persistentStorage = options.storage ?? browserStorage("localStorage");
+    const candidateTabStorage = options.attemptStorage ?? browserStorage("sessionStorage");
+    const tabStorage = usableTabStorage(candidateTabStorage)
+      ? candidateTabStorage : ephemeralTabStorage();
+    this.sessionStore = createIdentityStore(persistentStorage, SESSION_V3_PREFIX);
+    this.pendingJoinIdentityStore = createIdentityStore(persistentStorage, PENDING_JOIN_V3_PREFIX);
+    this.pendingCreateIdentityStore = createIdentityStore(persistentStorage, PENDING_CREATE_V3_PREFIX);
+    this.activeSessionStore = createTokenStore(tabStorage, { prefix: ACTIVE_SESSION_PREFIX });
+    this.activeJoinStore = createTokenStore(tabStorage, { prefix: ACTIVE_JOIN_PREFIX });
+    // The room-only stores are read solely to migrate credentials saved by older builds.
     this.tokenStore =
-      options.tokenStore ?? createTokenStore(options.storage ?? globalThis.localStorage);
+      options.tokenStore ?? createTokenStore(persistentStorage);
+    this.pendingJoinStore = options.pendingJoinStore ?? createTokenStore(
+      persistentStorage,
+      { prefix: PENDING_JOIN_STORAGE_PREFIX },
+    );
+    this.pendingCreateStore = options.pendingCreateStore ?? createTokenStore(
+      persistentStorage,
+      { prefix: PENDING_CREATE_STORAGE_PREFIX },
+    );
+    this.activeCreateStore = options.activeCreateStore ?? createTokenStore(
+      tabStorage,
+      { prefix: ACTIVE_CREATE_STORAGE_PREFIX },
+    );
     this.createRoomPath = options.createRoomPath ?? DEFAULT_ROOM_PATH;
     this.joinRoomPath =
       options.joinRoomPath ??
@@ -293,6 +548,7 @@ export class RoomClient {
       options.socketPath ??
       ((code) => `${DEFAULT_ROOM_PATH}/${encodeURIComponent(code)}/socket`);
     this.protocolName = options.protocolName ?? DEFAULT_PROTOCOL;
+    this.roomCodeFactory = options.roomCodeFactory ?? randomRoomCode;
     this.idFactory = options.idFactory ?? defaultIdFactory;
     this.setTimeoutImpl = options.setTimeoutImpl ?? globalThis.setTimeout.bind(globalThis);
     this.clearTimeoutImpl =
@@ -307,6 +563,7 @@ export class RoomClient {
       maxAttempts: options.reconnect?.maxAttempts ?? 10,
     };
     this.commandAckTimeoutMs = options.commandAckTimeoutMs ?? 12_000;
+    this.snapshotTimeoutMs = options.snapshotTimeoutMs ?? 10_000;
     this.sendAuthMessage = options.sendAuthMessage ?? false;
 
     this.roomCode = "";
@@ -316,6 +573,7 @@ export class RoomClient {
     this.presence = null;
     this.connectionStatus = CONNECTION_STATUS.IDLE;
     this.lastCloseCode = null;
+    this.lastCredentialCleanupFailed = false;
     this.lastCloseReason = "";
 
     this._listeners = new Map();
@@ -324,8 +582,10 @@ export class RoomClient {
     this._manualClose = false;
     this._reconnectAttempt = 0;
     this._reconnectTimer = null;
+    this._snapshotTimer = null;
     this._pendingCommands = new Map();
     this._nextSequence = 1;
+    this._awaitingSnapshot = false;
   }
 
   get isConnected() {
@@ -338,6 +598,116 @@ export class RoomClient {
 
   get status() {
     return this.connectionStatus;
+  }
+
+  get pendingCreateCode() {
+    return this._pendingCreate()?.roomCode ?? "";
+  }
+
+  _migrateLegacy(code) {
+    const session = this.tokenStore.get(code);
+    if (session?.code === code && session?.playerId && session?.token) {
+      const existing = this.sessionStore.get(code, session.playerId);
+      if (!existing || existing.token === session.token) {
+        const merged = { ...session, ...existing, nextSequence: Math.max(
+          Number(session.nextSequence) || 1, Number(existing?.nextSequence) || 1,
+        ) };
+        if (this.sessionStore.set(code, merged)) this.tokenStore.remove(code);
+      }
+    }
+    const join = this.pendingJoinStore.get(code);
+    if (isPendingJoin(join)) {
+      const existing = this.pendingJoinIdentityStore.get(code, join.playerId);
+      const merged = mergeLegacyPending({ ...join, code }, existing);
+      if (merged && this.pendingJoinIdentityStore.set(code, merged)) this.pendingJoinStore.remove(code);
+    }
+    const create = this.pendingCreateStore.get(code);
+    if (isPendingCreate(create)) {
+      const existing = this.pendingCreateIdentityStore.get(code, create.playerId);
+      const merged = mergeLegacyPending(create, existing);
+      if (merged && this.pendingCreateIdentityStore.set(code, merged)) {
+        const active = this.activeCreateStore.get("CURRENT");
+        if (active?.roomCode === code && !active.playerId) {
+          this.activeCreateStore.set("CURRENT", {
+            roomCode: code, playerId: create.playerId, token: create.token,
+          });
+        }
+        this.pendingCreateStore.remove(code);
+      }
+    }
+  }
+
+  _activeSession(code) {
+    const pointer = this.activeSessionStore.get(code);
+    const saved = pointer?.playerId && this.sessionStore.get(code, pointer.playerId);
+    return saved?.token === pointer?.token ? saved : null;
+  }
+
+  listStoredSessions(roomCode) {
+    const code = normalizeRoomCode(roomCode);
+    if (!code) return [];
+    this._migrateLegacy(code);
+    const byId = new Map();
+    for (const { value } of this.sessionStore.entries(code)) {
+      if (value?.token && value?.playerId) byId.set(value.playerId, value);
+    }
+    for (const store of [this.pendingJoinIdentityStore, this.pendingCreateIdentityStore]) {
+      for (const { value } of store.entries(code)) {
+        const saved = value?.confirmedSession;
+        if (saved?.code === code && saved?.token === value.token &&
+            saved?.playerId === value.playerId) byId.set(saved.playerId, saved);
+      }
+    }
+    return [...byId.values()].map(({ playerId, playerName, role, color }) => ({
+      code, playerId, playerName, role, color,
+    }));
+  }
+
+  listPendingJoins(roomCode) {
+    const code = normalizeRoomCode(roomCode);
+    if (!code) return [];
+    this._migrateLegacy(code);
+    return this.pendingJoinIdentityStore.entries(code)
+      .filter(({ value }) => isPendingJoin(value) && !value.confirmedSession)
+      .map(({ value }) => ({ playerId: value.playerId, name: value.name, role: value.role }));
+  }
+
+  hasStoredSession(roomCode) {
+    const code = normalizeRoomCode(roomCode);
+    if (!code) return false;
+    return this.listStoredSessions(code).length > 0;
+  }
+
+  hasPendingCreate(roomCode) {
+    const code = normalizeRoomCode(roomCode);
+    if (!code) return false;
+    this._migrateLegacy(code);
+    return this.pendingCreateIdentityStore.entries(code)
+      .some(({ value }) => isPendingCreate(value));
+  }
+
+  listPendingCreates() {
+    for (const { code } of this.pendingCreateStore.entries?.() ?? []) this._migrateLegacy(code);
+    return this.pendingCreateIdentityStore.entries()
+      .map(({ value }) => value)
+      .filter(isPendingCreate)
+      .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
+      .map((pending) => ({
+        roomCode: pending.roomCode,
+        playerId: pending.playerId,
+        name: pending.request.name,
+        width: pending.request.width ?? pending.request.size ?? 19,
+        height: pending.request.height ?? pending.request.size ?? 19,
+        confirmed: Boolean(pending.confirmedSession),
+      }));
+  }
+
+  abandonPendingCreate(roomCode, playerId = "") {
+    const code = normalizeRoomCode(roomCode);
+    const pending = playerId
+      ? this.pendingCreateIdentityStore.get(code, playerId)
+      : this._pendingCreate()?.roomCode === code ? this._pendingCreate() : null;
+    return isPendingCreate(pending) && this._clearPendingCreate(pending);
   }
 
   on(type, listener) {
@@ -440,9 +810,62 @@ export class RoomClient {
     return data ?? {};
   }
 
+  _pendingCreate() {
+    const pointer = this.activeCreateStore.get("CURRENT");
+    const code = pointer?.roomCode;
+    if (isRoomCode(code)) this._migrateLegacy(code);
+    const updated = this.activeCreateStore.get("CURRENT");
+    const pending = isRoomCode(updated?.roomCode) && updated?.playerId
+      ? this.pendingCreateIdentityStore.get(updated.roomCode, updated.playerId) : null;
+    return isPendingCreate(pending) && pending.token === updated.token ? pending : null;
+  }
+
+  _savePendingCreate(pending) {
+    const saved = this.pendingCreateIdentityStore.set(pending.roomCode, pending);
+    const pointer = { roomCode: pending.roomCode, playerId: pending.playerId, token: pending.token };
+    const marked = saved && this.activeCreateStore.set("CURRENT", pointer) &&
+      this.activeCreateStore.get("CURRENT")?.playerId === pending.playerId;
+    if (!marked) {
+      throw new RoomClientError("无法保存建房凭据，请检查浏览器存储设置后重试。", {
+        code: "CREATE_CREDENTIAL_STORAGE_UNAVAILABLE",
+      });
+    }
+    return pending;
+  }
+
+  _clearPendingCreate(pending) {
+    const { roomCode: code, playerId, token } = pending;
+    if (!this.pendingCreateIdentityStore.remove(code, playerId, token)) return false;
+    if (this.activeCreateStore.get("CURRENT")?.playerId === playerId) {
+      this.activeCreateStore.remove("CURRENT");
+    }
+    return true;
+  }
+
+  async retryPendingCreate(roomCode, playerId = "", { signal } = {}) {
+    signal?.throwIfAborted();
+    const code = normalizeRoomCode(roomCode);
+    const candidates = this.listPendingCreates().filter((item) => item.roomCode === code);
+    const selected = playerId || (candidates.length === 1 ? candidates[0].playerId : "");
+    const pending = selected ? this.pendingCreateIdentityStore.get(code, selected) : null;
+    if (!isPendingCreate(pending)) {
+      throw new RoomClientError("没有可重试的建房请求。", { code: "MISSING_PENDING_CREATE" });
+    }
+    const saved = this.activeCreateStore.set("CURRENT", {
+      roomCode: code, playerId: pending.playerId, token: pending.token,
+    }) && this.activeCreateStore.get("CURRENT")?.playerId === pending.playerId;
+    if (!saved) {
+      throw new RoomClientError("无法保存建房凭据，请检查浏览器存储设置后重试。", {
+        code: "CREATE_CREDENTIAL_STORAGE_UNAVAILABLE",
+      });
+    }
+    return this.createRoom({ name: pending.request.name, signal });
+  }
+
   async createRoom(options = {}) {
     const config = typeof options === "string" ? { name: options } : options;
-    const { options: gameOptions = {}, ...requestConfig } = config;
+    const { options: gameOptions = {}, signal, ...requestConfig } = config;
+    signal?.throwIfAborted();
     const name = normalizePlayerName(config.name);
     if (!name) {
       throw new RoomClientError("请输入你的名字。", { code: "INVALID_NAME" });
@@ -450,24 +873,89 @@ export class RoomClient {
 
     this._setStatus(CONNECTION_STATUS.CREATING);
     try {
-      const response = await this._post(this.createRoomPath, {
+      const currentRequest = {
         v: BADUK_PROTOCOL_VERSION,
         ...gameOptions,
         ...requestConfig,
         name,
-      });
-      const session = responseSession(response, response.roomCode, name);
-      this._adoptSession(session, response.room);
-      this.connect();
-      return {
-        ...response,
-        roomCode: session.code,
-        session: { ...session },
-        shareUrl: this.getShareUrl(),
       };
+      let pending = this._pendingCreate();
+      const resumedPending = Boolean(pending);
+      const requested = pending
+        ? Object.fromEntries(Object.entries(pending.request).filter(
+            ([key]) => !["roomCode", "playerId", "token"].includes(key),
+          ))
+        : currentRequest;
+      for (let attempt = 0; attempt < MAX_CREATE_CODE_ATTEMPTS; attempt += 1) {
+        if (!pending) {
+          const candidate = newCreateCredential(requested, this.roomCodeFactory);
+          pending = this._savePendingCreate(candidate);
+        }
+        let response;
+        try {
+          response = await this._post(this.createRoomPath, pending.request);
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          if (error instanceof RoomClientError && error.code === "ROOM_CODE_TAKEN") {
+            if (!this._clearPendingCreate(pending)) {
+              throw new RoomClientError("无法移除已冲突的建房凭据，请检查浏览器存储设置。", {
+                code: "CREATE_CREDENTIAL_STORAGE_UNAVAILABLE",
+              });
+            }
+            pending = null;
+            continue;
+          }
+          throw error;
+        }
+        // Cancellation stops this page from adopting the result. The server
+        // may have committed it, so retain the credential for explicit recovery.
+        signal?.throwIfAborted();
+        const session = responseSession(response, pending.roomCode, pending.request.name);
+        if (session.code !== pending.roomCode ||
+            session.playerId !== pending.playerId || session.token !== pending.token) {
+          throw new RoomClientError("服务器返回的建房身份与请求不一致。", {
+            code: "INVALID_SESSION_RESPONSE",
+          });
+        }
+        const sessionStored = this._adoptSession(session, response.room);
+        if (sessionStored) {
+          this._clearPendingCreate(pending);
+        } else {
+          // The pre-request record remains sufficient to replay this exact
+          // create even if a later session-key write fails.
+          this.pendingCreateIdentityStore.set(pending.roomCode, {
+            ...pending, confirmedSession: session,
+          });
+        }
+        const recoverable = sessionStored ||
+          isPendingCreate(this.pendingCreateIdentityStore.get(pending.roomCode, pending.playerId));
+        this.connect();
+        return {
+          ...response,
+          roomCode: session.code,
+          session: { ...session },
+          resumedPending,
+          recoverable,
+          shareUrl: this.getShareUrl(),
+        };
+      }
+      throw new RoomClientError("暂时无法分配房间码，请重试。", {
+        code: "ROOM_CODE_ALLOCATION_FAILED",
+        retryable: true,
+      });
     } catch (error) {
+      if (signal?.aborted) throw error;
       this._setStatus(CONNECTION_STATUS.DISCONNECTED);
       throw this._emitError(error);
+    }
+  }
+
+  _clearPendingJoin(code, pending) {
+    const stored = this.pendingJoinIdentityStore.get(code, pending.playerId);
+    if (stored && !this.pendingJoinIdentityStore.remove(code, pending.playerId, pending.token)) return;
+    const pointer = this.activeJoinStore.get(code);
+    if (pointer?.playerId === pending.playerId && pointer.token === pending.token) {
+      this.activeJoinStore.remove(code);
     }
   }
 
@@ -478,10 +966,12 @@ export class RoomClient {
       config = roomCode;
       requestedCode = roomCode.roomCode ?? roomCode.code;
     }
+    const { signal } = config;
+    signal?.throwIfAborted();
 
     const code = normalizeRoomCode(requestedCode);
     const name = normalizePlayerName(config.name);
-    if (!code) {
+    if (!isRoomCode(code)) {
       throw new RoomClientError("房间号格式不正确。", {
         code: "INVALID_ROOM_CODE",
       });
@@ -490,15 +980,68 @@ export class RoomClient {
       throw new RoomClientError("请输入你的名字。", { code: "INVALID_NAME" });
     }
 
+    let pending;
     this._setStatus(CONNECTION_STATUS.JOINING, { roomCode: code });
     try {
+      const role = config.role === "spectator" ? "spectator" : "player";
+      this._migrateLegacy(code);
+      pending = config.pendingPlayerId
+        ? this.pendingJoinIdentityStore.get(code, config.pendingPlayerId) : null;
+      if (config.pendingPlayerId && !isPendingJoin(pending)) {
+        throw new RoomClientError("没有可恢复的加入请求。", { code: "MISSING_PENDING_JOIN" });
+      }
+      if (!isPendingJoin(pending)) {
+        pending = newJoinCredential(name, role);
+        // Never reserve a seat unless its recovery credentials survive a
+        // refresh. A failed localStorage write makes an uncertain HTTP result
+        // impossible to recover after this page closes.
+        const saved = this.pendingJoinIdentityStore.set(code, { ...pending, code });
+        const marked = saved && this.activeJoinStore.set(code, {
+          playerId: pending.playerId, token: pending.token,
+        }) && this.activeJoinStore.get(code)?.playerId === pending.playerId;
+        if (!marked) {
+          this.pendingJoinIdentityStore.remove(code, pending.playerId, pending.token);
+          throw new RoomClientError("无法保存加入凭据，请检查浏览器存储设置后重试。", {
+            code: "JOIN_CREDENTIAL_STORAGE_UNAVAILABLE",
+          });
+        }
+      } else if (config.pendingPlayerId) {
+        const marked = this.activeJoinStore.set(code, {
+          playerId: pending.playerId, token: pending.token,
+        }) && this.activeJoinStore.get(code)?.playerId === pending.playerId;
+        if (!marked) {
+          throw new RoomClientError("无法保存加入凭据，请检查浏览器存储设置后重试。", {
+            code: "JOIN_CREDENTIAL_STORAGE_UNAVAILABLE",
+          });
+        }
+      }
+      // The credential, rather than the entered name or role, identifies an
+      // uncertain join. A retry may change those fields; an already committed
+      // join still recovers its original identity from the room.
       const response = await this._post(this.joinRoomPath(code), {
         v: BADUK_PROTOCOL_VERSION,
         name,
-        role: config.role === "spectator" ? "spectator" : "player",
+        role,
+        playerId: pending.playerId,
+        token: pending.token,
       });
+      signal?.throwIfAborted();
       const session = responseSession(response, code, name);
-      this._adoptSession(session, response.room);
+      if (session.code !== code || session.playerId !== pending.playerId ||
+          session.token !== pending.token) {
+        throw new RoomClientError("服务器返回的加入身份与请求不一致。", {
+          code: "INVALID_SESSION_RESPONSE",
+        });
+      }
+      if (!this._adoptSession(session, response.room)) {
+        // The seat may already be committed. Keep the persisted join credential
+        // so the same identity can be retried after session storage recovers.
+        this.disconnect({ preserveSession: false, status: CONNECTION_STATUS.DISCONNECTED });
+        throw new RoomClientError("无法保存房间会话，请检查浏览器存储设置后重试。", {
+          code: "SESSION_STORAGE_UNAVAILABLE",
+        });
+      }
+      this._clearPendingJoin(code, pending);
       this.connect();
       return {
         ...response,
@@ -507,30 +1050,70 @@ export class RoomClient {
         shareUrl: this.getShareUrl(),
       };
     } catch (error) {
+      // A typed 404 confirms this request could not change a room. Network,
+      // proxy and storage failures remain uncertain and must stay recoverable.
+      if (pending && error instanceof RoomClientError &&
+          error.code === "ROOM_NOT_FOUND" && error.status === 404) {
+        this._clearPendingJoin(code, pending);
+      }
+      if (signal?.aborted) throw error;
       this._setStatus(CONNECTION_STATUS.DISCONNECTED, { roomCode: code });
       throw this._emitError(error);
     }
   }
 
-  resumeRoom(roomCode) {
+  resumeRoom(roomCode, playerId = "") {
     const code = normalizeRoomCode(roomCode);
-    const saved = this.tokenStore.get(code);
+    if (!code) return false;
+    this._migrateLegacy(code);
+    const selectedId = playerId || this.activeSessionStore.get(code)?.playerId;
+    const selected = this.listStoredSessions(code).find((entry) => entry.playerId === selectedId);
+    if (!selected) return false;
+    const saved = this.sessionStore.get(code, selectedId) ??
+      this.pendingJoinIdentityStore.get(code, selectedId)?.confirmedSession ??
+      this.pendingCreateIdentityStore.get(code, selectedId)?.confirmedSession;
     if (!saved?.token) return false;
+    if (!playerId && this.activeSessionStore.get(code)?.token !== saved.token) return false;
     const session = responseSession({ session: saved }, code, saved.playerName);
-    this._adoptSession(session);
+    const sessionStored = this._adoptSession(session);
+    if (sessionStored) {
+      const pendingJoin = this.pendingJoinIdentityStore.get(code, selectedId);
+      const pendingCreate = this.pendingCreateIdentityStore.get(code, selectedId);
+      if (pendingJoin?.confirmedSession) this.pendingJoinIdentityStore.remove(code, selectedId, session.token);
+      if (pendingCreate?.confirmedSession) this._clearPendingCreate(pendingCreate);
+    }
     this.connect();
     return true;
   }
 
+  _sequenceFloor(session) {
+    const code = session.code;
+    const playerId = session.playerId;
+    const values = [Number(session.nextSequence) || 1];
+    const stored = this.sessionStore.get(code, playerId);
+    if (stored?.token === session.token) values.push(Number(stored.nextSequence) || 1);
+    for (const store of [this.pendingJoinIdentityStore, this.pendingCreateIdentityStore]) {
+      const fallback = store.get(code, playerId)?.confirmedSession;
+      if (fallback?.token === session.token) values.push(Number(fallback.nextSequence) || 1);
+    }
+    return Math.max(1, ...values);
+  }
+
   _adoptSession(session, room = null) {
     this.disconnect({ preserveSession: false, status: CONNECTION_STATUS.IDLE });
-    this.session = { ...session };
-    this.identity = publicIdentity(session);
+    this.lastCredentialCleanupFailed = false;
+    this.session = { ...session, nextSequence: this._sequenceFloor(session) };
+    this.identity = publicIdentity(this.session);
     this.roomCode = session.code;
     this.room = room ?? null;
-    this._nextSequence = Math.max(1, Number(session.nextSequence) || 1);
+    this._nextSequence = this.session.nextSequence;
     this._manualClose = false;
-    this.tokenStore.set(this.roomCode, this.session);
+    const stored = this.sessionStore.set(this.roomCode, this.session) &&
+      this.sessionStore.get(this.roomCode, this.session.playerId);
+    const marked = stored?.token === session.token &&
+      this.activeSessionStore.set(this.roomCode, {
+        playerId: session.playerId, token: session.token,
+      }) && this.activeSessionStore.get(this.roomCode)?.playerId === session.playerId;
     if (room) {
       this._emit("state", {
         room,
@@ -540,6 +1123,7 @@ export class RoomClient {
         raw: { type: "state", room },
       });
     }
+    return Boolean(marked);
   }
 
   connect() {
@@ -564,6 +1148,8 @@ export class RoomClient {
 
   _openSocket(isReconnect) {
     const generation = ++this._socketGeneration;
+    this._clearSnapshotTimer();
+    this._awaitingSnapshot = true;
     this._setStatus(
       isReconnect ? CONNECTION_STATUS.RECONNECTING : CONNECTION_STATUS.CONNECTING,
       { attempt: this._reconnectAttempt },
@@ -591,7 +1177,6 @@ export class RoomClient {
     this._socket = socket;
     attachSocketListener(socket, "open", () => {
       if (generation !== this._socketGeneration) return;
-      this._reconnectAttempt = 0;
       this.lastCloseCode = null;
       this.lastCloseReason = "";
       this._setStatus(CONNECTION_STATUS.CONNECTED, {
@@ -606,7 +1191,20 @@ export class RoomClient {
           }),
         );
       }
-      this._flushPendingCommands();
+      if (this.snapshotTimeoutMs > 0) {
+        this._snapshotTimer = this.setTimeoutImpl(() => {
+          this._snapshotTimer = null;
+          if (generation !== this._socketGeneration || !this._awaitingSnapshot ||
+              socket.readyState !== 1) return;
+          this._emitError(new RoomClientError("房间同步超时，正在重新连接。", {
+            code: "SYNC_TIMEOUT",
+            retryable: true,
+          }));
+          socket.close(4000, "Room sync timeout");
+        }, this.snapshotTimeoutMs);
+      }
+      // The welcome snapshot arrives after the socket opens. Pending commands
+      // retain their original position expectation until that snapshot arrives.
     });
 
     attachSocketListener(socket, "message", (event) => {
@@ -627,6 +1225,7 @@ export class RoomClient {
 
     attachSocketListener(socket, "close", (event) => {
       if (generation !== this._socketGeneration) return;
+      this._clearSnapshotTimer();
       this._socket = null;
       this.lastCloseCode = event.code;
       this.lastCloseReason = event.reason ?? "";
@@ -646,8 +1245,7 @@ export class RoomClient {
           }),
         );
         if (event.code === 4401 || event.code === 4404) {
-          const code = this.roomCode;
-          if (code) this.tokenStore.remove(code);
+          this._removeCurrentSession();
           this.session = null;
           this.identity = null;
           this.roomCode = "";
@@ -711,6 +1309,13 @@ export class RoomClient {
     }
   }
 
+  _clearSnapshotTimer() {
+    if (this._snapshotTimer !== null) {
+      this.clearTimeoutImpl(this._snapshotTimer);
+      this._snapshotTimer = null;
+    }
+  }
+
   _handleMessage(rawData) {
     let message;
     try {
@@ -745,9 +1350,11 @@ export class RoomClient {
     switch (message.type) {
       case "welcome": {
         if (message.identity && this.session) {
-          this.session = { ...this.session, ...message.identity, token: this.session.token };
+          const merged = { ...this.session, ...message.identity, token: this.session.token };
+          this.session = { ...merged, nextSequence: this._sequenceFloor(merged) };
+          this._nextSequence = Math.max(this._nextSequence, this.session.nextSequence);
           this.identity = { ...message.identity };
-          this.tokenStore.set(this.roomCode, this.session);
+          this.sessionStore.set(this.roomCode, this.session);
         }
         if (message.room || message.snapshot) this._handleStateMessage(message);
         break;
@@ -794,11 +1401,25 @@ export class RoomClient {
         ...incoming,
         chat: {
           ...incoming.chat,
-          messages: trimStoredChatHistory(incoming.chat.messages),
+          messages: trimStoredChatHistories(incoming.chat.messages),
         },
       };
     }
     this.room = room;
+    if (this._awaitingSnapshot && this._socketIsOpen()) {
+      this._awaitingSnapshot = false;
+      this._reconnectAttempt = 0;
+      this._clearSnapshotTimer();
+      const pendingCreate = this.pendingCreateIdentityStore.get(
+        this.roomCode, this.session?.playerId,
+      );
+      if (isPendingCreate(pendingCreate) &&
+          pendingCreate.token === this.session?.token &&
+          this.sessionStore.get(this.roomCode, this.session.playerId)?.token === this.session.token) {
+        this._clearPendingCreate(pendingCreate);
+      }
+      this._flushPendingCommands();
+    }
     this._emit("state", {
       room,
       self: this.identity,
@@ -827,7 +1448,7 @@ export class RoomClient {
       return;
     }
     byId.set(message.id, message);
-    const messages = trimStoredChatHistory(
+    const messages = trimStoredChatHistories(
       [...byId.values()]
         .sort((left, right) => (left.sequence ?? 0) - (right.sequence ?? 0)),
     );
@@ -882,6 +1503,22 @@ export class RoomClient {
         new RoomClientError("尚未加入房间。", { code: "MISSING_SESSION" }),
       );
     }
+    if (POSITION_BOUND_ACTIONS.has(action)) {
+      if (
+        !Number.isSafeInteger(this.room?.moveCount) ||
+        typeof this.room?.positionToken !== "string"
+      ) {
+        return Promise.reject(new RoomClientError(
+          "尚未取得可确认的棋局局面，请等待房间同步。",
+          { code: "STALE_GAME_STATE", retryable: true },
+        ));
+      }
+      payload = {
+        expectedMoveCount: this.room.moveCount,
+        expectedPositionToken: this.room.positionToken,
+        ...payload,
+      };
+    }
     const id = String(options.id ?? this.idFactory());
     if (this._pendingCommands.has(id)) {
       return Promise.reject(
@@ -889,9 +1526,37 @@ export class RoomClient {
       );
     }
 
-    const sequence = this._nextSequence++;
-    this.session = { ...this.session, nextSequence: this._nextSequence };
-    this.tokenStore.set(this.roomCode, this.session);
+    const stored = this.sessionStore.get(this.roomCode, this.session.playerId);
+    const pendingCreate = this.pendingCreateIdentityStore.get(this.roomCode, this.session.playerId);
+    const pendingJoin = this.pendingJoinIdentityStore.get(this.roomCode, this.session.playerId);
+    const fallback = pendingCreate?.confirmedSession?.token === this.session.token
+      ? pendingCreate : pendingJoin?.confirmedSession?.token === this.session.token
+        ? pendingJoin : null;
+    const sequence = Math.max(
+      this._nextSequence,
+      stored?.token === this.session.token ? Number(stored.nextSequence) || 1 : 1,
+      fallback ? Number(fallback.confirmedSession.nextSequence) || 1 : 1,
+    );
+    const nextSession = { ...this.session, nextSequence: sequence + 1 };
+    const persisted = stored?.token === this.session.token
+      ? this.sessionStore.set(this.roomCode, nextSession)
+      : fallback
+        ? (fallback.roomCode
+          ? this.pendingCreateIdentityStore.set(this.roomCode, {
+            ...fallback, confirmedSession: nextSession,
+          })
+          : this.pendingJoinIdentityStore.set(this.roomCode, {
+            ...fallback, confirmedSession: nextSession,
+          }))
+        : false;
+    if (!persisted) {
+      return Promise.reject(new RoomClientError(
+        "无法保存联机命令序号，请检查浏览器存储设置后重试。",
+        { code: "COMMAND_SEQUENCE_STORAGE_UNAVAILABLE", retryable: true },
+      ));
+    }
+    this._nextSequence = sequence + 1;
+    this.session = nextSession;
     const envelope = buildCommandEnvelope(id, sequence, action, payload);
 
     const promise = new Promise((resolve, reject) => {
@@ -930,7 +1595,7 @@ export class RoomClient {
   }
 
   _sendPending(pending) {
-    if (!pending || !this._socketIsOpen()) return false;
+    if (!pending || !this._socketIsOpen() || this._awaitingSnapshot) return false;
     try {
       this._socket.send(JSON.stringify(pending.envelope));
       return true;
@@ -966,30 +1631,67 @@ export class RoomClient {
   }
 
   async leave(options = {}) {
-    const code = this.roomCode;
     if (!this.session) return null;
     const acknowledgement = await this.sendCommand("leave", {}, {
       timeoutMs: options.timeoutMs ?? 12_000,
     });
-    if (code) this.tokenStore.remove(code);
+    this._removeCurrentSession();
     this.disconnect({ preserveSession: false, status: CONNECTION_STATUS.CLOSED });
     return acknowledgement;
   }
 
   abandonRoom() {
-    const code = this.roomCode;
-    if (code) this.tokenStore.remove(code);
+    this._removeCurrentSession();
     this.disconnect({ preserveSession: false, status: CONNECTION_STATUS.CLOSED });
+    return !this.lastCredentialCleanupFailed;
   }
 
   detachRoom() {
+    this._clearCurrentTabPointer();
     this.disconnect({ preserveSession: false, status: CONNECTION_STATUS.CLOSED });
+  }
+
+  _clearCurrentTabPointer() {
+    const pointer = this.activeSessionStore.get(this.roomCode);
+    if (pointer?.playerId === this.session?.playerId &&
+        pointer.token === this.session?.token) this.activeSessionStore.remove(this.roomCode);
+  }
+
+  _removeCurrentSession() {
+    if (!this.session || !this.roomCode) return true;
+    const { playerId, token } = this.session;
+    const code = this.roomCode;
+    let failed = false;
+    if (this.sessionStore.get(code, playerId)?.token === token) {
+      if (!this.sessionStore.remove(code, playerId, token)) failed = true;
+    }
+    const pendingJoin = this.pendingJoinIdentityStore.get(code, playerId);
+    if (pendingJoin?.token === token) {
+      if (!this.pendingJoinIdentityStore.remove(code, playerId, token)) failed = true;
+    }
+    const pendingCreate = this.pendingCreateIdentityStore.get(code, playerId);
+    if (pendingCreate?.token === token) {
+      if (!this._clearPendingCreate(pendingCreate)) failed = true;
+    }
+    const legacy = this.tokenStore.get(code);
+    if (legacy?.playerId === playerId && legacy.token === token) {
+      if (!this.tokenStore.remove(code)) failed = true;
+    }
+    this.lastCredentialCleanupFailed = failed;
+    if (failed) this._emitError(new RoomClientError(
+      "无法删除当前房间身份的本地凭据；请检查浏览器存储设置。",
+      { code: "CREDENTIAL_CLEANUP_FAILED" },
+    ));
+    this._clearCurrentTabPointer();
+    return !failed;
   }
 
   disconnect(options = {}) {
     const preserveSession = options.preserveSession ?? true;
     this._manualClose = true;
+    this._awaitingSnapshot = false;
     this._clearReconnectTimer();
+    this._clearSnapshotTimer();
     ++this._socketGeneration;
     const socket = this._socket;
     this._socket = null;

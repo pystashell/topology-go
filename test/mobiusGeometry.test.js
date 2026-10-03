@@ -3,8 +3,11 @@ import test from "node:test";
 
 import {
   MOBIUS_TAU,
+  minimumMobiusNeighborDistance,
+  mobiusBoardLayout,
   mobiusDifferentialFrame,
   mobiusGridFrame,
+  mobiusGridPointFromUv,
   mobiusPoint,
 } from "../src/view/mobiusGeometry.js";
 
@@ -87,4 +90,56 @@ test("the virtual column seam lands on the mirrored canonical row", () => {
       );
     }
   }
+});
+
+test("Mobius layout adapts safely to rectangular board proportions", () => {
+  for (const [width, height] of [
+    [9, 9],
+    [13, 13],
+    [19, 19],
+    [30, 20],
+    [20, 30],
+    [30, 5],
+    [5, 30],
+  ]) {
+    const majorRadius = Math.max((width * 2.1) / MOBIUS_TAU, height / MOBIUS_TAU * 1.15);
+    const layout = mobiusBoardLayout({ width, height, majorRadius });
+    assert.ok(layout.gridHalfWidth > 0);
+    assert.ok(layout.gridHalfWidth <= majorRadius * 0.82 + 1e-12);
+    assert.ok(layout.surfaceHalfWidth > layout.gridHalfWidth);
+    assert.ok(layout.surfaceHalfWidth < majorRadius);
+
+    const spacing = minimumMobiusNeighborDistance({
+      width,
+      height,
+      majorRadius,
+      halfWidth: layout.gridHalfWidth,
+    });
+    assert.ok(Number.isFinite(spacing) && spacing > 0);
+  }
+
+  const wide = mobiusBoardLayout({ width: 30, height: 5, majorRadius: 10 });
+  assert.equal(wide.widthLimited, false);
+  assert.ok(Math.abs(wide.idealGridHalfWidth - wide.gridHalfWidth) < 1e-12);
+  const tall = mobiusBoardLayout({ width: 5, height: 30, majorRadius: 10 });
+  assert.equal(tall.widthLimited, true);
+});
+
+test("Mobius UV picking mirrors rows only across the twisted seam", () => {
+  assert.deepEqual(
+    mobiusGridPointFromUv({ u: 0, v: 1, width: 9, height: 9 }),
+    { row: 0, col: 0 },
+  );
+  assert.deepEqual(
+    mobiusGridPointFromUv({ u: 1, v: 1, width: 9, height: 9 }),
+    { row: 8, col: 0 },
+  );
+  assert.deepEqual(
+    mobiusGridPointFromUv({ u: 1, v: 0, width: 9, height: 9 }),
+    { row: 0, col: 0 },
+  );
+  assert.deepEqual(
+    mobiusGridPointFromUv({ u: 0.5, v: 0.5, width: 20, height: 30 }),
+    { row: 15, col: 10 },
+  );
 });

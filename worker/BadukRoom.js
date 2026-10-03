@@ -14,10 +14,19 @@ import {
   RoomEngine,
   RoomEngineError,
 } from "../src/multiplayer/roomEngine.js";
+import { CHAT_CHANNEL_SPECTATORS } from "../src/multiplayer/chat.js";
 
 const STORAGE_KEY = "room";
 const MAX_SOCKET_CONNECTIONS = 64;
 const MAX_CLIENT_MESSAGE_BYTES = 8 * 1024;
+const POSITION_BOUND_ACTIONS = new Set([
+  "play",
+  "pass",
+  "resign",
+  "toggle_dead",
+  "resume_play",
+  "request_undo",
+]);
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -42,6 +51,7 @@ export class BadukRoom {
     this.ctx = ctx;
     this.env = env;
     this.engine = null;
+    this.unavailableError = null;
     this.retiring = false;
     this.operationQueue = Promise.resolve();
 
@@ -57,8 +67,7 @@ export class BadukRoom {
       try {
         this.engine = RoomEngine.restore(stored);
       } catch (error) {
-        console.error("Unable to restore bamboo baduk room", error);
-        await ctx.storage.deleteAll();
+        this.markUnavailable("ROOM_RESTORE_FAILED", error, stored);
         return;
       }
 
@@ -85,20 +94,36 @@ export class BadukRoom {
         await this.retireRoom();
         return;
       }
+      if (advanced.changed) {
+        await this.persist();
+        this.broadcastState();
+      } else {
+        this.queueIndexPublish();
+      }
       await this.scheduleAlarm();
     });
   }
 
   async fetch(request) {
     const url = new URL(request.url);
+    // A failed join write can have committed even when its promise rejected.
+    // This lookup reads the stored snapshot before deciding whether the caller
+    // can recover the same reserved identity; it is allowed while stopped.
+    if (request.method === "POST" && url.pathname === "/internal/join-status") {
+      return this.enqueue(() => this.lookupCommittedJoin(request));
+    }
+    if (this.unavailableError?.code === "ROOM_COMMIT_FAILED") {
+      await this.enqueue(() => this.recoverCommittedRoom());
+    }
+    if (this.unavailableError) return this.errorResponse(this.unavailableError);
     if (request.method === "GET" && url.pathname === "/internal/health") {
       return jsonResponse({ ok: true, service: "bamboo-baduk-room" });
     }
     if (request.method === "POST" && url.pathname === "/internal/init") {
-      return this.enqueueResponse(() => this.initialize(request));
+      return this.enqueue(() => this.initialize(request));
     }
     if (request.method === "POST" && url.pathname === "/internal/join") {
-      return this.enqueueResponse(() => this.reserveMember(request));
+      return this.enqueue(() => this.reserveMember(request));
     }
     if (
       request.method === "GET" &&
@@ -106,12 +131,17 @@ export class BadukRoom {
         url.pathname,
       )
     ) {
-      return this.enqueueResponse(() => this.openSocket(request));
+      return this.enqueue(() => this.openSocket(request));
     }
     return jsonResponse({ error: "Not found" }, 404);
   }
 
   async webSocketMessage(socket, rawMessage) {
+    if (this.unavailableError) {
+      this.sendNormalizedError(socket, this.unavailableError);
+      this.closeSocket(socket, 1011, "Room requires recovery");
+      return;
+    }
     if (typeof rawMessage !== "string") {
       this.sendError(socket, {
         code: "UNSUPPORTED_MESSAGE",
@@ -171,7 +201,7 @@ export class BadukRoom {
         value.v === BADUK_PROTOCOL_VERSION &&
         value.type === "join"
       ) {
-        this.sendWelcome(socket, attachment.identity, this.engine.snapshot());
+        this.sendWelcome(socket, attachment.identity);
         return;
       }
 
@@ -209,50 +239,175 @@ export class BadukRoom {
         await this.retireRoom();
         return;
       }
+      if (result.changed) {
+        await this.persist();
+        this.broadcastState();
+      }
       await this.scheduleAlarm();
     });
   }
 
   async initialize(request) {
-    if (this.engine || this.retiring) {
+    if (this.unavailableError) return this.errorResponse(this.unavailableError);
+    if (this.retiring) {
       return jsonResponse({ error: "房间已经存在。", code: "CONFLICT" }, 409);
     }
+    let createdEngine = false;
     try {
       const body = await request.json();
+      if (this.engine) {
+        const member = this.engine.member(body.playerId);
+        if (member?.color === "black" && member.tokenHash === body.tokenHash) {
+          return jsonResponse({
+            room: this.engine.snapshotFor(member.playerId),
+            identity: this.engine.identityFor(member),
+          }, 201);
+        }
+        return jsonResponse({ error: "房间已经存在。", code: "CONFLICT" }, 409);
+      }
       this.engine = RoomEngine.create(body);
+      createdEngine = true;
       await this.persist();
-      await this.scheduleAlarm();
-      return jsonResponse({ room: this.engine.snapshot() }, 201);
+      await this.scheduleAlarmAfterCommit();
+      const member = this.engine.member(body.playerId);
+      return jsonResponse({
+        room: this.engine.snapshotFor(member.playerId),
+        identity: this.engine.identityFor(member),
+      }, 201);
     } catch (error) {
-      this.engine = null;
+      if (createdEngine && !this.unavailableError) {
+        // Even response construction can fail after the first snapshot was
+        // committed. Reopen from storage through join-status before serving.
+        this.markUnavailable("ROOM_COMMIT_FAILED", error);
+      }
       return this.errorResponse(error);
     }
   }
 
+  async recoverCommittedRoom() {
+    if (this.unavailableError?.code !== "ROOM_COMMIT_FAILED") return;
+    let stored;
+    try {
+      stored = await this.ctx.storage.get(STORAGE_KEY);
+      if (!stored) {
+        this.engine = null;
+        this.unavailableError = null;
+        return;
+      }
+      this.engine = RoomEngine.restore(stored);
+      this.unavailableError = null;
+      this.queueIndexPublish();
+      await this.scheduleAlarmAfterCommit();
+    } catch (error) {
+      if (stored) this.markUnavailable("ROOM_RESTORE_FAILED", error, stored);
+      else console.error("Unable to read room after uncertain commit", error);
+    }
+  }
+
   async reserveMember(request) {
+    if (this.unavailableError) return this.errorResponse(this.unavailableError);
     if (!this.engine || this.retiring) {
       return jsonResponse(
         { error: "没有找到这个房间。", code: "ROOM_NOT_FOUND" },
         404,
       );
     }
+    let enteredJoin = false;
+    let result;
+    let changed;
     try {
       const body = await request.json();
-      const result = this.engine.join(body);
-      await this.persist();
-      await this.scheduleAlarm();
-      this.broadcastState();
-      this.broadcastPresence();
-      return jsonResponse(
-        { room: result.room, identity: result.identity },
-        201,
-      );
+      const revisionBefore = this.engine.state.revision;
+      enteredJoin = true;
+      result = this.engine.join(body);
+      // prepare() can advance a clock or expire a reservation even when the
+      // credential is an idempotent retry. Persist those real revisions only.
+      changed = result.changed || this.engine.state.revision !== revisionBefore;
     } catch (error) {
+      // join() may mutate before building its response. An unexpected failure
+      // must not let a later request persist that speculative membership.
+      if (enteredJoin && (!(error instanceof RoomEngineError) || error.status >= 500)) {
+        this.markUnavailable("ROOM_COMMIT_FAILED", error);
+        return this.errorResponse(this.unavailableError);
+      }
       return this.errorResponse(error);
+    }
+    if (changed) {
+      try {
+        await this.persist();
+      } catch (error) {
+        return this.errorResponse(error);
+      }
+      await this.scheduleAlarmAfterCommit();
+      try {
+        this.broadcastState();
+        this.broadcastPresence();
+      } catch (error) {
+        console.error("Unable to notify committed room join", error);
+      }
+    }
+    return jsonResponse({ room: result.room, identity: result.identity }, 201);
+  }
+
+  async lookupCommittedJoin(request) {
+    if (this.unavailableError && this.unavailableError.code !== "ROOM_COMMIT_FAILED") {
+      return this.errorResponse(this.unavailableError);
+    }
+    try {
+      const body = await request.json();
+      const { playerId, tokenHash } = isRecord(body) ? body : {};
+      if (
+        typeof playerId !== "string" ||
+        typeof tokenHash !== "string" ||
+        !/^[0-9a-f]{64}$/u.test(tokenHash)
+      ) {
+        return jsonResponse({ error: "加入凭据无效。", code: "BAD_REQUEST" }, 400);
+      }
+      const stored = await this.ctx.storage.get(STORAGE_KEY);
+      if (!stored) {
+        if (this.unavailableError?.code === "ROOM_COMMIT_FAILED") {
+          // A failed first-room write was confirmed not to have committed.
+          // Reopen the empty object so the same create credential can retry.
+          this.engine = null;
+          this.unavailableError = null;
+        }
+        return jsonResponse({ error: "加入结果尚未确认。", code: "JOIN_NOT_COMMITTED" }, 404);
+      }
+      let recovered;
+      try {
+        recovered = RoomEngine.restore(stored);
+      } catch (error) {
+        this.markUnavailable("ROOM_RESTORE_FAILED", error, stored);
+        return this.errorResponse(this.unavailableError);
+      }
+      // A confirmed read is the source of truth after an uncertain write.
+      // Discard the speculative engine and reopen from that exact snapshot.
+      if (this.unavailableError?.code === "ROOM_COMMIT_FAILED") {
+        this.engine = recovered;
+        this.unavailableError = null;
+        this.queueIndexPublish();
+        await this.scheduleAlarmAfterCommit();
+      }
+      const member = recovered.member(playerId);
+      if (!member || member.tokenHash !== tokenHash) {
+        return jsonResponse({ error: "加入结果尚未确认。", code: "JOIN_NOT_COMMITTED" }, 404);
+      }
+      return jsonResponse({
+        identity: recovered.identityFor(member),
+        room: recovered.snapshotFor(member.playerId),
+      });
+    } catch (error) {
+      console.error("Unable to verify uncertain room join", error);
+      return jsonResponse({
+        error: "加入结果暂时无法确认，请使用原凭据重试。",
+        code: "JOIN_COMMIT_UNCERTAIN",
+        retryable: true,
+      }, 503);
     }
   }
 
   async openSocket(request) {
+    if (this.unavailableError) return this.errorResponse(this.unavailableError);
     if (!this.engine || this.retiring) {
       return jsonResponse(
         { error: "没有找到这个房间。", code: "ROOM_NOT_FOUND" },
@@ -317,7 +472,7 @@ export class BadukRoom {
       this.ctx.acceptWebSocket(server, ["bamboo-baduk-room"]);
 
       await this.persist();
-      await this.scheduleAlarm();
+      await this.scheduleAlarmAfterCommit();
       this.sendWelcome(server, connected.identity, connected.room);
       this.sendState(server, connected.room);
       this.broadcastState(server);
@@ -334,6 +489,10 @@ export class BadukRoom {
   }
 
   async handleCommand(socket, attachment, command) {
+    if (this.unavailableError) {
+      this.sendNormalizedError(socket, this.unavailableError, command.id);
+      return;
+    }
     const playerId = attachment.identity.playerId;
     let decision;
     try {
@@ -351,19 +510,58 @@ export class BadukRoom {
       this.sendReceipt(socket, decision.receipt);
       return;
     }
+    try {
+      // The reconnect handshake and duplicate receipt path stay free. Every
+      // new or stale spectator command that can trigger a snapshot or storage
+      // write shares bounded member + room budgets.
+      this.engine.enforceSpectatorCommandRateLimit({
+        playerId,
+        action: command.action,
+      });
+    } catch (error) {
+      this.sendNormalizedError(socket, error, command.id);
+      return;
+    }
     if (decision.kind === "stale") {
+      // Spectators are charged before this branch so repeated stale commands
+      // cannot bypass the normal sync budget. Persist that token spend before
+      // replying; otherwise a Durable Object hibernation could restore the
+      // previous full bucket and make the limit effectively memory-only.
+      if (attachment.identity.role === "spectator") {
+        try {
+          await this.persist();
+        } catch (error) {
+          this.sendNormalizedError(socket, error, command.id);
+          return;
+        }
+      }
       this.sendError(socket, {
         id: command.id,
         code: "STALE_COMMAND",
         message: "这条命令已经过期，已同步最新棋局。",
         retryable: true,
       });
-      this.sendState(socket, this.engine.snapshot());
+      this.sendState(socket);
       return;
     }
 
+    let result;
     try {
-      const result = command.action === "chat"
+      if (
+        POSITION_BOUND_ACTIONS.has(command.action) &&
+        this.engine.member(playerId)?.role === "player"
+      ) {
+        if (!Object.prototype.hasOwnProperty.call(command.payload, "expectedMoveCount") ||
+            !Object.prototype.hasOwnProperty.call(command.payload, "expectedPositionToken")) {
+          throw new RoomEngineError(
+            "客户端版本过旧，请刷新页面后重试。",
+            426,
+            "PROTOCOL_UPGRADE_REQUIRED",
+          );
+        }
+        this.engine.assertFreshPosition(command.payload);
+      }
+      result = command.action === "chat"
         ? this.engine.postChat({
             playerId,
             payload: command.payload,
@@ -375,35 +573,20 @@ export class BadukRoom {
             payload: command.payload,
           });
 
-      if (command.action !== "leave") {
-        this.engine.recordCommand({
-          playerId,
-          id: command.id,
-          sequence: command.sequence,
-        });
-      }
-      await this.persist();
-      this.safeSend(socket, makeAckMessage(command, result.revision));
-
-      if (command.action === "chat") {
-        this.broadcastChat(result.message);
-      } else if (command.action === "sync") {
-        this.sendState(socket, result.room);
-      } else {
-        this.broadcastState();
-      }
-      if (command.action === "leave") {
-        socket.serializeAttachment({ ...attachment, identity: null });
-        this.broadcastPresence(socket);
-        this.closeSocket(socket, 1000, "Membership left");
-      }
-      await this.scheduleAlarm();
     } catch (error) {
+      // Only business rejections have durable error receipts. An unexpected
+      // exception may have interrupted a mutation; stop using that engine.
+      if (!(error instanceof RoomEngineError) || error.status >= 500) {
+        this.markUnavailable("ROOM_COMMIT_FAILED", error);
+        this.sendNormalizedError(socket, this.unavailableError, command.id);
+        return;
+      }
       const normalized = this.normalizeError(error);
       try {
         const shouldPersistRejection =
           command.action !== "leave" &&
           normalized.code !== "CHAT_RATE_LIMITED" &&
+          normalized.code !== "SPECTATOR_RATE_LIMITED" &&
           this.engine.member(playerId);
         if (shouldPersistRejection) {
           this.engine.recordCommand({
@@ -415,10 +598,58 @@ export class BadukRoom {
           await this.persist();
         }
       } catch (receiptError) {
-        console.error("Unable to persist rejected command", receiptError);
+        this.sendNormalizedError(socket, receiptError, command.id);
+        return;
       }
       this.sendError(socket, { id: command.id, ...normalized });
+      if (normalized.code === "GAME_TIMED_OUT") {
+        this.broadcastState();
+        await this.scheduleAlarmAfterCommit();
+      }
+      if (normalized.code === "STALE_SCORING" || normalized.code === "STALE_GAME_STATE") {
+        this.sendState(socket);
+      }
+      return;
     }
+
+    try {
+      if (command.action !== "leave") {
+        this.engine.recordCommand({
+          playerId,
+          id: command.id,
+          sequence: command.sequence,
+        });
+      }
+      await this.persist();
+    } catch (error) {
+      if (!this.unavailableError) this.markUnavailable("ROOM_COMMIT_FAILED", error);
+      this.sendNormalizedError(socket, this.unavailableError, command.id);
+      return;
+    }
+
+    // State and receipt are committed together. Neither a notification failure
+    // nor alarm scheduling may rewrite that success as a business rejection.
+    this.safeSend(socket, makeAckMessage(command, result.revision));
+    try {
+      if (command.action === "claim_seat" || command.action === "release_seat") {
+        const currentMember = this.engine.member(playerId);
+        if (currentMember) {
+          attachment.identity = this.engine.identityFor(currentMember);
+          socket.serializeAttachment(attachment);
+        }
+      }
+      if (command.action === "chat") this.broadcastChat(result.message);
+      else if (command.action === "sync") this.sendState(socket, result.room);
+      else this.broadcastState();
+      if (command.action === "leave") {
+        socket.serializeAttachment({ ...attachment, identity: null });
+        this.broadcastPresence(socket);
+        this.closeSocket(socket, 1000, "Membership left");
+      }
+    } catch (error) {
+      console.error("Unable to notify committed room command", error);
+    }
+    await this.scheduleAlarmAfterCommit();
   }
 
   async disconnectSocket(socket) {
@@ -439,7 +670,66 @@ export class BadukRoom {
   }
 
   async persist() {
-    if (this.engine) await this.ctx.storage.put(STORAGE_KEY, this.engine.serialize());
+    if (!this.engine) return;
+    try {
+      // Presence and TTL can change without a game revision. Give every
+      // persisted directory projection its own strictly ordered version.
+      this.engine.bumpDirectoryRevision();
+      const snapshot = this.engine.serialize();
+      await this.ctx.storage.put(STORAGE_KEY, snapshot);
+    } catch (error) {
+      // Includes serialization/validation failures before a write and writes
+      // whose outcome is unknown. Never reuse their in-memory success receipts.
+      // Default Cloudflare output gates remain enabled. A fresh object restores
+      // the authoritative snapshot; no speculative error receipt is written.
+      this.markUnavailable("ROOM_COMMIT_FAILED", error);
+      throw this.unavailableError;
+    }
+    this.queueIndexPublish();
+  }
+
+  queueIndexPublish() {
+    const publishing = this.publishRoomIndexSnapshot();
+    if (typeof this.ctx.waitUntil === "function") this.ctx.waitUntil(publishing);
+    else void publishing;
+  }
+
+  async publishRoomIndexSnapshot() {
+    // A room is the source of truth. The optional index receives a one-way
+    // public snapshot and derives its own disposable directory entry. Nothing
+    // in this object ever reads from the index.
+    if (!this.engine || !this.env?.BADUK_ROOM_INDEX) return;
+    try {
+      const index = this.env.BADUK_ROOM_INDEX.getByName("global");
+      const response = await index.fetch(
+        new Request("https://room-index.internal/internal/upsert", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(this.engine.snapshot()),
+        }),
+      );
+      if (!response.ok) {
+        console.error("Unable to publish room to optional index", response.status);
+      }
+    } catch (error) {
+      console.error("Unable to publish room to optional index", error);
+    }
+  }
+
+  async removeRoomIndexEntry(code, incarnationId) {
+    if (!this.env?.BADUK_ROOM_INDEX || !code || !incarnationId) return;
+    try {
+      const index = this.env.BADUK_ROOM_INDEX.getByName("global");
+      await index.fetch(
+        new Request("https://room-index.internal/internal/remove", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code, incarnationId }),
+        }),
+      );
+    } catch (error) {
+      console.error("Unable to remove room from optional index", error);
+    }
   }
 
   async scheduleAlarm() {
@@ -457,9 +747,40 @@ export class BadukRoom {
     }
   }
 
+  async scheduleAlarmAfterCommit() {
+    try {
+      await this.scheduleAlarm();
+    } catch (error) {
+      console.error("Unable to schedule alarm for committed room", error);
+    }
+  }
+
+  markUnavailable(code, error, stored = null) {
+    console.error("Room stopped; persisted snapshot retained", {
+      roomId: this.ctx.id?.toString() ?? null,
+      schemaVersion: stored?.schemaVersion ?? this.engine?.state?.schemaVersion,
+      code,
+      errorType: error?.name ?? typeof error,
+      message: error?.message ?? String(error),
+    });
+    this.engine = null;
+    this.unavailableError = new RoomEngineError(
+      "房间暂时无法恢复或保存，请稍后重新连接。",
+      503,
+      code,
+      true,
+    );
+    for (const socket of this.ctx.getWebSockets?.() ?? []) {
+      this.sendNormalizedError(socket, this.unavailableError);
+      this.closeSocket(socket, 1011, "Room requires recovery");
+    }
+  }
+
   async retireRoom() {
     if (this.retiring) return;
     this.retiring = true;
+    const roomCode = this.engine?.state?.code ?? null;
+    const incarnationId = this.engine?.state?.incarnationId ?? null;
     this.engine = null;
     for (const socket of this.ctx.getWebSockets()) {
       this.sendError(socket, {
@@ -473,26 +794,46 @@ export class BadukRoom {
         await this.ctx.storage.deleteAlarm();
       }
       await this.ctx.storage.deleteAll();
+      const removal = this.removeRoomIndexEntry(roomCode, incarnationId);
+      if (typeof this.ctx.waitUntil === "function") this.ctx.waitUntil(removal);
+      else void removal;
     } finally {
       this.retiring = false;
     }
   }
 
-  sendWelcome(socket, identity, room) {
+  roomForSocket(socket, fallback = null) {
+    const attachment = this.readAttachment(socket);
+    if (!this.engine || !attachment.identity?.playerId) return fallback;
+    try {
+      if (typeof this.engine.snapshotFor === "function") {
+        return this.engine.snapshotFor(attachment.identity.playerId);
+      }
+      if (typeof this.engine.snapshot === "function") return this.engine.snapshot();
+    } catch {
+      return fallback;
+    }
+    return fallback;
+  }
+
+  sendWelcome(socket, identity, room = null) {
+    const safeRoom = this.roomForSocket(socket, room);
     this.safeSend(socket, {
       v: BADUK_PROTOCOL_VERSION,
       type: "welcome",
       identity,
       self: identity,
-      room,
+      room: safeRoom,
       serverTime: Date.now(),
     });
   }
 
-  sendState(socket, room) {
+  sendState(socket, room = null) {
     const attachment = this.readAttachment(socket);
+    const safeRoom = this.roomForSocket(socket, room);
+    if (!safeRoom) return;
     this.safeSend(socket, {
-      ...makeStateMessage(room),
+      ...makeStateMessage(safeRoom),
       self: attachment.identity,
       identity: attachment.identity,
     });
@@ -500,13 +841,7 @@ export class BadukRoom {
 
   broadcastState(excluded) {
     if (!this.engine) return;
-    let room;
-    try {
-      room = this.engine.snapshot();
-    } catch {
-      return;
-    }
-    for (const socket of this.joinedSockets(excluded)) this.sendState(socket, room);
+    for (const socket of this.joinedSockets(excluded)) this.sendState(socket);
   }
 
   broadcastPresence(excluded) {
@@ -523,7 +858,13 @@ export class BadukRoom {
 
   broadcastChat(message) {
     const event = makeChatMessage(message);
-    for (const socket of this.joinedSockets()) this.safeSend(socket, event);
+    for (const socket of this.joinedSockets()) {
+      const role = this.readAttachment(socket).identity?.role ?? null;
+      if (message?.channel === CHAT_CHANNEL_SPECTATORS && role !== "spectator") {
+        continue;
+      }
+      this.safeSend(socket, event);
+    }
   }
 
   joinedSockets(excluded) {
@@ -632,12 +973,4 @@ export class BadukRoom {
     return run;
   }
 
-  enqueueResponse(task) {
-    const run = this.operationQueue.then(task, task);
-    this.operationQueue = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
-  }
 }

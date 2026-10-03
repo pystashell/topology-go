@@ -7,6 +7,26 @@ import {
   torusGridFrame,
   torusGridPointFromCartesian,
 } from "./torusGeometry.js";
+import {
+  invalidatePendingTapOnAdditionalPointer,
+  pointerGestureRoles,
+  preventBoardContextMenu,
+} from "./pointerGestures.js";
+import {
+  createPlayerViewLighting,
+  updatePlayerViewLighting,
+} from "./playerViewLighting.js";
+import { translateText } from "../i18n.js";
+import {
+  createAnalysisVariationMarker,
+  placeAnalysisVariationMarker,
+} from "./analysisVariationMarkers.js";
+import {
+  createTerritoryMarkerLayer,
+  disposeTerritoryMarkerLayer,
+  territoryPointsForPosition,
+  territoryPointsSignature,
+} from "./territoryMarkers.js";
 
 const CELL = 1;
 const DRAG_THRESHOLD = 6;
@@ -101,18 +121,28 @@ class TorusGridCurve extends THREE.Curve {
 }
 
 export class TorusBoard {
-  constructor(container, { size = 19, onPoint, onHover } = {}) {
+  constructor(container, { size, width, height, onPoint, onHover } = {}) {
+    const fallbackDimension = size ?? width ?? height ?? 19;
+    const boardWidth = width ?? fallbackDimension;
+    const boardHeight = height ?? fallbackDimension;
     this.container = container;
     this.onPoint = onPoint;
     this.onHover = onHover;
-    this.size = size;
+    this.width = boardWidth;
+    this.height = boardHeight;
+    this.size = boardWidth === boardHeight ? boardWidth : undefined;
     this.board = [];
     this.phase = "play";
     this.currentPlayer = "black";
     this.lastMove = null;
     this.analysisMove = null;
+    this.analysisCandidates = [];
+    this.analysisVariation = [];
     this.referencePoint = null;
     this.deadKeys = new Set();
+    this.territoryPoints = [];
+    this.territorySignature = "";
+    this.territoryGroup = null;
     this.pointerStart = null;
     this.hoveredPoint = null;
     this.movePreviewEnabled = true;
@@ -137,7 +167,9 @@ export class TorusBoard {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.setAttribute(
       "aria-label",
-      "上下左右均首尾相接的三维甜甜圈围棋棋盘。拖动旋转，滚轮或双指缩放。",
+      translateText(
+        "上下左右均首尾相接的三维甜甜圈围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+      ),
     );
     this.container.appendChild(this.renderer.domElement);
 
@@ -150,27 +182,17 @@ export class TorusBoard {
     this.controls.minPolarAngle = 0.08;
     this.controls.maxPolarAngle = Math.PI - 0.08;
     this.controls.autoRotateSpeed = 0.68;
+    this.controls.mouseButtons.LEFT = -1;
+    this.controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
     this.woodTexture = makeWoodTexture(this.renderer);
 
-    this.scene.add(new THREE.HemisphereLight(0xe8f3ed, 0x172019, 1.75));
-    const keyLight = new THREE.DirectionalLight(0xffdfa4, 3.4);
-    keyLight.position.set(9, 12, 16);
-    keyLight.castShadow = true;
-    keyLight.shadow.mapSize.set(1024, 1024);
-    keyLight.shadow.camera.near = 1;
-    keyLight.shadow.camera.far = 90;
-    keyLight.shadow.camera.left = -30;
-    keyLight.shadow.camera.right = 30;
-    keyLight.shadow.camera.top = 30;
-    keyLight.shadow.camera.bottom = -30;
-    this.scene.add(keyLight);
-
-    const fillLight = new THREE.DirectionalLight(0x8fb4a2, 1.55);
-    fillLight.position.set(-12, -6, 7);
-    this.scene.add(fillLight);
+    // MobiusBoard inherits this exact rig. Unlike fixed world-space lighting,
+    // it follows the player's view so every visible playing surface remains
+    // readable after rotation, including the reverse side of the Mobius band.
+    this.playerViewLighting = createPlayerViewLighting(this.scene);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.container);
@@ -179,6 +201,7 @@ export class TorusBoard {
     this.onPointerMove = (event) => this.handlePointerMove(event);
     this.onPointerUp = (event) => this.handlePointerUp(event);
     this.onPointerCancel = (event) => this.handlePointerCancel(event);
+    this.onContextMenu = (event) => preventBoardContextMenu(event);
     this.onPointerLeave = () => {
       if (!this.pointerStart) this.setHoveredPoint(null);
     };
@@ -189,22 +212,39 @@ export class TorusBoard {
     canvas.addEventListener("pointerup", this.onPointerUp);
     canvas.addEventListener("pointercancel", this.onPointerCancel);
     canvas.addEventListener("pointerleave", this.onPointerLeave);
+    canvas.addEventListener("contextmenu", this.onContextMenu);
 
-    this.rebuild(size);
+    this.rebuild(boardWidth, boardHeight);
     this.animate();
   }
 
-  rebuild(size) {
-    this.size = size;
-    this.minorRadius = (size * CELL) / TAU;
-    this.majorRadius = this.minorRadius * 2.1;
-    this.radialSegments = Math.max(64, size * 4);
-    this.tubularSegments = Math.max(128, size * 8);
-    this.board = Array.from({ length: size }, () => Array(size).fill(null));
+  refreshLanguage() {
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      translateText(
+        "上下左右均首尾相接的三维甜甜圈围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
+      ),
+    );
+  }
+
+  rebuild(width, height = width) {
+    this.width = width;
+    this.height = height;
+    this.size = width === height ? width : undefined;
+    this.minorRadius = (height * CELL) / TAU;
+    this.majorRadius = Math.max(
+      (width * CELL * 2.1) / TAU,
+      this.minorRadius * 1.15,
+    );
+    this.radialSegments = Math.max(64, height * 4);
+    this.tubularSegments = Math.max(128, width * 8);
+    this.board = Array.from({ length: height }, () => Array(width).fill(null));
     this.currentPlayer = "black";
     this.phase = "play";
     this.lastMove = null;
     this.analysisMove = null;
+    this.analysisCandidates = [];
+    this.analysisVariation = [];
     this.referencePoint = null;
     this.deadKeys.clear();
     this.hoveredPoint = null;
@@ -215,6 +255,9 @@ export class TorusBoard {
       this.scene.remove(this.boardGroup);
       disposeObject(this.boardGroup);
     }
+    this.territoryPoints = [];
+    this.territorySignature = "";
+    this.territoryGroup = null;
     this.boardGroup = new THREE.Group();
     this.scene.add(this.boardGroup);
 
@@ -255,11 +298,11 @@ export class TorusBoard {
     const gridMinorRadius = this.minorRadius + 0.018;
     const lineRadius = 0.0145;
 
-    for (let row = 0; row < this.size; row += 1) {
+    for (let row = 0; row < this.height; row += 1) {
       const curve = new TorusGridCurve({
         majorRadius: this.majorRadius,
         minorRadius: gridMinorRadius,
-        fixedAngle: (row * TAU) / this.size,
+        fixedAngle: (row * TAU) / this.height,
         direction: "row",
       });
       this.boardGroup.add(
@@ -276,11 +319,11 @@ export class TorusBoard {
       );
     }
 
-    for (let col = 0; col < this.size; col += 1) {
+    for (let col = 0; col < this.width; col += 1) {
       const curve = new TorusGridCurve({
         majorRadius: this.majorRadius,
         minorRadius: gridMinorRadius,
-        fixedAngle: (col * TAU) / this.size,
+        fixedAngle: (col * TAU) / this.width,
         direction: "column",
       });
       this.boardGroup.add(
@@ -301,9 +344,10 @@ export class TorusBoard {
       color: 0x1c1510,
       roughness: 0.65,
     });
-    const stars = starIndices(this.size);
-    for (const row of stars) {
-      for (const col of stars) {
+    const rowStars = starIndices(this.height);
+    const columnStars = starIndices(this.width);
+    for (const row of rowStars) {
+      for (const col of columnStars) {
         const frame = this.frame(row, col, 0.052);
         const star = new THREE.Mesh(
           new THREE.SphereGeometry(0.074, 12, 8),
@@ -364,7 +408,8 @@ export class TorusBoard {
     const frame = torusGridFrame({
       row,
       col,
-      size: this.size,
+      width: this.width,
+      height: this.height,
       majorRadius: this.majorRadius,
       minorRadius: this.minorRadius,
       offset,
@@ -385,28 +430,46 @@ export class TorusBoard {
 
   setPosition({
     board,
+    size,
+    width,
+    height,
     currentPlayer,
     phase,
     lastMove,
     deadStones = [],
+    territoryRegions = [],
     analysisMove = null,
+    analysisCandidates = [],
+    analysisVariation = [],
     referencePoint = null,
   }) {
+    const nextWidth = width ?? size ?? this.width;
+    const nextHeight = height ?? size ?? this.height;
+    if (nextWidth !== this.width || nextHeight !== this.height) {
+      this.rebuild(nextWidth, nextHeight);
+    }
     this.board = board;
     this.currentPlayer = currentPlayer;
     this.phase = phase;
     this.lastMove = lastMove;
     this.analysisMove = analysisMove?.type === "play" ? analysisMove : null;
+    this.analysisCandidates = Array.isArray(analysisCandidates)
+      ? analysisCandidates.slice(0, 5)
+      : [];
+    this.analysisVariation = Array.isArray(analysisVariation)
+      ? analysisVariation.slice(0, 8)
+      : [];
     this.referencePoint =
       Number.isInteger(referencePoint?.row) &&
       Number.isInteger(referencePoint?.col) &&
       referencePoint.row >= 0 &&
-      referencePoint.row < this.size &&
+      referencePoint.row < this.height &&
       referencePoint.col >= 0 &&
-      referencePoint.col < this.size
+      referencePoint.col < this.width
         ? { row: referencePoint.row, col: referencePoint.col }
         : null;
     this.deadKeys = new Set(deadStones.map(({ row, col }) => `${row},${col}`));
+    this.syncTerritoryMarkers(territoryRegions, deadStones);
 
     while (this.stonesGroup.children.length > 0) {
       this.stonesGroup.remove(this.stonesGroup.children[0]);
@@ -418,8 +481,8 @@ export class TorusBoard {
       marker.material.dispose();
     }
 
-    for (let row = 0; row < this.size; row += 1) {
-      for (let col = 0; col < this.size; col += 1) {
+    for (let row = 0; row < this.height; row += 1) {
+      for (let col = 0; col < this.width; col += 1) {
         const color = board[row]?.[col];
         if (!color) continue;
         const dead = this.deadKeys.has(`${row},${col}`);
@@ -442,17 +505,32 @@ export class TorusBoard {
       this.addLastMoveMarker(lastMove.row, lastMove.col);
     }
     if (
+      this.analysisCandidates.length === 0 &&
       this.analysisMove &&
       Number.isInteger(this.analysisMove.row) &&
       Number.isInteger(this.analysisMove.col) &&
       this.analysisMove.row >= 0 &&
-      this.analysisMove.row < this.size &&
+      this.analysisMove.row < this.height &&
       this.analysisMove.col >= 0 &&
-      this.analysisMove.col < this.size &&
+      this.analysisMove.col < this.width &&
       !board[this.analysisMove.row]?.[this.analysisMove.col]
     ) {
       this.addAnalysisMarker(this.analysisMove.row, this.analysisMove.col);
     }
+    this.analysisCandidates.forEach((candidate, index) => {
+      const move = candidate?.move ?? candidate;
+      if (
+        move?.type === "play" &&
+        Number.isInteger(move.row) && Number.isInteger(move.col) &&
+        move.row >= 0 && move.row < this.height &&
+        move.col >= 0 && move.col < this.width &&
+        !board[move.row]?.[move.col]
+      ) this.addAnalysisMarker(move.row, move.col, candidate, index);
+    });
+    this.analysisVariation.forEach((entry, index) => {
+      const move = entry?.move ?? entry;
+      if (move?.type === "play") this.addVariationMarker(move.row, move.col, entry, index);
+    });
     if (this.referencePoint) {
       this.addReferenceMarker(
         this.referencePoint.row,
@@ -461,6 +539,36 @@ export class TorusBoard {
       );
     }
     this.refreshHover();
+  }
+
+  territoryMarkerOptions() {
+    return {
+      radius: 0.19,
+      surfaceOffset: 0.06,
+      paired: false,
+    };
+  }
+
+  syncTerritoryMarkers(territoryRegions, deadStones) {
+    const points = territoryPointsForPosition({
+      territoryRegions,
+      phase: this.phase,
+      width: this.width,
+      height: this.height,
+      board: this.board,
+      deadStones,
+    });
+    const signature = territoryPointsSignature(points);
+    if (signature === this.territorySignature) return;
+
+    disposeTerritoryMarkerLayer(this.territoryGroup);
+    this.territoryPoints = points;
+    this.territorySignature = signature;
+    this.territoryGroup = createTerritoryMarkerLayer(points, {
+      frameAt: (row, col) => this.frame(row, col, 0),
+      ...this.territoryMarkerOptions(),
+    });
+    if (this.territoryGroup) this.boardGroup.add(this.territoryGroup);
   }
 
   positionStone(stone, row, col) {
@@ -485,12 +593,14 @@ export class TorusBoard {
     this.markersGroup.add(marker);
   }
 
-  addAnalysisMarker(row, col) {
+  addAnalysisMarker(row, col, candidate = null, index = 0) {
+    const palette = [0x38e4c5, 0x6c9eff, 0xb58cff, 0xe7a853, 0xe96f78];
+    const active = Boolean(candidate?.active);
     const diamondFrame = this.frame(row, col, 0.068);
     const diamond = new THREE.Mesh(
-      new THREE.CircleGeometry(0.25, 4),
+      new THREE.CircleGeometry(active ? 0.29 : 0.22, 4),
       new THREE.MeshBasicMaterial({
-        color: 0x38e4c5,
+        color: palette[Math.min(index, palette.length - 1)],
         transparent: true,
         opacity: 0.82,
         side: THREE.DoubleSide,
@@ -515,6 +625,21 @@ export class TorusBoard {
     center.position.copy(centerFrame.position);
     center.quaternion.setFromUnitVectors(LOCAL_FORWARD, centerFrame.normal);
     this.markersGroup.add(center);
+  }
+
+  addVariationMarker(row, col, entry = null, index = 0) {
+    if (
+      !Number.isInteger(row) || !Number.isInteger(col) ||
+      row < 0 || row >= this.height || col < 0 || col >= this.width
+    ) return;
+    const frame = this.frame(row, col, 0);
+    const marker = createAnalysisVariationMarker(entry, index, { radius: 0.18 });
+    placeAnalysisVariationMarker(marker, {
+      position: frame.position,
+      normal: frame.normal,
+      surfaceOffset: 0.278,
+    });
+    this.markersGroup.add(marker);
   }
 
   addReferenceMarker(row, col, occupied) {
@@ -560,22 +685,32 @@ export class TorusBoard {
     if (!hit) return null;
 
     const point = this.boardGroup.worldToLocal(hit.point.clone());
-    return torusGridPointFromCartesian(point, this.size, this.majorRadius);
+    return torusGridPointFromCartesian(
+      point,
+      this.width,
+      this.height,
+      this.majorRadius,
+    );
   }
 
   handlePointerDown(event) {
-    if (
-      !this.active ||
-      event.isPrimary === false ||
-      this.pointerStart ||
-      (event.pointerType === "mouse" && event.button !== 0)
-    ) {
+    const guardedPointer = invalidatePendingTapOnAdditionalPointer(
+      this.pointerStart,
+      event,
+    );
+    if (guardedPointer !== this.pointerStart) {
+      this.pointerStart = guardedPointer;
+      this.setHoveredPoint(null);
       return;
     }
+    const roles = pointerGestureRoles(event);
+    if (!this.active || !roles || this.pointerStart) return;
+    if (event.pointerType === "mouse" && roles.canDrag) event.preventDefault();
     this.pointerStart = {
       id: event.pointerId,
       x: event.clientX,
       y: event.clientY,
+      canPlace: roles.canPlace,
     };
     this.renderer.domElement.setPointerCapture?.(event.pointerId);
   }
@@ -597,6 +732,7 @@ export class TorusBoard {
 
   handlePointerUp(event) {
     if (!this.pointerStart || this.pointerStart.id !== event.pointerId) return;
+    const canPlace = this.pointerStart.canPlace;
     const distance = Math.hypot(
       event.clientX - this.pointerStart.x,
       event.clientY - this.pointerStart.y,
@@ -606,7 +742,7 @@ export class TorusBoard {
     if (canvas.hasPointerCapture?.(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
     }
-    if (distance > DRAG_THRESHOLD) return;
+    if (!canPlace || distance > DRAG_THRESHOLD) return;
     const point = this.raycastPoint(event);
     if (point && this.onPoint) this.onPoint(point);
   }
@@ -690,9 +826,9 @@ export class TorusBoard {
       !Number.isInteger(point?.row) ||
       !Number.isInteger(point?.col) ||
       point.row < 0 ||
-      point.row >= this.size ||
+      point.row >= this.height ||
       point.col < 0 ||
-      point.col >= this.size
+      point.col >= this.width
     ) {
       return;
     }
@@ -748,6 +884,12 @@ export class TorusBoard {
     }
     this.animationFrame = requestAnimationFrame(() => this.animate());
     this.controls.update();
+    updatePlayerViewLighting(
+      this.playerViewLighting,
+      this.camera,
+      this.controls.target,
+      this.majorRadius + this.minorRadius,
+    );
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -763,6 +905,7 @@ export class TorusBoard {
     canvas.removeEventListener("pointerup", this.onPointerUp);
     canvas.removeEventListener("pointercancel", this.onPointerCancel);
     canvas.removeEventListener("pointerleave", this.onPointerLeave);
+    canvas.removeEventListener("contextmenu", this.onContextMenu);
     this.controls.dispose();
     disposeObject(this.boardGroup);
     this.woodTexture.dispose();

@@ -660,7 +660,111 @@ test("two passes enter scoring; a whole connected group is marked dead", () => {
   assert.equal(finished.winner, BLACK);
 });
 
-test("Japanese territory and Chinese area scoring use the same cylindrical regions", () => {
+test("entering scoring conservatively marks an enclosed one-eye group dead", () => {
+  for (const topology of [
+    TOPOLOGY_CYLINDER,
+    TOPOLOGY_TORUS,
+    TOPOLOGY_MOBIUS,
+  ]) {
+    const game = new GoEngine({
+      size: 5,
+      komi: 0,
+      topology,
+      initialBoard: boardFromRows([
+        ".....",
+        ".BBB.",
+        ".BWB.",
+        ".B.B.",
+        ".BBB.",
+      ]),
+    });
+
+    assert.deepEqual(game.suggestDeadStones(), [{ row: 2, col: 2 }]);
+    assert.equal(game.pass().phase, "play");
+    assert.deepEqual(game.getState().deadStones, []);
+    assert.equal(game.pass().phase, PHASE_SCORING);
+    assert.deepEqual(game.getState().deadStones, [{ row: 2, col: 2 }]);
+
+    const score = game.score();
+    const claimedRegion = score.regions.find((region) =>
+      region.points.some(({ row, col }) => row === 2 && col === 2),
+    );
+    assert.equal(claimedRegion.owner, BLACK);
+    assert.ok(
+      claimedRegion.points.some(({ row, col }) => row === 3 && col === 2),
+    );
+  }
+});
+
+test("automatic dead-stone suggestions leave escapes, capturing races and two eyes alone", () => {
+  const escape = new GoEngine({
+    size: 5,
+    initialBoard: boardFromRows([
+      ".....",
+      ".BBB.",
+      ".BWB.",
+      ".B.B.",
+      ".....",
+    ]),
+  });
+  assert.deepEqual(escape.suggestDeadStones(), []);
+
+  const capturingRace = new GoEngine({
+    size: 5,
+    initialBoard: boardFromRows([
+      "BBBBB",
+      "BBBBB",
+      "BBWBB",
+      "BB.BB",
+      "BBBBB",
+    ]),
+  });
+  assert.deepEqual(capturingRace.suggestDeadStones(), []);
+
+  const twoEyes = new GoEngine({
+    size: 7,
+    initialBoard: boardFromRows([
+      "BBBBBBB",
+      "BWWWWWB",
+      "BW.W.WB",
+      "BWWWWWB",
+      "BBBBBBB",
+      ".......",
+      ".......",
+    ]),
+  });
+  assert.deepEqual(twoEyes.suggestDeadStones(), []);
+
+  twoEyes.pass();
+  twoEyes.pass();
+  assert.deepEqual(twoEyes.getState().deadStones, []);
+});
+
+test("score regions classify black, white and neutral points for every renderer", () => {
+  const game = new GoEngine({
+    size: 5,
+    komi: 0,
+    initialBoard: boardFromRows([
+      "BBBBB",
+      "B.BBB",
+      "BB.WB",
+      "WWWWW",
+      "W.WWW",
+    ]),
+  });
+
+  const regionsByOwner = new Map(
+    game.score().regions.map((region) => [
+      region.owner,
+      region.points.map(({ row, col }) => `${row},${col}`),
+    ]),
+  );
+  assert.deepEqual(regionsByOwner.get(BLACK), ["1,1"]);
+  assert.deepEqual(regionsByOwner.get(WHITE), ["4,1"]);
+  assert.deepEqual(regionsByOwner.get(EMPTY), ["2,2"]);
+});
+
+test("simplified territory and Chinese area scoring use the same cylindrical regions", () => {
   const game = new GoEngine({
     size: 5,
     komi: 0,
@@ -753,6 +857,48 @@ test("restoring a game preserves positional superko history", () => {
   assert.equal(restored.get(1, 1), EMPTY);
   assert.equal(restored.get(1, 2), BLACK);
   assert.equal(restored.currentPlayer, WHITE);
+});
+
+test("resignation finishes the game, survives persistence and cannot be undone", () => {
+  const game = new GoEngine({ size: 9 });
+  assert.equal(game.play(2, 2).ok, true);
+  assert.equal(game.play(3, 3).ok, true);
+
+  const resigned = game.resign(WHITE);
+  assert.deepEqual(resigned, {
+    ok: true,
+    type: "resign",
+    color: WHITE,
+    winner: BLACK,
+    loser: WHITE,
+    margin: 0,
+    reason: "resign",
+    resignation: true,
+    phase: PHASE_FINISHED,
+  });
+  assert.equal(game.phase, PHASE_FINISHED);
+  assert.deepEqual(game.result, {
+    winner: BLACK,
+    loser: WHITE,
+    margin: 0,
+    reason: "resign",
+    resignation: true,
+  });
+  assert.equal(game.play(4, 4).reason, MOVE_ERRORS.GAME_NOT_PLAYING);
+  assert.equal(game.pass().reason, MOVE_ERRORS.GAME_NOT_PLAYING);
+
+  const restored = GoEngine.fromState(JSON.parse(game.serialize()));
+  assert.deepEqual(restored.getState(), game.getState());
+  assert.deepEqual(restored.getReplayState(), game.getReplayState());
+  assert.equal(restored.canUndo(), false);
+  assert.equal(restored.undo().reason, MOVE_ERRORS.NOTHING_TO_UNDO);
+
+  const corrupted = game.exportState();
+  corrupted.result.winner = WHITE;
+  assert.throws(
+    () => GoEngine.fromState(corrupted),
+    /valid resignation result/u,
+  );
 });
 
 test("scoring, dead stones and a finished result survive restoration", () => {

@@ -1,4 +1,12 @@
-export const COORDINATE_LETTERS = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
+import {
+  formatGoColumn,
+  GO_COLUMN_LABELS,
+  MAX_BOARD_DIMENSION,
+  MIN_BOARD_DIMENSION,
+  parseGoColumn,
+} from "../game/boardDimensions.js";
+
+export const COORDINATE_LETTERS = GO_COLUMN_LABELS;
 
 export const CHAT_TEXT_MAX_CODE_POINTS = 300;
 export const CHAT_TEXT_MAX_BYTES = 1_500;
@@ -6,6 +14,8 @@ export const CHAT_TEXT_MAX_LINES = 4;
 export const CHAT_POINT_LIMIT = 4;
 export const CHAT_HISTORY_LIMIT = 100;
 export const CHAT_HISTORY_MAX_BYTES = 64 * 1024;
+export const CHAT_CHANNEL_PLAYERS = "players";
+export const CHAT_CHANNEL_SPECTATORS = "spectators";
 
 export const CHAT_STICKERS = Object.freeze([
   Object.freeze({ id: "good-move", emoji: "👏", label: "好棋！" }),
@@ -22,6 +32,20 @@ const CHAT_STICKER_IDS = new Set(CHAT_STICKERS.map(({ id }) => id));
 const VALID_TOPOLOGIES = new Set(["cylinder", "torus", "mobius"]);
 const textEncoder = new TextEncoder();
 
+export function chatChannelForRole(role) {
+  if (role === "player") return CHAT_CHANNEL_PLAYERS;
+  if (role === "spectator") return CHAT_CHANNEL_SPECTATORS;
+  return null;
+}
+
+export function chatMessageChannel(message) {
+  const inferred = chatChannelForRole(message?.senderRole);
+  if (!inferred) return null;
+  return message?.channel === undefined || message.channel === inferred
+    ? inferred
+    : null;
+}
+
 export class ChatValidationError extends Error {
   constructor(message, code = "INVALID_CHAT") {
     super(message);
@@ -35,50 +59,73 @@ function isRecord(value) {
 }
 
 function isBoardSize(value) {
-  return Number.isInteger(value) && value >= 3 && value <= 25;
+  return Number.isInteger(value) &&
+    value >= MIN_BOARD_DIMENSION &&
+    value <= MAX_BOARD_DIMENSION;
+}
+
+function boardDimensions(value, widthOverride) {
+  if (isRecord(value)) {
+    const width = value.width ?? value.size;
+    const height = value.height ?? value.size;
+    return isBoardSize(width) && isBoardSize(height) ? { width, height } : null;
+  }
+  const height = value;
+  const width = widthOverride ?? value;
+  return isBoardSize(width) && isBoardSize(height) ? { width, height } : null;
 }
 
 function normalizedTopology(value) {
   return VALID_TOPOLOGIES.has(value) ? value : "cylinder";
 }
 
-export function formatBoardCoordinate(row, col, size) {
+export function formatBoardCoordinate(row, col, heightOrBoard, widthOverride) {
+  const dimensions = boardDimensions(heightOrBoard, widthOverride);
   if (
-    !isBoardSize(size) ||
+    !dimensions ||
     !Number.isInteger(row) ||
     !Number.isInteger(col) ||
     row < 0 ||
-    row >= size ||
+    row >= dimensions.height ||
     col < 0 ||
-    col >= size
+    col >= dimensions.width
   ) {
     return "";
   }
-  const letter = COORDINATE_LETTERS[col];
-  return letter ? `${letter}${size - row}` : "";
+  const letter = formatGoColumn(col);
+  return letter ? `${letter}${dimensions.height - row}` : "";
 }
 
-export function parseBoardCoordinate(value, size) {
-  if (!isBoardSize(size) || typeof value !== "string") return null;
-  const match = value.trim().toUpperCase().match(/^([A-HJ-Z])\s*(\d{1,2})$/u);
+export function parseBoardCoordinate(value, heightOrBoard, widthOverride) {
+  const dimensions = boardDimensions(heightOrBoard, widthOverride);
+  if (!dimensions || typeof value !== "string") return null;
+  const match = value.trim().toUpperCase().match(/^([A-HJ-Z]{1,2})\s*(\d{1,2})$/u);
   if (!match) return null;
-  const col = COORDINATE_LETTERS.indexOf(match[1]);
+  const col = parseGoColumn(match[1]);
   const number = Number(match[2]);
-  if (col < 0 || col >= size || number < 1 || number > size) return null;
-  const row = size - number;
-  return { row, col, label: formatBoardCoordinate(row, col, size) };
+  if (
+    col < 0 || col >= dimensions.width ||
+    number < 1 || number > dimensions.height
+  ) return null;
+  const row = dimensions.height - number;
+  return {
+    row,
+    col,
+    label: formatBoardCoordinate(row, col, dimensions),
+  };
 }
 
-export function extractBoardCoordinates(text, size, limit = CHAT_POINT_LIMIT) {
-  if (typeof text !== "string" || !isBoardSize(size) || limit < 1) return [];
+export function extractBoardCoordinates(text, board, limit = CHAT_POINT_LIMIT) {
+  const dimensions = boardDimensions(board);
+  if (typeof text !== "string" || !dimensions || limit < 1) return [];
   const points = [];
   const seen = new Set();
   // Chinese prose commonly attaches a coordinate directly to surrounding
   // characters ("看D4这里"). Only block ASCII word/number prefixes so
   // ordinary Latin tokens such as "BAD4" are not mistaken for board points.
-  const pattern = /(^|[^A-Z0-9])([A-HJ-Z]\s*\d{1,2})(?![A-Z0-9])/giu;
+  const pattern = /(^|[^A-Z0-9])([A-HJ-Z]{1,2}\s*\d{1,2})(?![A-Z0-9])/giu;
   for (const match of text.matchAll(pattern)) {
-    const point = parseBoardCoordinate(match[2], size);
+    const point = parseBoardCoordinate(match[2], dimensions);
     if (!point) continue;
     const key = `${point.row},${point.col}`;
     if (seen.has(key)) continue;
@@ -117,7 +164,8 @@ function normalizeText(value) {
 }
 
 export function normalizeChatPayload(payload, board) {
-  if (!isRecord(payload) || !isBoardSize(board?.size)) {
+  const dimensions = boardDimensions(board);
+  if (!isRecord(payload) || !dimensions) {
     throw new ChatValidationError("聊天消息格式不正确。");
   }
   const topology = normalizedTopology(board.topology);
@@ -131,7 +179,9 @@ export function normalizeChatPayload(payload, board) {
       kind,
       stickerId: payload.stickerId,
       points: [],
-      boardSize: board.size,
+      boardWidth: dimensions.width,
+      boardHeight: dimensions.height,
+      ...(dimensions.width === dimensions.height ? { boardSize: dimensions.width } : {}),
       boardTopology: topology,
     };
   }
@@ -140,8 +190,10 @@ export function normalizeChatPayload(payload, board) {
   return {
     kind,
     text,
-    points: extractBoardCoordinates(text, board.size),
-    boardSize: board.size,
+    points: extractBoardCoordinates(text, dimensions),
+    boardWidth: dimensions.width,
+    boardHeight: dimensions.height,
+    ...(dimensions.width === dimensions.height ? { boardSize: dimensions.width } : {}),
     boardTopology: topology,
   };
 }
@@ -151,6 +203,10 @@ export function chatSticker(stickerId) {
 }
 
 export function isStoredChatMessage(value) {
+  const dimensions = boardDimensions({
+    width: value?.boardWidth ?? value?.boardSize,
+    height: value?.boardHeight ?? value?.boardSize,
+  });
   if (
     !isRecord(value) ||
     typeof value.id !== "string" ||
@@ -163,10 +219,11 @@ export function isStoredChatMessage(value) {
     typeof value.senderName !== "string" ||
     !value.senderName ||
     value.senderName.length > 80 ||
-    value.senderRole !== "player" ||
-    !["black", "white"].includes(value.senderColor) ||
+    !chatMessageChannel(value) ||
+    (value.senderRole === "player" && !["black", "white"].includes(value.senderColor)) ||
+    (value.senderRole === "spectator" && value.senderColor !== null) ||
     !Number.isFinite(value.sentAt) ||
-    !isBoardSize(value.boardSize) ||
+    !dimensions ||
     !VALID_TOPOLOGIES.has(value.boardTopology) ||
     !Number.isSafeInteger(value.moveCount) ||
     value.moveCount < 0 ||
@@ -179,7 +236,7 @@ export function isStoredChatMessage(value) {
     value.points.some(
       (point) =>
         !isRecord(point) ||
-        formatBoardCoordinate(point.row, point.col, value.boardSize) !== point.label,
+        formatBoardCoordinate(point.row, point.col, dimensions) !== point.label,
     )
   ) {
     return false;
@@ -194,13 +251,19 @@ export function isStoredChatMessage(value) {
   return value.kind === "sticker" && CHAT_STICKER_IDS.has(value.stickerId);
 }
 
-export function trimStoredChatHistory(messages) {
-  const history = Array.isArray(messages)
+function normalizedStoredChatMessages(messages) {
+  return Array.isArray(messages)
     ? messages
         .filter(isStoredChatMessage)
-        .slice(-CHAT_HISTORY_LIMIT)
-        .map((message) => JSON.parse(JSON.stringify(message)))
+        .map((message) => ({
+          ...JSON.parse(JSON.stringify(message)),
+          channel: chatMessageChannel(message),
+        }))
     : [];
+}
+
+function trimNormalizedChatHistory(messages) {
+  const history = messages.slice(-CHAT_HISTORY_LIMIT);
   while (
     history.length > 0 &&
     textEncoder.encode(JSON.stringify(history)).byteLength > CHAT_HISTORY_MAX_BYTES
@@ -208,4 +271,20 @@ export function trimStoredChatHistory(messages) {
     history.shift();
   }
   return history;
+}
+
+export function trimStoredChatHistory(messages) {
+  return trimNormalizedChatHistory(normalizedStoredChatMessages(messages));
+}
+
+/** Keep the two audiences from evicting one another's retained history. */
+export function trimStoredChatHistories(messages) {
+  const normalized = normalizedStoredChatMessages(messages);
+  const history = [CHAT_CHANNEL_PLAYERS, CHAT_CHANNEL_SPECTATORS]
+    .flatMap((channel) =>
+      trimNormalizedChatHistory(
+        normalized.filter((message) => message.channel === channel),
+      )
+    );
+  return history.sort((left, right) => left.sequence - right.sequence);
 }

@@ -1,4 +1,8 @@
 import { mobiusPointFromCover } from "./mobiusTopology.js";
+import {
+  MAX_BOARD_DIMENSION,
+  MIN_BOARD_DIMENSION,
+} from "./boardDimensions.js";
 
 /**
  * Pure Go rules for periodically connected boards.
@@ -25,7 +29,7 @@ export const TOPOLOGY_MOBIUS = "mobius";
 
 // Undo snapshots contain a complete board so that captures, scoring transitions
 // and persistence restore exactly. Keeping only the latest 32 moves bounds the
-// Durable Object value size even on a dense 25x25 board.
+// Durable Object value size even on a dense maximum-size board.
 export const UNDO_HISTORY_LIMIT = 32;
 export const REPLAY_VERSION = 1;
 
@@ -61,8 +65,8 @@ function parsePointKey(key) {
   return { row, col };
 }
 
-function makeEmptyBoard(size) {
-  return Array.from({ length: size }, () => Array(size).fill(EMPTY));
+function makeEmptyBoard(width, height) {
+  return Array.from({ length: height }, () => Array(width).fill(EMPTY));
 }
 
 function copyBoard(board) {
@@ -171,22 +175,22 @@ function sameSerializableValue(left, right) {
   );
 }
 
-function copyStatePoint(point, size, label) {
+function copyStatePoint(point, width, height, label) {
   requirePlainObject(point, label);
   if (
     !Number.isInteger(point.row) ||
     !Number.isInteger(point.col) ||
     point.row < 0 ||
-    point.row >= size ||
+    point.row >= height ||
     point.col < 0 ||
-    point.col >= size
+    point.col >= width
   ) {
     throw new RangeError(`${label} must be a point on the board`);
   }
   return { row: point.row, col: point.col };
 }
 
-function copyLastMove(lastMove, size) {
+function copyLastMove(lastMove, width, height) {
   if (lastMove === null) return null;
   requirePlainObject(lastMove, "lastMove");
   if (!VALID_COLORS.has(lastMove.color)) {
@@ -199,13 +203,18 @@ function copyLastMove(lastMove, size) {
     throw new TypeError(`Unknown last-move type: ${lastMove.type}`);
   }
 
-  const point = copyStatePoint(lastMove, size, "lastMove");
+  const point = copyStatePoint(lastMove, width, height, "lastMove");
   if (!Array.isArray(lastMove.captured)) {
     throw new TypeError("lastMove.captured must be an array");
   }
   const seen = new Set();
   const captured = lastMove.captured.map((stone, index) => {
-    const copy = copyStatePoint(stone, size, `lastMove.captured[${index}]`);
+    const copy = copyStatePoint(
+      stone,
+      width,
+      height,
+      `lastMove.captured[${index}]`,
+    );
     const key = pointKey(copy.row, copy.col);
     if (seen.has(key)) {
       throw new TypeError(`lastMove.captured contains duplicate point ${key}`);
@@ -222,7 +231,7 @@ function copyLastMove(lastMove, size) {
   };
 }
 
-function copyReplayEvent(event, size, index) {
+function copyReplayEvent(event, width, height, index) {
   const label = `replay.events[${index}]`;
   requirePlainObject(event, label);
   requireOwnProperty(event, "type", label);
@@ -232,7 +241,7 @@ function copyReplayEvent(event, size, index) {
     if (!VALID_COLORS.has(event.color)) {
       throw new TypeError(`Unknown replay move color: ${event.color}`);
     }
-    const point = copyStatePoint(event, size, label);
+    const point = copyStatePoint(event, width, height, label);
     return {
       type: "play",
       color: event.color,
@@ -249,6 +258,14 @@ function copyReplayEvent(event, size, index) {
     return { type: "pass", color: event.color };
   }
 
+  if (event.type === "resign") {
+    requireOwnProperty(event, "color", label);
+    if (!VALID_COLORS.has(event.color)) {
+      throw new TypeError(`Unknown replay resignation color: ${event.color}`);
+    }
+    return { type: "resign", color: event.color };
+  }
+
   if (event.type === "resume_play") {
     requireOwnProperty(event, "nextPlayer", label);
     if (!VALID_COLORS.has(event.nextPlayer)) {
@@ -260,7 +277,7 @@ function copyReplayEvent(event, size, index) {
   }
 
   if (event.type === "toggle_dead") {
-    const point = copyStatePoint(event, size, label);
+    const point = copyStatePoint(event, width, height, label);
     return { type: "toggle_dead", row: point.row, col: point.col };
   }
 
@@ -272,12 +289,12 @@ function copyReplayEvent(event, size, index) {
   throw new TypeError(`Unknown replay event type: ${event.type}`);
 }
 
-function isPositionHashForSize(hash, size) {
+function isPositionHashForDimensions(hash, width, height) {
   if (typeof hash !== "string") return false;
   const rows = hash.split("/");
   return (
-    rows.length === size &&
-    rows.every((row) => row.length === size && /^[BW.]+$/.test(row))
+    rows.length === height &&
+    rows.every((row) => row.length === width && /^[BW.]+$/.test(row))
   );
 }
 
@@ -286,10 +303,12 @@ function isPositionHashForSize(hash, size) {
  */
 
 export class GoEngine {
+  #recordHistory = true;
   /**
    * @param {object} [options]
-   * @param {number} [options.size=19] Board width and height (9, 13 and 19 are
-   *   the intended presets, but any integer >= 3 is supported).
+   * @param {number} [options.size] Legacy square board dimension.
+   * @param {number} [options.width] Board column count.
+   * @param {number} [options.height] Board row count.
    * @param {number} [options.komi=6.5]
    * @param {'japanese'|'chinese'} [options.scoringRule='japanese']
    * @param {'cylinder'|'torus'|'mobius'} [options.topology='cylinder']
@@ -297,15 +316,35 @@ export class GoEngine {
    * @param {'black'|'white'} [options.currentPlayer='black']
    */
   constructor({
-    size = 19,
+    size,
+    width,
+    height,
     komi = 6.5,
     scoringRule = SCORING_JAPANESE,
     topology = TOPOLOGY_CYLINDER,
     initialBoard = null,
     currentPlayer = BLACK,
   } = {}) {
-    if (!Number.isInteger(size) || size < 3) {
-      throw new RangeError("Board size must be an integer of at least 3");
+    const fallbackDimension = size ?? width ?? height ?? 19;
+    const resolvedWidth = width ?? fallbackDimension;
+    const resolvedHeight = height ?? fallbackDimension;
+    if (
+      !Number.isInteger(resolvedWidth) ||
+      !Number.isInteger(resolvedHeight) ||
+      resolvedWidth < MIN_BOARD_DIMENSION ||
+      resolvedHeight < MIN_BOARD_DIMENSION ||
+      resolvedWidth > MAX_BOARD_DIMENSION ||
+      resolvedHeight > MAX_BOARD_DIMENSION
+    ) {
+      throw new RangeError(
+        `Board width and height must be integers from ${MIN_BOARD_DIMENSION} to ${MAX_BOARD_DIMENSION}`,
+      );
+    }
+    if (
+      size !== undefined &&
+      (resolvedWidth !== size || resolvedHeight !== size)
+    ) {
+      throw new RangeError("Legacy size must match both width and height");
     }
     if (!Number.isFinite(komi)) {
       throw new TypeError("Komi must be a finite number");
@@ -314,13 +353,17 @@ export class GoEngine {
       throw new TypeError(`Unknown player color: ${currentPlayer}`);
     }
 
-    this.size = size;
+    this.width = resolvedWidth;
+    this.height = resolvedHeight;
+    // `size` remains an exact square-only compatibility alias. Rectangular
+    // callers must use width/height so a single number is never ambiguous.
+    this.size = resolvedWidth === resolvedHeight ? resolvedWidth : undefined;
     this.komi = komi;
     this.scoringRule = normalizeScoringRule(scoringRule);
     this.topology = normalizeTopology(topology);
     this.board = initialBoard
       ? this.#validateAndCopyBoard(initialBoard)
-      : makeEmptyBoard(size);
+      : makeEmptyBoard(this.width, this.height);
     this.currentPlayer = currentPlayer;
     this.phase = PHASE_PLAY;
     this.consecutivePasses = 0;
@@ -359,7 +402,6 @@ export class GoEngine {
     requirePlainObject(snapshot, "State");
 
     const requiredFields = [
-      "size",
       "komi",
       "scoringRule",
       "board",
@@ -373,6 +415,23 @@ export class GoEngine {
       "positionHistory",
     ];
     for (const field of requiredFields) requireOwnProperty(snapshot, field);
+    const hasWidth = Object.prototype.hasOwnProperty.call(snapshot, "width");
+    const hasHeight = Object.prototype.hasOwnProperty.call(snapshot, "height");
+    const hasLegacySize = Object.prototype.hasOwnProperty.call(snapshot, "size");
+    if (hasWidth !== hasHeight || (!hasWidth && !hasLegacySize)) {
+      throw new TypeError(
+        "State must contain both width and height, or a legacy size",
+      );
+    }
+    if (
+      hasWidth &&
+      hasLegacySize &&
+      (snapshot.width !== snapshot.height || snapshot.size !== snapshot.width)
+    ) {
+      throw new RangeError(
+        "State size is only valid when it matches square width and height",
+      );
+    }
 
     // Check the bounded snapshot list before validating or copying any of its
     // nested boards. This makes oversized persisted input fail fast.
@@ -388,7 +447,9 @@ export class GoEngine {
     }
 
     const game = new GoEngine({
-      size: snapshot.size,
+      ...(hasWidth
+        ? { width: snapshot.width, height: snapshot.height }
+        : { size: snapshot.size }),
       komi: snapshot.komi,
       scoringRule: snapshot.scoringRule,
       // States exported before multiple topologies existed were cylindrical.
@@ -407,9 +468,15 @@ export class GoEngine {
     ) {
       throw new RangeError("consecutivePasses must be an integer from 0 to 2");
     }
+    const isResignation = snapshot.phase === PHASE_FINISHED &&
+      snapshot.result !== null &&
+      typeof snapshot.result === "object" &&
+      !Array.isArray(snapshot.result) &&
+      snapshot.result.reason === "resign";
     if (
       (snapshot.phase === PHASE_PLAY && snapshot.consecutivePasses === 2) ||
-      (snapshot.phase !== PHASE_PLAY && snapshot.consecutivePasses !== 2)
+      (isResignation && snapshot.consecutivePasses === 2) ||
+      (snapshot.phase !== PHASE_PLAY && !isResignation && snapshot.consecutivePasses !== 2)
     ) {
       throw new RangeError("consecutivePasses is inconsistent with the phase");
     }
@@ -430,7 +497,12 @@ export class GoEngine {
     }
     const deadStones = new Set();
     snapshot.deadStones.forEach((point, index) => {
-      const copy = copyStatePoint(point, game.size, `deadStones[${index}]`);
+      const copy = copyStatePoint(
+        point,
+        game.width,
+        game.height,
+        `deadStones[${index}]`,
+      );
       const key = pointKey(copy.row, copy.col);
       if (deadStones.has(key)) {
         throw new TypeError(`deadStones contains duplicate point ${key}`);
@@ -444,7 +516,11 @@ export class GoEngine {
       throw new TypeError("deadStones must be empty while play is active");
     }
 
-    const lastMove = copyLastMove(snapshot.lastMove, game.size);
+    const lastMove = copyLastMove(
+      snapshot.lastMove,
+      game.width,
+      game.height,
+    );
 
     if (
       !Array.isArray(snapshot.positionHistory) ||
@@ -454,7 +530,7 @@ export class GoEngine {
     }
     const positionHistory = new Set();
     snapshot.positionHistory.forEach((hash, index) => {
-      if (!isPositionHashForSize(hash, game.size)) {
+      if (!isPositionHashForDimensions(hash, game.width, game.height)) {
         throw new TypeError(`positionHistory[${index}] is not a valid board hash`);
       }
       if (positionHistory.has(hash)) {
@@ -477,11 +553,31 @@ export class GoEngine {
     if (snapshot.phase === PHASE_FINISHED) {
       requirePlainObject(snapshot.result, "result");
       const result = cloneSerializable(snapshot.result, "result");
-      const expectedResult = game.score(result.rule);
-      if (!sameSerializableValue(result, expectedResult)) {
-        throw new TypeError("result is inconsistent with the restored position");
+      if (result.reason === "resign") {
+        if (
+          !VALID_COLORS.has(result.winner) ||
+          !VALID_COLORS.has(result.loser) ||
+          result.winner === result.loser ||
+          result.winner !== oppositeColor(result.loser) ||
+          result.margin !== 0 ||
+          (result.resignation !== undefined && result.resignation !== true)
+        ) {
+          throw new TypeError("result is not a valid resignation result");
+        }
+        game.result = {
+          winner: result.winner,
+          loser: result.loser,
+          margin: 0,
+          reason: "resign",
+          resignation: true,
+        };
+      } else {
+        const expectedResult = game.score(result.rule);
+        if (!sameSerializableValue(result, expectedResult)) {
+          throw new TypeError("result is inconsistent with the restored position");
+        }
+        game.result = result;
       }
-      game.result = result;
     } else {
       if (snapshot.result !== null) {
         throw new TypeError("result must be null until scoring is finished");
@@ -495,11 +591,10 @@ export class GoEngine {
         : [],
     );
 
-    if (
-      Object.prototype.hasOwnProperty.call(snapshot, "replay") &&
-      Object.prototype.hasOwnProperty.call(snapshot, "topology")
-    ) {
-      game.replay = game.#copyAndValidateReplay(snapshot.replay);
+    if (Object.prototype.hasOwnProperty.call(snapshot, "replay")) {
+      game.replay = game.#copyAndValidateReplay(snapshot.replay, {
+        legacyTopology: !Object.prototype.hasOwnProperty.call(snapshot, "topology"),
+      });
     } else {
       // A state saved before replay support cannot reconstruct moves that have
       // already happened. It remains useful as a replay baseline for every
@@ -520,15 +615,25 @@ export class GoEngine {
     return GoEngine.fromState(serialized);
   }
 
+  /** Search keeps every superko position, without validating or copying UI history. */
+  static fromSearchState(state) {
+    const snapshot = typeof state === "string" ? JSON.parse(state) : state;
+    requirePlainObject(snapshot, "Search state");
+    const { undoHistory, replay, ...position } = snapshot;
+    const game = GoEngine.fromState(position);
+    game.#recordHistory = false;
+    return game;
+  }
+
   #validateAndCopyBoard(board) {
-    if (!Array.isArray(board) || board.length !== this.size) {
-      throw new RangeError(`Initial board must contain ${this.size} rows`);
+    if (!Array.isArray(board) || board.length !== this.height) {
+      throw new RangeError(`Initial board must contain ${this.height} rows`);
     }
 
     return board.map((row, rowIndex) => {
-      if (!Array.isArray(row) || row.length !== this.size) {
+      if (!Array.isArray(row) || row.length !== this.width) {
         throw new RangeError(
-          `Initial board row ${rowIndex} must contain ${this.size} points`,
+          `Initial board row ${rowIndex} must contain ${this.width} points`,
         );
       }
       return row.map((value) => {
@@ -556,7 +661,7 @@ export class GoEngine {
     };
   }
 
-  #copyAndValidateReplay(replay) {
+  #copyAndValidateReplay(replay, { legacyTopology = false } = {}) {
     requirePlainObject(replay, "replay");
     for (const field of ["version", "complete", "base", "events"]) {
       requireOwnProperty(replay, field, "replay");
@@ -576,9 +681,26 @@ export class GoEngine {
     }
 
     const base = cloneSerializable(replay.base, "replay.base");
+    // A snapshot without topology predates topology-aware saves and is
+    // cylindrical. Its replay must be interpreted under the same rules;
+    // dropping the replay here would also bypass superko-history validation.
+    if (legacyTopology) base.topology = TOPOLOGY_CYLINDER;
     const replayGame = GoEngine.fromState(base);
+    if (replay.complete && replayGame.positionHistory.size !== 1) {
+      throw new TypeError(
+        "complete replay base must contain only its starting position",
+      );
+    }
+    // Persist replay baselines in the same canonical dimension format as new
+    // top-level states, even when a restored square replay used legacy `size`
+    // alone. This keeps every newly serialized state self-describing.
+    base.width = replayGame.width;
+    base.height = replayGame.height;
+    if (replayGame.size === undefined) delete base.size;
+    else base.size = replayGame.size;
     if (
-      replayGame.size !== this.size ||
+      replayGame.width !== this.width ||
+      replayGame.height !== this.height ||
       replayGame.komi !== this.komi ||
       replayGame.scoringRule !== this.scoringRule ||
       replayGame.topology !== this.topology
@@ -587,7 +709,7 @@ export class GoEngine {
     }
 
     const events = replay.events.map((event, index) =>
-      copyReplayEvent(event, this.size, index),
+      copyReplayEvent(event, this.width, this.height, index),
     );
     events.forEach((event, index) => {
       let result;
@@ -609,8 +731,10 @@ export class GoEngine {
         result = replayGame.resumePlay(event.nextPlayer);
       } else if (event.type === "toggle_dead") {
         result = replayGame.toggleDead(event.row, event.col);
-      } else {
+      } else if (event.type === "finish_scoring") {
         result = replayGame.finishScoring(event.rule);
+      } else {
+        result = replayGame.resign(event.color);
       }
       if (!result.ok) {
         throw new TypeError(
@@ -638,6 +762,18 @@ export class GoEngine {
       }
     }
 
+    // Superko depends on every position reached before this frame, not just
+    // the visible board. A valid replay (including a partial replay with its
+    // saved baseline) must rebuild the same history as the persisted state.
+    if (
+      replayGame.positionHistory.size !== this.positionHistory.size ||
+      [...replayGame.positionHistory].some(
+        (hash) => !this.positionHistory.has(hash),
+      )
+    ) {
+      throw new TypeError("replay events do not reconstruct positionHistory");
+    }
+
     return {
       version: REPLAY_VERSION,
       complete: replay.complete,
@@ -647,6 +783,7 @@ export class GoEngine {
   }
 
   #recordReplayMove(move) {
+    if (!this.#recordHistory) return;
     if (move.type === "play") {
       this.replay.events.push({
         type: "play",
@@ -689,6 +826,7 @@ export class GoEngine {
   }
 
   #undoSnapshot() {
+    if (!this.#recordHistory) return null;
     return {
       board: this.getBoard(),
       currentPlayer: this.currentPlayer,
@@ -696,7 +834,7 @@ export class GoEngine {
       consecutivePasses: this.consecutivePasses,
       captures: { ...this.captures },
       deadStones: [...this.deadStones].map(parsePointKey),
-      lastMove: copyLastMove(this.lastMove, this.size),
+      lastMove: copyLastMove(this.lastMove, this.width, this.height),
       result:
         this.result === null
           ? null
@@ -713,7 +851,11 @@ export class GoEngine {
     this.deadStones = new Set(
       snapshot.deadStones.map(({ row, col }) => pointKey(row, col)),
     );
-    this.lastMove = copyLastMove(snapshot.lastMove, this.size);
+    this.lastMove = copyLastMove(
+      snapshot.lastMove,
+      this.width,
+      this.height,
+    );
     this.result =
       snapshot.result === null
         ? null
@@ -752,7 +894,7 @@ export class GoEngine {
       requireOwnProperty(entry, "move", `undoHistory[${index}]`);
       requireOwnProperty(entry, "before", `undoHistory[${index}]`);
 
-      const move = copyLastMove(entry.move, this.size);
+      const move = copyLastMove(entry.move, this.width, this.height);
       if (move === null) {
         throw new TypeError(`undoHistory[${index}].move must not be null`);
       }
@@ -831,7 +973,11 @@ export class GoEngine {
         );
       }
 
-      const lastMove = copyLastMove(before.lastMove, this.size);
+      const lastMove = copyLastMove(
+        before.lastMove,
+        this.width,
+        this.height,
+      );
       if (move.color !== before.currentPlayer) {
         throw new TypeError(
           `undoHistory[${index}].move color must match the player to move`,
@@ -938,8 +1084,9 @@ export class GoEngine {
   }
 
   #recordUndo(move, before) {
+    if (!this.#recordHistory) return;
     this.undoHistory.push({
-      move: copyLastMove(move, this.size),
+      move: copyLastMove(move, this.width, this.height),
       before,
     });
     if (this.undoHistory.length > UNDO_HISTORY_LIMIT) {
@@ -955,9 +1102,9 @@ export class GoEngine {
       Number.isInteger(row) &&
       Number.isInteger(col) &&
       row >= 0 &&
-      row < this.size &&
+      row < this.height &&
       col >= 0 &&
-      col < this.size
+      col < this.width
     );
   }
 
@@ -983,21 +1130,26 @@ export class GoEngine {
 
     const candidates = this.topology === TOPOLOGY_MOBIUS
       ? [col - 1, col + 1].map((coverColumn) => {
-          const point = mobiusPointFromCover(row, coverColumn, this.size);
+          const point = mobiusPointFromCover(
+            row,
+            coverColumn,
+            this.width,
+            this.height,
+          );
           return { row: point.row, col: point.col };
         })
       : [
-          { row, col: (col - 1 + this.size) % this.size },
-          { row, col: (col + 1) % this.size },
+          { row, col: (col - 1 + this.width) % this.width },
+          { row, col: (col + 1) % this.width },
         ];
     if (this.topology === TOPOLOGY_TORUS) {
       candidates.push(
-        { row: (row - 1 + this.size) % this.size, col },
-        { row: (row + 1) % this.size, col },
+        { row: (row - 1 + this.height) % this.height, col },
+        { row: (row + 1) % this.height, col },
       );
     } else {
       if (row > 0) candidates.push({ row: row - 1, col });
-      if (row < this.size - 1) candidates.push({ row: row + 1, col });
+      if (row < this.height - 1) candidates.push({ row: row + 1, col });
     }
 
     // The minimum board size is three, but keeping this deduplication makes the
@@ -1149,7 +1301,12 @@ export class GoEngine {
     const color = this.currentPlayer;
     this.consecutivePasses += 1;
     this.currentPlayer = oppositeColor(color);
-    if (this.consecutivePasses >= 2) this.phase = PHASE_SCORING;
+    if (this.consecutivePasses >= 2) {
+      this.phase = PHASE_SCORING;
+      for (const stone of this.suggestDeadStones()) {
+        this.deadStones.add(pointKey(stone.row, stone.col));
+      }
+    }
     this.lastMove = { type: "pass", color };
     this.#recordUndo(this.lastMove, undoSnapshot);
     this.#recordReplayMove(this.lastMove);
@@ -1168,9 +1325,39 @@ export class GoEngine {
     return this.pass();
   }
 
+  /** End an active game immediately because one color resigns. */
+  resign(color = this.currentPlayer) {
+    if (this.phase !== PHASE_PLAY) {
+      return this.#failure(MOVE_ERRORS.GAME_NOT_PLAYING);
+    }
+    if (!VALID_COLORS.has(color)) {
+      throw new TypeError(`Unknown player color: ${color}`);
+    }
+
+    const winner = oppositeColor(color);
+    this.phase = PHASE_FINISHED;
+    this.result = {
+      winner,
+      loser: color,
+      margin: 0,
+      reason: "resign",
+      resignation: true,
+    };
+    if (this.#recordHistory) this.replay.events.push({ type: "resign", color });
+    return {
+      ok: true,
+      type: "resign",
+      color,
+      ...this.result,
+      phase: this.phase,
+    };
+  }
+
   /** Whether at least one successful play or pass can be taken back. */
   canUndo() {
-    return this.undoHistory.length > 0;
+    return !(
+      this.phase === PHASE_FINISHED && this.result?.reason === "resign"
+    ) && this.undoHistory.length > 0;
   }
 
   /**
@@ -1194,7 +1381,7 @@ export class GoEngine {
     return {
       ok: true,
       type: "undo",
-      move: copyLastMove(entry.move, this.size),
+      move: copyLastMove(entry.move, this.width, this.height),
       currentPlayer: this.currentPlayer,
       phase: this.phase,
     };
@@ -1225,7 +1412,7 @@ export class GoEngine {
       else this.deadStones.delete(key);
     }
 
-    this.replay.events.push({ type: "toggle_dead", row, col });
+    if (this.#recordHistory) this.replay.events.push({ type: "toggle_dead", row, col });
 
     return {
       ok: true,
@@ -1238,6 +1425,98 @@ export class GoEngine {
 
   toggleDeadGroup(row, col) {
     return this.toggleDead(row, col);
+  }
+
+  /**
+   * Return only groups whose death is already forced without reading intent
+   * into an unfinished position.
+   *
+   * The deliberately narrow proof is:
+   * - the group has exactly one liberty;
+   * - even granting the group the next move at that liberty (and ignoring
+   *   superko in its favour), the move is suicide; and
+   * - the opponent can legally fill that liberty and capture the group now.
+   *
+   * This catches enclosed one-eye groups while leaving ordinary atari,
+   * capturing races, ko and seki for the players to decide. The result is a
+   * defensive copy and calling the method never changes game state.
+   *
+   * @returns {Point[]}
+   */
+  suggestDeadStones() {
+    const visited = new Set();
+    const suggested = [];
+
+    for (let row = 0; row < this.height; row += 1) {
+      for (let col = 0; col < this.width; col += 1) {
+        const color = this.board[row][col];
+        const startKey = pointKey(row, col);
+        if (color === EMPTY || visited.has(startKey)) continue;
+
+        const group = this.#collectGroup(row, col);
+        for (const stone of group.stones) {
+          visited.add(pointKey(stone.row, stone.col));
+        }
+        if (group.liberties.length !== 1) continue;
+
+        const liberty = group.liberties[0];
+        // Ignore superko for the defender: allowing an otherwise forbidden
+        // defence can only make this automatic suggestion more conservative.
+        const defence = this.#simulatePlacement(
+          liberty.row,
+          liberty.col,
+          color,
+          { checkSuperko: false },
+        );
+        if (defence.ok) continue;
+
+        const capture = this.#simulatePlacement(
+          liberty.row,
+          liberty.col,
+          oppositeColor(color),
+          { checkSuperko: true },
+        );
+        if (!capture.ok) continue;
+
+        suggested.push(...group.stones.map((stone) => ({ ...stone })));
+      }
+    }
+
+    return suggested;
+  }
+
+  #simulatePlacement(row, col, color, { checkSuperko }) {
+    if (!this.#validPoint(row, col) || this.board[row][col] !== EMPTY) {
+      return { ok: false };
+    }
+
+    const board = copyBoard(this.board);
+    const opponent = oppositeColor(color);
+    board[row][col] = color;
+
+    const checkedOpponentStones = new Set();
+    for (const neighbour of this.neighbors(row, col)) {
+      if (board[neighbour.row][neighbour.col] !== opponent) continue;
+      const neighbourKey = pointKey(neighbour.row, neighbour.col);
+      if (checkedOpponentStones.has(neighbourKey)) continue;
+
+      const group = this.#collectGroup(neighbour.row, neighbour.col, board);
+      for (const stone of group.stones) {
+        checkedOpponentStones.add(pointKey(stone.row, stone.col));
+      }
+      if (group.liberties.length !== 0) continue;
+      for (const stone of group.stones) {
+        board[stone.row][stone.col] = EMPTY;
+      }
+    }
+
+    if (this.#collectGroup(row, col, board).liberties.length === 0) {
+      return { ok: false };
+    }
+    if (checkSuperko && this.positionHistory.has(this.#positionHash(board))) {
+      return { ok: false };
+    }
+    return { ok: true };
   }
 
   isMarkedDead(row, col) {
@@ -1266,8 +1545,8 @@ export class GoEngine {
     const neutralPoints = [];
     const regions = [];
 
-    for (let row = 0; row < this.size; row += 1) {
-      for (let col = 0; col < this.size; col += 1) {
+    for (let row = 0; row < this.height; row += 1) {
+      for (let col = 0; col < this.width; col += 1) {
         const startKey = pointKey(row, col);
         if (board[row][col] !== EMPTY || visited.has(startKey)) continue;
 
@@ -1305,7 +1584,8 @@ export class GoEngine {
   /**
    * Calculate a score without mutating the game.
    *
-   * Japanese: surrounded territory + prisoners + marked-dead prisoners.
+   * Simplified territory scoring (`japanese` wire value): surrounded territory
+   * + prisoners + marked-dead prisoners; seki eyes are not excluded.
    * Chinese: living stones + surrounded territory. White receives komi in
    * either rule set.
    */
@@ -1361,7 +1641,7 @@ export class GoEngine {
     }
     this.result = this.score(rule);
     this.phase = PHASE_FINISHED;
-    this.replay.events.push({
+    if (this.#recordHistory) this.replay.events.push({
       type: "finish_scoring",
       rule: this.result.rule,
     });
@@ -1381,14 +1661,16 @@ export class GoEngine {
     this.consecutivePasses = 0;
     this.deadStones.clear();
     this.result = null;
-    this.replay.events.push({ type: "resume_play", nextPlayer });
+    if (this.#recordHistory) this.replay.events.push({ type: "resume_play", nextPlayer });
     return { ok: true, phase: this.phase, nextPlayer: this.currentPlayer };
   }
 
   /** Small serializable state snapshot for UI stores and multiplayer messages. */
   getState() {
     return {
-      size: this.size,
+      ...(this.size === undefined ? {} : { size: this.size }),
+      width: this.width,
+      height: this.height,
       komi: this.komi,
       scoringRule: this.scoringRule,
       topology: this.topology,
@@ -1398,7 +1680,7 @@ export class GoEngine {
       consecutivePasses: this.consecutivePasses,
       captures: { ...this.captures },
       deadStones: [...this.deadStones].map(parsePointKey),
-      lastMove: copyLastMove(this.lastMove, this.size),
+      lastMove: copyLastMove(this.lastMove, this.width, this.height),
       result:
         this.result === null
           ? null
@@ -1421,6 +1703,14 @@ export class GoEngine {
     };
     if (includeReplay) state.replay = this.getReplayState();
     return state;
+  }
+
+  /** Compact search input; positionHistory is never truncated or discarded. */
+  exportSearchState() {
+    return {
+      ...this.getState(),
+      positionHistory: [...this.positionHistory],
+    };
   }
 
   /** Complete, compact move record independent of the bounded undo window. */

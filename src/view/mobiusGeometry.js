@@ -106,6 +106,95 @@ export function mobiusGridFrame({
 }
 
 /**
+ * Choose the widest non-self-intersecting strip that the circular embedding
+ * can safely show.  A mathematically perfect square grid is impossible for a
+ * square Mobius board in this embedding (the strip would have to be wider than
+ * its major radius), but this makes rectangular boards respond to their real
+ * width/height ratio and gets as close as the embedding safely allows.
+ */
+export function mobiusBoardLayout({ width, height, majorRadius }) {
+  assertGridDimension(width, "width");
+  assertGridDimension(height, "height");
+  assertPositiveFinite(majorRadius, "majorRadius");
+
+  const idealGridHalfWidth =
+    (Math.PI * majorRadius * (height - 1)) / width;
+  const gridHalfWidth = Math.min(idealGridHalfWidth, majorRadius * 0.82);
+  const surfaceHalfWidth = Math.min(
+    majorRadius * 0.9,
+    gridHalfWidth + majorRadius * 0.08,
+  );
+
+  return {
+    idealGridHalfWidth,
+    gridHalfWidth,
+    surfaceHalfWidth,
+    widthLimited: idealGridHalfWidth > gridHalfWidth,
+  };
+}
+
+/** Return the shortest real 3D edge between logical neighbouring points. */
+export function minimumMobiusNeighborDistance({
+  width,
+  height,
+  majorRadius,
+  halfWidth,
+}) {
+  assertGridDimension(width, "width");
+  assertGridDimension(height, "height");
+  assertPositiveFinite(majorRadius, "majorRadius");
+  assertPositiveFinite(halfWidth, "halfWidth");
+
+  let minimum = Number.POSITIVE_INFINITY;
+  const frames = Array.from({ length: height }, (_, row) =>
+    Array.from({ length: width }, (_, col) => mobiusGridFrame({
+      row,
+      col,
+      width,
+      height,
+      majorRadius,
+      halfWidth,
+    })),
+  );
+  const include = (left, right) => {
+    const distance = left.position.distanceTo(right.position);
+    if (distance > 1e-9) minimum = Math.min(minimum, distance);
+  };
+
+  for (let row = 0; row < height; row += 1) {
+    for (let col = 0; col < width; col += 1) {
+      if (row + 1 < height) include(frames[row][col], frames[row + 1][col]);
+      if (col + 1 < width) include(frames[row][col], frames[row][col + 1]);
+      else include(frames[row][col], frames[height - 1 - row][0]);
+    }
+  }
+  return minimum;
+}
+
+/**
+ * Convert the surface mesh UV into a canonical board point.  At the duplicated
+ * u=1 seam the row must be mirrored, matching P(2 PI, v) = P(0, -v).
+ */
+export function mobiusGridPointFromUv({ u, v, width, height }) {
+  assertGridDimension(width, "width");
+  assertGridDimension(height, "height");
+  if (!Number.isFinite(u) || !Number.isFinite(v)) return null;
+
+  const clampedU = THREE.MathUtils.clamp(u, 0, 1);
+  const clampedV = THREE.MathUtils.clamp(v, 0, 1);
+  const rawColumn = Math.round(clampedU * width);
+  const crossesSeam = rawColumn >= width;
+  return {
+    row: THREE.MathUtils.clamp(
+      Math.round((crossesSeam ? clampedV : 1 - clampedV) * (height - 1)),
+      0,
+      height - 1,
+    ),
+    col: crossesSeam ? 0 : rawColumn,
+  };
+}
+
+/**
  * A smooth render mesh for the rectangular parameter domain. The two u edges
  * occupy the same spatial seam in reversed v order. Duplicate seam vertices
  * are intentional: they preserve the unavoidable normal/UV reversal while a

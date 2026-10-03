@@ -5,6 +5,13 @@ import {
   TOPOLOGY_TORUS,
   WHITE,
 } from "../game/goEngine.js";
+import {
+  normalizeSearchVariation,
+  SEARCH_CANDIDATE_LIMIT,
+  SEARCH_VARIATION_CANDIDATE_LIMIT,
+  SEARCH_VARIATION_LIMIT,
+  searchMoveKey,
+} from "./searchStats.js";
 
 export const MCTS_DIFFICULTIES = Object.freeze({
   easy: Object.freeze({
@@ -79,18 +86,22 @@ function copyMove(move) {
     : { type: "play", row: move.row, col: move.col };
 }
 
+function boardDimensions(value) {
+  const width = value.width ?? value.size;
+  const height = value.height ?? value.size;
+  return { width, height };
+}
+
 function normalizeState(gameOrState) {
   if (gameOrState instanceof GoEngine) {
-    return gameOrState.exportState({ includeReplay: false });
+    return gameOrState.exportSearchState();
   }
-  if (gameOrState && typeof gameOrState.exportState === "function") {
-    return GoEngine.fromState(
-      gameOrState.exportState({ includeReplay: false }),
-    ).exportState({
-      includeReplay: false,
-    });
+  if (gameOrState && typeof gameOrState.exportSearchState === "function") {
+    return GoEngine.fromSearchState(
+      gameOrState.exportSearchState(),
+    ).exportSearchState();
   }
-  return GoEngine.fromState(gameOrState).exportState({ includeReplay: false });
+  return GoEngine.fromSearchState(gameOrState).exportSearchState();
 }
 
 function normalizeDifficulty(value = "easy") {
@@ -108,12 +119,12 @@ function positiveInteger(value, label) {
   return value;
 }
 
-function normalizeRootPolicy(value, size) {
+function normalizeRootPolicy(value, width, height) {
   if (value == null) return null;
   if (!Array.isArray(value) && !ArrayBuffer.isView(value)) {
     throw new TypeError("rootPolicy must be an array of probabilities");
   }
-  const expectedLength = size * size + 1;
+  const expectedLength = width * height + 1;
   if (value.length !== expectedLength) {
     throw new RangeError(`rootPolicy must contain ${expectedLength} values`);
   }
@@ -138,7 +149,7 @@ function normalizeRootPolicy(value, size) {
   return policy;
 }
 
-function normalizeOptions(options, size) {
+function normalizeOptions(options, width, height) {
   const difficulty = normalizeDifficulty(options.difficulty);
   const preset = MCTS_DIFFICULTIES[difficulty];
   const iterations = positiveInteger(
@@ -207,7 +218,7 @@ function normalizeOptions(options, size) {
     signal: options.signal,
     shouldCancel: options.shouldCancel,
     onProgress: options.onProgress,
-    rootPolicy: normalizeRootPolicy(options.rootPolicy, size),
+    rootPolicy: normalizeRootPolicy(options.rootPolicy, width, height),
   };
 }
 
@@ -229,8 +240,9 @@ function shuffle(values, random) {
 
 function emptyPointMoves(state) {
   const moves = [];
-  for (let row = 0; row < state.size; row += 1) {
-    for (let col = 0; col < state.size; col += 1) {
+  const { width, height } = boardDimensions(state);
+  for (let row = 0; row < height; row += 1) {
+    for (let col = 0; col < width; col += 1) {
       if (state.board[row][col] === null) {
         moves.push({ type: "play", row, col });
       }
@@ -249,14 +261,14 @@ function includesPoint(points, row, col) {
 
 /**
  * Build each string once and map all of its stones back to the shared record.
- * GoEngine owns the topology, so groups crossing columns 0/size-1 are handled
+ * GoEngine owns the topology, so groups crossing columns 0/width-1 are handled
  * identically here and in the rules.
  */
 function groupMap(game) {
   const byStone = new Map();
   const groups = [];
-  for (let row = 0; row < game.size; row += 1) {
-    for (let col = 0; col < game.size; col += 1) {
+  for (let row = 0; row < game.height; row += 1) {
+    for (let col = 0; col < game.width; col += 1) {
       if (game.get(row, col) === null || byStone.has(pointKey(row, col))) {
         continue;
       }
@@ -333,7 +345,7 @@ function rawMoveAnalysis(game, groups, row, col, random) {
   const fragileResult = resultingLiberties.size <= 1;
   const selfAtari = capturedStones === 0 && fragileResult;
   const connections = Math.max(0, friendly.size - 1);
-  const openingLine = Math.min(3, Math.max(1, Math.floor(game.size / 3)));
+  const openingLine = Math.min(3, Math.max(1, Math.floor(game.height / 3)));
 
   let score = 0;
   let tacticalPriority = 0;
@@ -356,7 +368,7 @@ function rawMoveAnalysis(game, groups, row, col, random) {
   // Every torus point is middle-board, so applying that preference would
   // invent a top and bottom edge that the rules do not have.
   if (game.topology !== TOPOLOGY_TORUS) {
-    const edgeDistance = Math.min(row, game.size - 1 - row);
+    const edgeDistance = Math.min(row, game.height - 1 - row);
     score -= Math.abs(edgeDistance - openingLine) * 2;
   }
 
@@ -392,7 +404,7 @@ function refineFragileTactic(game, analysis) {
     return analysis;
   }
 
-  const trial = GoEngine.fromState(game.exportState({ includeReplay: false }));
+  const trial = GoEngine.fromSearchState(game.exportSearchState());
   const played = trial.play(analysis.move.row, analysis.move.col);
   if (!played.ok) return analysis;
 
@@ -425,7 +437,7 @@ function refineFragileTactic(game, analysis) {
   return analysis;
 }
 
-function applyRootPolicy(entries, rootPolicy, size) {
+function applyRootPolicy(entries, rootPolicy, width, height) {
   if (!rootPolicy || entries.length === 0) return;
   let maximum = 0;
   for (const probability of rootPolicy) maximum = Math.max(maximum, probability);
@@ -434,8 +446,8 @@ function applyRootPolicy(entries, rootPolicy, size) {
   for (const entry of entries) {
     const index =
       entry.move.type === "pass"
-        ? size * size
-        : entry.move.row * size + entry.move.col;
+        ? width * height
+        : entry.move.row * width + entry.move.col;
     const probability = Math.max(1e-8, rootPolicy[index]);
     const rawBonus =
       NEURAL_POLICY_BASE +
@@ -461,14 +473,14 @@ function rankedMoveEntries(
   const game =
     gameOrState instanceof GoEngine
       ? gameOrState
-      : GoEngine.fromState(gameOrState);
+      : GoEngine.fromSearchState(gameOrState);
   if (game.phase !== PHASE_PLAY) return [];
   const groups = groupMap(game);
   const entries = [];
   let emptyCount = 0;
 
-  for (let row = 0; row < game.size; row += 1) {
-    for (let col = 0; col < game.size; col += 1) {
+  for (let row = 0; row < game.height; row += 1) {
+    for (let col = 0; col < game.width; col += 1) {
       if (game.get(row, col) !== null) continue;
       emptyCount += 1;
       entries.push(rawMoveAnalysis(game, groups, row, col, settings.random));
@@ -476,7 +488,7 @@ function rankedMoveEntries(
     cancellationCheck(settings);
   }
 
-  applyRootPolicy(entries, rootPolicy, game.size);
+  applyRootPolicy(entries, rootPolicy, game.width, game.height);
   entries.sort((left, right) => right.score - left.score);
   if (refineTactics) {
     // Exact one-ply reading clones the superko history, so reserve it for the
@@ -508,7 +520,7 @@ function rankedMoveEntries(
   }
 
   if (includePass) {
-    const filledRatio = 1 - emptyCount / (game.size * game.size);
+    const filledRatio = 1 - emptyCount / (game.width * game.height);
     const passEntry = {
       move: PASS_MOVE,
       score:
@@ -523,7 +535,7 @@ function rankedMoveEntries(
       selfAtari: false,
       ownEye: false,
     };
-    applyRootPolicy([passEntry], rootPolicy, game.size);
+    applyRootPolicy([passEntry], rootPolicy, game.width, game.height);
     selected.push(passEntry);
     // Passing must compete on merit with ordinary plays. Keeping it at the end
     // would make progressive widening hide pass until every placement had been
@@ -561,11 +573,11 @@ export function listLegalMoves(gameOrState, { includePass = true } = {}) {
   const moves = [];
 
   for (const move of emptyPointMoves(state)) {
-    const trial = GoEngine.fromState(state);
+    const trial = GoEngine.fromSearchState(state);
     if (applyMove(trial, move).ok) moves.push(copyMove(move));
   }
   if (includePass) {
-    const trial = GoEngine.fromState(state);
+    const trial = GoEngine.fromSearchState(state);
     if (trial.pass().ok) moves.push({ type: "pass" });
   }
   return moves;
@@ -626,7 +638,7 @@ function expand(node, settings) {
   );
   if (node.children.length >= allowedChildren) return null;
 
-  const game = GoEngine.fromState(node.state);
+  const game = GoEngine.fromSearchState(node.state);
   while (node.untriedMoves.length > 0) {
     cancellationCheck(settings);
     const analysis = node.untriedMoves.shift();
@@ -634,7 +646,7 @@ function expand(node, settings) {
     if (!result.ok) continue;
 
     const child = createNode(
-      game.exportState({ includeReplay: false }),
+      game.exportSearchState(),
       copyMove(analysis.move),
       analysis,
     );
@@ -683,7 +695,7 @@ function selectChild(
 }
 
 function rolloutPassProbability(game, emptyCount) {
-  const filledRatio = 1 - emptyCount / (game.size * game.size);
+  const filledRatio = 1 - emptyCount / (game.width * game.height);
   if (game.consecutivePasses === 1) return 0.08 + filledRatio * 0.55;
   return 0.002 + filledRatio * 0.08;
 }
@@ -749,8 +761,8 @@ function reliableTerritory(game) {
   const visited = new Set();
   const territory = { [BLACK]: 0, [WHITE]: 0 };
 
-  for (let row = 0; row < game.size; row += 1) {
-    for (let col = 0; col < game.size; col += 1) {
+  for (let row = 0; row < game.height; row += 1) {
+    for (let col = 0; col < game.width; col += 1) {
       const startKey = pointKey(row, col);
       if (game.get(row, col) !== null || visited.has(startKey)) continue;
       const pending = [{ row, col }];
@@ -777,7 +789,8 @@ function reliableTerritory(game) {
 
       // A huge open region touching one colour is influence, not settled land.
       // Count only compact, well-enclosed regions as reliable territory.
-      const compact = points.length <= Math.max(4, game.size);
+      const compact =
+        points.length <= Math.max(4, Math.sqrt(game.width * game.height));
       const enclosed = boundaryEdges >= Math.max(3, points.length);
       if (borders.size === 1 && compact && enclosed) {
         territory[[...borders][0]] += points.length;
@@ -812,12 +825,12 @@ function evaluate(game, rootPlayer) {
       (stones[rootPlayer] - stones[opponent]) * 0.12;
   }
   // Smooth bounded values preserve useful information from unfinished lines.
-  const scale = Math.max(4, game.size * 0.75);
+  const scale = Math.max(4, Math.sqrt(game.width * game.height) * 0.75);
   return 0.5 + 0.5 * Math.tanh(difference / scale);
 }
 
 function rollout(state, rootPlayer, settings) {
-  const game = GoEngine.fromState(state);
+  const game = GoEngine.fromSearchState(state);
   for (let ply = 0; ply < settings.rolloutLimit; ply += 1) {
     cancellationCheck(settings);
     if (game.phase !== PHASE_PLAY) break;
@@ -857,7 +870,7 @@ function runIteration(root, rootPlayer, settings) {
 }
 
 function fallbackMove(state, settings) {
-  const game = GoEngine.fromState(state);
+  const game = GoEngine.fromSearchState(state);
   const ranked = rankedMoveEntries(
     game,
     settings,
@@ -911,12 +924,69 @@ function chooseMostVisited(root, fallback) {
   return { move: copyMove(children[0].move), child: children[0] };
 }
 
+function meanValue(node) {
+  return node.visits > 0 ? node.value / node.visits : 0.5;
+}
+
+function compareReliableChildren(parent, left, right, rootPlayer) {
+  if (right.visits !== left.visits) return right.visits - left.visits;
+  const leftMean = meanValue(left);
+  const rightMean = meanValue(right);
+  if (leftMean !== rightMean) {
+    // Values are stored from the root player's perspective. At an opponent
+    // node the most credible continuation is therefore the lower root value.
+    return parent.state.currentPlayer === rootPlayer
+      ? rightMean - leftMean
+      : leftMean - rightMean;
+  }
+  return String(searchMoveKey(left.move)).localeCompare(
+    String(searchMoveKey(right.move)),
+  );
+}
+
+function principalVariation(firstChild, rootPlayer) {
+  const moves = [copyMove(firstChild.move)];
+  let node = firstChild;
+  while (
+    moves.length < SEARCH_VARIATION_LIMIT &&
+    Array.isArray(node.children) &&
+    node.children.length > 0
+  ) {
+    const [next] = [...node.children].sort((left, right) =>
+      compareReliableChildren(node, left, right, rootPlayer)
+    );
+    if (!next?.move) break;
+    moves.push(copyMove(next.move));
+    node = next;
+  }
+  return normalizeSearchVariation(
+    firstChild.move,
+    moves,
+    SEARCH_VARIATION_LIMIT,
+  );
+}
+
+function rankedRootChildren(root) {
+  // Preserve the historical stats.candidates contract: every expanded root
+  // child, in stable descending visit order. Wire-level clipping happens in
+  // katagoWorkerRuntime rather than changing the direct MCTS API.
+  return [...root.children].sort((left, right) => right.visits - left.visits);
+}
+
+function variationRootChildren(ranked, selected) {
+  const candidates = [selected, ...ranked].filter(Boolean);
+  return new Set(
+    [...new Set(candidates)].slice(0, SEARCH_VARIATION_CANDIDATE_LIMIT),
+  );
+}
+
 function createSearch(gameOrState, options) {
   const state = normalizeState(gameOrState);
   if (state.phase !== PHASE_PLAY) {
     throw new RangeError("The AI can only choose a move while play is active");
   }
-  const settings = normalizeOptions(options, state.size);
+  const { width, height } = boardDimensions(state);
+  const settings = normalizeOptions(options, width, height);
   cancellationCheck(settings);
   const fallback = fallbackMove(state, settings);
   return {
@@ -954,19 +1024,25 @@ function finishSearch(search) {
   const priorMass = search.settings.rootPolicy
     ? rootPriorMass(search.root)
     : 0;
-  const candidates = [...search.root.children]
-    .sort((left, right) => right.visits - left.visits)
-    .map((child) => ({
-      move: copyMove(child.move),
-      visits: child.visits,
-      winRate: child.visits === 0 ? 0.5 : child.value / child.visits,
-      resultingLiberties: child.resultingLiberties,
-      snapbackLoss: child.snapbackLoss,
-      neuralPrior: child.neuralPrior,
-      rootPriorShare:
-        priorMass > 0 ? child.neuralPrior / priorMass : 0,
-      rootPuctBonus: rootPuctBonus(search.root, child, priorMass),
-    }));
+  const reportedChildren = rankedRootChildren(search.root);
+  const variationChildren = variationRootChildren(
+    reportedChildren,
+    selected.child,
+  );
+  const candidates = reportedChildren.map((child) => ({
+    move: copyMove(child.move),
+    visits: child.visits,
+    winRate: child.visits === 0 ? 0.5 : child.value / child.visits,
+    resultingLiberties: child.resultingLiberties,
+    snapbackLoss: child.snapbackLoss,
+    neuralPrior: child.neuralPrior,
+    rootPriorShare:
+      priorMass > 0 ? child.neuralPrior / priorMass : 0,
+    rootPuctBonus: rootPuctBonus(search.root, child, priorMass),
+    ...(variationChildren.has(child)
+      ? { variation: principalVariation(child, search.rootPlayer) }
+      : {}),
+  }));
 
   return {
     move: selected.move,
@@ -982,6 +1058,10 @@ function finishSearch(search) {
           : 0.5,
       rootPolicyUsed: search.settings.rootPolicy !== null,
       selectedNeuralPrior: selected.child?.neuralPrior ?? 0,
+      candidateCount: search.root.children.length,
+      wireCandidateLimit: SEARCH_CANDIDATE_LIMIT,
+      variationCandidateLimit: SEARCH_VARIATION_CANDIDATE_LIMIT,
+      variationLimit: SEARCH_VARIATION_LIMIT,
       candidates,
     },
   };

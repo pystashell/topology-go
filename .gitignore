@@ -4,9 +4,11 @@ dist/
 .wrangler/
 .codex/
 .agents/
+.idea/
 .env
 .env.*
 !.env.example
 .dev.vars
 .dev.vars.*
 *.log
+project_story.md

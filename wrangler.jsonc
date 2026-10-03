@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "bamboo-baduk",
+  "name": "topology-go",
   "main": "./worker/index.js",
   "compatibility_date": "2026-07-01",
   "workers_dev": true,
@@ -15,6 +15,10 @@
       {
         "name": "BADUK_ROOMS",
         "class_name": "BadukRoom"
+      },
+      {
+        "name": "BADUK_ROOM_INDEX",
+        "class_name": "BadukLobby"
       }
     ]
   },
@@ -22,6 +26,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["BadukRoom"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["BadukLobby"]
     }
   ],
   "observability": {

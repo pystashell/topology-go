@@ -1,5 +1,18 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import {
+  pointerGestureRoles,
+  preventBoardContextMenu,
+} from "./pointerGestures.js";
+import { translateText } from "../i18n.js";
+import { createAnalysisVariationMarker } from "./analysisVariationMarkers.js";
+import {
+  createTerritoryMarkerLayer,
+  disposeTerritoryMarkerLayer,
+  territoryPointsForPosition,
+  territoryPointsSignature,
+  updateTerritoryMarkerLayer,
+} from "./territoryMarkers.js";
 
 const ARC_ANGLE = (Math.PI * 2) / 3;
 const CELL = 1;
@@ -92,18 +105,28 @@ class ArcCurve extends THREE.Curve {
 }
 
 export class ArcBoard {
-  constructor(container, { size = 19, onPoint, onHover } = {}) {
+  constructor(container, { size, width, height, onPoint, onHover } = {}) {
+    const fallbackDimension = size ?? width ?? height ?? 19;
+    const boardWidth = width ?? fallbackDimension;
+    const boardHeight = height ?? fallbackDimension;
     this.container = container;
     this.onPoint = onPoint;
     this.onHover = onHover;
-    this.size = size;
+    this.width = boardWidth;
+    this.height = boardHeight;
+    this.size = boardWidth === boardHeight ? boardWidth : undefined;
     this.board = [];
     this.phase = "play";
     this.currentPlayer = "black";
     this.lastMove = null;
     this.analysisMove = null;
+    this.analysisCandidates = [];
+    this.analysisVariation = [];
     this.referencePoint = null;
     this.deadKeys = new Set();
+    this.territoryPoints = [];
+    this.territorySignature = "";
+    this.territoryGroup = null;
     this.offsetColumns = 0;
     this.pointerState = null;
     this.activePointers = new Set();
@@ -131,6 +154,12 @@ export class ArcBoard {
     this.renderer.toneMappingExposure = 1.08;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      translateText(
+        "竹筒围棋的弧面视图。左键点击落子；右键或触屏单指横向拖动棋盘，滚轮或双指缩放。",
+      ),
+    );
     this.container.appendChild(this.renderer.domElement);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -168,6 +197,7 @@ export class ArcBoard {
     this.onPointerMove = (event) => this.handlePointerMove(event);
     this.onPointerUp = (event) => this.handlePointerUp(event);
     this.onPointerCancel = (event) => this.handlePointerCancel(event);
+    this.onContextMenu = (event) => preventBoardContextMenu(event);
     this.onPointerLeave = () => {
       if (!this.pointerState) this.setHoveredPoint(null);
     };
@@ -178,29 +208,43 @@ export class ArcBoard {
     canvas.addEventListener("pointerup", this.onPointerUp);
     canvas.addEventListener("pointercancel", this.onPointerCancel);
     canvas.addEventListener("pointerleave", this.onPointerLeave);
+    canvas.addEventListener("contextmenu", this.onContextMenu);
 
-    this.rebuild(size);
+    this.rebuild(boardWidth, boardHeight);
     this.animate();
   }
 
-  rebuild(size) {
-    this.size = size;
+  refreshLanguage() {
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      translateText(
+        "竹筒围棋的弧面视图。左键点击落子；右键或触屏单指横向拖动棋盘，滚轮或双指缩放。",
+      ),
+    );
+  }
+
+  rebuild(width, height = width) {
+    this.width = width;
+    this.height = height;
+    this.size = width === height ? width : undefined;
     this.arcAngle = ARC_ANGLE;
     this.thetaStart = -this.arcAngle / 2;
-    this.thetaStep = this.arcAngle / size;
-    this.radius = (size * CELL) / this.arcAngle;
-    this.gridHeight = (size - 1) * CELL;
+    this.thetaStep = this.arcAngle / width;
+    this.radius = (width * CELL) / this.arcAngle;
+    this.gridHeight = (height - 1) * CELL;
     this.edgeMargin = 0.52;
     this.surfaceHeight = this.gridHeight + this.edgeMargin * 2;
-    this.radialSegments = Math.max(96, size * 8);
+    this.radialSegments = Math.max(96, width * 8);
     this.depthCenter =
       (this.radius * (1 + Math.cos(this.arcAngle / 2))) / 2;
     this.projectedWidth = 2 * this.radius * Math.sin(this.arcAngle / 2);
-    this.board = Array.from({ length: size }, () => Array(size).fill(null));
+    this.board = Array.from({ length: height }, () => Array(width).fill(null));
     this.currentPlayer = "black";
     this.phase = "play";
     this.lastMove = null;
     this.analysisMove = null;
+    this.analysisCandidates = [];
+    this.analysisVariation = [];
     this.referencePoint = null;
     this.deadKeys.clear();
     this.offsetColumns = 0;
@@ -216,6 +260,9 @@ export class ArcBoard {
       disposeObject(this.boardGroup);
       this.disposeStoneAssets();
     }
+    this.territoryPoints = [];
+    this.territorySignature = "";
+    this.territoryGroup = null;
     this.boardGroup = new THREE.Group();
     this.boardGroup.position.z = -this.depthCenter;
     this.scene.add(this.boardGroup);
@@ -271,7 +318,7 @@ export class ArcBoard {
       color: 0x51301a,
       roughness: 0.64,
     });
-    const curveSegments = Math.max(64, this.size * 5);
+    const curveSegments = Math.max(64, this.width * 5);
     for (const y of [-this.surfaceHeight / 2, this.surfaceHeight / 2]) {
       const curve = new ArcCurve(
         this.radius,
@@ -315,9 +362,9 @@ export class ArcBoard {
       roughness: 0.88,
     });
     const gridRadius = this.radius + 0.018;
-    const curveSegments = Math.max(48, this.size * 4);
+    const curveSegments = Math.max(48, this.width * 4);
 
-    for (let row = 0; row < this.size; row += 1) {
+    for (let row = 0; row < this.height; row += 1) {
       const curve = new ArcCurve(
         gridRadius,
         this.rowY(row),
@@ -331,7 +378,7 @@ export class ArcBoard {
       this.boardGroup.add(line);
     }
 
-    for (let col = 0; col < this.size; col += 1) {
+    for (let col = 0; col < this.width; col += 1) {
       const theta = this.colTheta(col);
       const meridian = new THREE.Mesh(
         new THREE.CylinderGeometry(0.0145, 0.0145, this.gridHeight, 5),
@@ -351,9 +398,10 @@ export class ArcBoard {
       color: 0x1c1510,
       roughness: 0.65,
     });
-    const stars = starIndices(this.size);
-    for (const row of stars) {
-      for (const col of stars) {
+    const rowStars = starIndices(this.height);
+    const columnStars = starIndices(this.width);
+    for (const row of rowStars) {
+      for (const col of columnStars) {
         const frame = this.frame(row, col, 0.052);
         const star = new THREE.Mesh(
           new THREE.SphereGeometry(0.074, 12, 8),
@@ -432,7 +480,7 @@ export class ArcBoard {
   }
 
   colTheta(col) {
-    const visualColumn = mod(col + this.offsetColumns + 0.5, this.size);
+    const visualColumn = mod(col + this.offsetColumns + 0.5, this.width);
     return this.thetaStart + visualColumn * this.thetaStep;
   }
 
@@ -484,6 +532,9 @@ export class ArcBoard {
     for (const marker of this.markersGroup?.children || []) {
       this.positionMarker(marker, marker.userData.row, marker.userData.col);
     }
+    updateTerritoryMarkerLayer(this.territoryGroup, {
+      frameAt: (row, col) => this.frame(row, col, 0),
+    });
     this.refreshHover();
   }
 
@@ -503,7 +554,7 @@ export class ArcBoard {
       point.project(this.camera);
       return ((point.x + 1) / 2) * rect.width;
     };
-    const center = this.size / 2;
+    const center = this.width / 2;
     return Math.max(
       8,
       Math.abs(screenX(center + 0.5) - screenX(center - 0.5)),
@@ -512,28 +563,46 @@ export class ArcBoard {
 
   setPosition({
     board,
+    size,
+    width,
+    height,
     currentPlayer,
     phase,
     lastMove,
     deadStones = [],
+    territoryRegions = [],
     analysisMove = null,
+    analysisCandidates = [],
+    analysisVariation = [],
     referencePoint = null,
   }) {
+    const nextWidth = width ?? size ?? this.width;
+    const nextHeight = height ?? size ?? this.height;
+    if (nextWidth !== this.width || nextHeight !== this.height) {
+      this.rebuild(nextWidth, nextHeight);
+    }
     this.board = board;
     this.currentPlayer = currentPlayer;
     this.phase = phase;
     this.lastMove = lastMove;
     this.analysisMove = analysisMove?.type === "play" ? analysisMove : null;
+    this.analysisCandidates = Array.isArray(analysisCandidates)
+      ? analysisCandidates.slice(0, 5)
+      : [];
+    this.analysisVariation = Array.isArray(analysisVariation)
+      ? analysisVariation.slice(0, 8)
+      : [];
     this.referencePoint =
       Number.isInteger(referencePoint?.row) &&
       Number.isInteger(referencePoint?.col) &&
       referencePoint.row >= 0 &&
-      referencePoint.row < this.size &&
+      referencePoint.row < this.height &&
       referencePoint.col >= 0 &&
-      referencePoint.col < this.size
+      referencePoint.col < this.width
         ? { row: referencePoint.row, col: referencePoint.col }
         : null;
     this.deadKeys = new Set(deadStones.map(({ row, col }) => `${row},${col}`));
+    this.syncTerritoryMarkers(territoryRegions, deadStones);
 
     while (this.stonesGroup.children.length > 0) {
       this.stonesGroup.remove(this.stonesGroup.children[0]);
@@ -545,8 +614,8 @@ export class ArcBoard {
       marker.material.dispose();
     }
 
-    for (let row = 0; row < this.size; row += 1) {
-      for (let col = 0; col < this.size; col += 1) {
+    for (let row = 0; row < this.height; row += 1) {
+      for (let col = 0; col < this.width; col += 1) {
         const color = board[row]?.[col];
         if (!color) continue;
         const dead = this.deadKeys.has(`${row},${col}`);
@@ -571,17 +640,32 @@ export class ArcBoard {
       this.addLastMoveMarker(lastMove.row, lastMove.col);
     }
     if (
+      this.analysisCandidates.length === 0 &&
       this.analysisMove &&
       Number.isInteger(this.analysisMove.row) &&
       Number.isInteger(this.analysisMove.col) &&
       this.analysisMove.row >= 0 &&
-      this.analysisMove.row < this.size &&
+      this.analysisMove.row < this.height &&
       this.analysisMove.col >= 0 &&
-      this.analysisMove.col < this.size &&
+      this.analysisMove.col < this.width &&
       !board[this.analysisMove.row]?.[this.analysisMove.col]
     ) {
       this.addAnalysisMarker(this.analysisMove.row, this.analysisMove.col);
     }
+    this.analysisCandidates.forEach((candidate, index) => {
+      const move = candidate?.move ?? candidate;
+      if (
+        move?.type === "play" &&
+        Number.isInteger(move.row) && Number.isInteger(move.col) &&
+        move.row >= 0 && move.row < this.height &&
+        move.col >= 0 && move.col < this.width &&
+        !board[move.row]?.[move.col]
+      ) this.addAnalysisMarker(move.row, move.col, candidate, index);
+    });
+    this.analysisVariation.forEach((entry, index) => {
+      const move = entry?.move ?? entry;
+      if (move?.type === "play") this.addVariationMarker(move.row, move.col, entry, index);
+    });
     if (this.referencePoint) {
       this.addReferenceMarker(
         this.referencePoint.row,
@@ -590,6 +674,29 @@ export class ArcBoard {
       );
     }
     this.refreshHover();
+  }
+
+  syncTerritoryMarkers(territoryRegions, deadStones) {
+    const points = territoryPointsForPosition({
+      territoryRegions,
+      phase: this.phase,
+      width: this.width,
+      height: this.height,
+      board: this.board,
+      deadStones,
+    });
+    const signature = territoryPointsSignature(points);
+    if (signature === this.territorySignature) return;
+
+    disposeTerritoryMarkerLayer(this.territoryGroup);
+    this.territoryPoints = points;
+    this.territorySignature = signature;
+    this.territoryGroup = createTerritoryMarkerLayer(points, {
+      frameAt: (row, col) => this.frame(row, col, 0),
+      radius: 0.2,
+      surfaceOffset: 0.058,
+    });
+    if (this.territoryGroup) this.boardGroup.add(this.territoryGroup);
   }
 
   positionStone(stone, row, col) {
@@ -614,11 +721,13 @@ export class ArcBoard {
     this.markersGroup.add(marker);
   }
 
-  addAnalysisMarker(row, col) {
+  addAnalysisMarker(row, col, candidate = null, index = 0) {
+    const palette = [0x38e4c5, 0x6c9eff, 0xb58cff, 0xe7a853, 0xe96f78];
+    const active = Boolean(candidate?.active);
     const diamond = new THREE.Mesh(
-      new THREE.CircleGeometry(0.27, 4),
+      new THREE.CircleGeometry(active ? 0.31 : 0.24, 4),
       new THREE.MeshBasicMaterial({
-        color: 0x38e4c5,
+        color: palette[Math.min(index, palette.length - 1)],
         transparent: true,
         opacity: 0.82,
         side: THREE.DoubleSide,
@@ -646,6 +755,19 @@ export class ArcBoard {
     center.userData.surfaceOffset = 0.078;
     this.positionMarker(center, row, col);
     this.markersGroup.add(center);
+  }
+
+  addVariationMarker(row, col, entry = null, index = 0) {
+    if (
+      !Number.isInteger(row) || !Number.isInteger(col) ||
+      row < 0 || row >= this.height || col < 0 || col >= this.width
+    ) return;
+    const marker = createAnalysisVariationMarker(entry, index, { radius: 0.19 });
+    marker.userData.row = row;
+    marker.userData.col = col;
+    marker.userData.surfaceOffset = 0.286;
+    this.positionMarker(marker, row, col);
+    this.markersGroup.add(marker);
   }
 
   addReferenceMarker(row, col, occupied) {
@@ -696,18 +818,19 @@ export class ArcBoard {
     const theta = Math.atan2(point.x, point.z);
     const progress = (theta - this.thetaStart) / this.arcAngle;
     if (progress < -0.001 || progress > 1.001) return null;
-    const visualColumn = progress * this.size - 0.5;
+    const visualColumn = progress * this.width - 0.5;
     const col = mod(
       Math.round(visualColumn - this.offsetColumns),
-      this.size,
+      this.width,
     );
     const row = Math.round((this.gridHeight / 2 - point.y) / CELL);
-    if (row < 0 || row >= this.size) return null;
+    if (row < 0 || row >= this.height) return null;
     if (Math.abs(point.y - this.rowY(row)) > CELL * 0.5) return null;
     return { row, col };
   }
 
   handlePointerDown(event) {
+    if (!this.active) return;
     this.activePointers.add(event.pointerId);
     if (event.isPrimary === false || this.activePointers.size > 1) {
       this.pointerState = null;
@@ -715,13 +838,12 @@ export class ArcBoard {
       this.setHoveredPoint(null);
       return;
     }
-    if (
-      !this.active ||
-      this.pointerState ||
-      (event.pointerType === "mouse" && event.button !== 0)
-    ) {
+    const roles = pointerGestureRoles(event);
+    if (!roles || this.pointerState) {
+      this.activePointers.delete(event.pointerId);
       return;
     }
+    if (event.pointerType === "mouse" && roles.canDrag) event.preventDefault();
     this.cancelSnap();
     this.pointerState = {
       id: event.pointerId,
@@ -729,6 +851,8 @@ export class ArcBoard {
       startY: event.clientY,
       startOffset: this.offsetColumns,
       pixelsPerColumn: this.pixelsPerColumn(),
+      canDrag: roles.canDrag,
+      canPlace: roles.canPlace,
       moved: false,
       cancelClick: false,
     };
@@ -743,7 +867,7 @@ export class ArcBoard {
       if (Math.hypot(deltaX, deltaY) > DRAG_THRESHOLD) {
         pointer.cancelClick = true;
       }
-      if (
+      if (pointer.canDrag &&
         Math.abs(deltaX) > DRAG_THRESHOLD &&
         Math.abs(deltaX) > Math.abs(deltaY)
       ) {
@@ -753,7 +877,7 @@ export class ArcBoard {
         this.container.classList.add("dragging");
         this.offsetColumns = mod(
           pointer.startOffset + deltaX / pointer.pixelsPerColumn,
-          this.size,
+          this.width,
         );
         this.setHoveredPoint(null);
         this.updateContentLayout();
@@ -775,7 +899,7 @@ export class ArcBoard {
     const crossedThreshold = Math.hypot(deltaX, deltaY) > DRAG_THRESHOLD;
     const horizontalDrag =
       Math.abs(deltaX) > DRAG_THRESHOLD && Math.abs(deltaX) > Math.abs(deltaY);
-    const moved = pointer.moved || horizontalDrag;
+    const moved = pointer.canDrag && (pointer.moved || horizontalDrag);
     this.pointerState = null;
     this.container.classList.remove("dragging");
     const canvas = this.renderer.domElement;
@@ -787,14 +911,14 @@ export class ArcBoard {
       if (!pointer.moved) {
         this.offsetColumns = mod(
           pointer.startOffset + deltaX / pointer.pixelsPerColumn,
-          this.size,
+          this.width,
         );
         this.updateContentLayout();
       }
       if (!this.autoSlide) this.snapToColumn();
       return;
     }
-    if (pointer.cancelClick || crossedThreshold) return;
+    if (!pointer.canPlace || pointer.cancelClick || crossedThreshold) return;
     const point = this.raycastPoint(event);
     if (point && this.onPoint) this.onPoint(point);
   }
@@ -819,8 +943,8 @@ export class ArcBoard {
     this.cancelSnap();
     const start = this.offsetColumns;
     let adjustedTarget = target;
-    while (adjustedTarget - start > this.size / 2) adjustedTarget -= this.size;
-    while (adjustedTarget - start < -this.size / 2) adjustedTarget += this.size;
+    while (adjustedTarget - start > this.width / 2) adjustedTarget -= this.width;
+    while (adjustedTarget - start < -this.width / 2) adjustedTarget += this.width;
     const startedAt = performance.now();
     const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches
       ? 0
@@ -834,7 +958,7 @@ export class ArcBoard {
       if (progress < 1) {
         this.snapFrame = requestAnimationFrame(step);
       } else {
-        this.offsetColumns = mod(adjustedTarget, this.size);
+        this.offsetColumns = mod(adjustedTarget, this.width);
         this.snapFrame = null;
         this.updateContentLayout();
       }
@@ -909,15 +1033,15 @@ export class ArcBoard {
       !Number.isInteger(point?.row) ||
       !Number.isInteger(point?.col) ||
       point.row < 0 ||
-      point.row >= this.size ||
+      point.row >= this.height ||
       point.col < 0 ||
-      point.col >= this.size
+      point.col >= this.width
     ) {
       return;
     }
     this.autoSlide = false;
     this.controls.autoRotate = false;
-    this.animateOffsetTo((this.size - 1) / 2 - point.col);
+    this.animateOffsetTo((this.width - 1) / 2 - point.col);
   }
 
   fitCamera() {
@@ -986,8 +1110,8 @@ export class ArcBoard {
       deltaSeconds > 0
     ) {
       this.offsetColumns = mod(
-        this.offsetColumns + deltaSeconds * (this.size / 30),
-        this.size,
+        this.offsetColumns + deltaSeconds * (this.width / 30),
+        this.width,
       );
       this.updateContentLayout();
     }
@@ -1012,6 +1136,7 @@ export class ArcBoard {
     canvas.removeEventListener("pointerup", this.onPointerUp);
     canvas.removeEventListener("pointercancel", this.onPointerCancel);
     canvas.removeEventListener("pointerleave", this.onPointerLeave);
+    canvas.removeEventListener("contextmenu", this.onContextMenu);
     this.controls.dispose();
     disposeObject(this.boardGroup);
     this.disposeStoneAssets();

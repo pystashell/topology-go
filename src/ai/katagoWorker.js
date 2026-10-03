@@ -151,8 +151,8 @@ async function neuralPolicy({ scope, id, modelId, state, signal, postStatus }) {
   const startedAt = performance.now();
   const spatial = tf.tensor4d(features.spatial, [
     1,
-    features.size,
-    features.size,
+    features.height,
+    features.width,
     22,
   ]);
   const global = tf.tensor2d(features.global, [1, 19]);

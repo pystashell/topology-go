@@ -51,19 +51,29 @@ export function torusGridFrame({
   row,
   col,
   size,
+  width = size,
+  height = size,
   majorRadius,
   minorRadius,
   offset = 0,
 }) {
-  const u = (mod(col, size) * TAU) / size;
-  const v = (mod(row, size) * TAU) / size;
+  const u = (mod(col, width) * TAU) / width;
+  const v = (mod(row, height) * TAU) / height;
   return torusFrame(u, v, majorRadius, minorRadius, offset);
 }
 
 /** Map a Cartesian torus hit back to the nearest periodic grid point. */
-export function torusGridPointFromCartesian(point, size, majorRadius) {
+export function torusGridPointFromCartesian(
+  point,
+  width,
+  heightOrMajorRadius,
+  maybeMajorRadius,
+) {
+  const height = maybeMajorRadius === undefined ? width : heightOrMajorRadius;
+  const majorRadius =
+    maybeMajorRadius === undefined ? heightOrMajorRadius : maybeMajorRadius;
   const { u, v } = torusAnglesFromPoint(point, majorRadius);
-  const col = mod(Math.round((u * size) / TAU), size);
-  const row = mod(Math.round((v * size) / TAU), size);
+  const col = mod(Math.round((u * width) / TAU), width);
+  const row = mod(Math.round((v * height) / TAU), height);
   return { row, col };
 }

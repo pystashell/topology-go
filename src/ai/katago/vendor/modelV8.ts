@@ -151,8 +151,8 @@ function conv2d(
 
 function poolRowsGPool(x: tf.Tensor4D): tf.Tensor2D {
   // KataGo gpool: concat(mean, mean * (sqrt(div)-14)*0.1, max).
-  const boardSize = x.shape[1] ?? 19;
-  const factor = (boardSize - 14) * 0.1;
+  const boardScale = Math.sqrt((x.shape[1] ?? 19) * (x.shape[2] ?? 19));
+  const factor = (boardScale - 14) * 0.1;
   const mean = tf.mean(x, [1, 2]) as tf.Tensor2D; // [N,C]
   const max = tf.max(x, [1, 2]) as tf.Tensor2D; // [N,C]
   return tf.concat([mean, mean.mul(factor), max], 1) as tf.Tensor2D;
@@ -160,8 +160,8 @@ function poolRowsGPool(x: tf.Tensor4D): tf.Tensor2D {
 
 function poolRowsValueHead(x: tf.Tensor4D): tf.Tensor2D {
   // KataGo value pooling: concat(mean, mean * (sqrt(div)-14)*0.1, mean * (((sqrt(div)-14)^2)*0.01 - 0.1)).
-  const boardSize = x.shape[1] ?? 19;
-  const base = boardSize - 14;
+  const boardScale = Math.sqrt((x.shape[1] ?? 19) * (x.shape[2] ?? 19));
+  const base = boardScale - 14;
   const factor1 = base * 0.1;
   const factor2 = base * base * 0.01 - 0.1;
   const mean = tf.mean(x, [1, 2]) as tf.Tensor2D; // [N,C]
@@ -436,7 +436,7 @@ export class KataGoModelV8Tf {
       p1Out = p1Out.add(g1Bias.reshape([g1Bias.shape[0], 1, 1, g1Bias.shape[1]])) as tf.Tensor4D;
       const p1Out2 = bnAct(p1Out, this.p1BN, this.p1Activation);
 
-      const policy = conv2d(p1Out2, this.p2, topology); // [N,19,19,policyOutChannels]
+      const policy = conv2d(p1Out2, this.p2, topology); // [N,H,W,policyOutChannels]
       const policyPass = this.forwardPolicyPass(g1Concat); // [N,policyOutChannels]
 
       // Value head
@@ -454,7 +454,7 @@ export class KataGoModelV8Tf {
         scoreValue = scoreValue.slice([0, 0], [scoreValue.shape[0], 4]) as tf.Tensor2D;
       }
 
-      const ownership = conv2d(v1Out2, this.ownership, topology); // [N,19,19,1]
+      const ownership = conv2d(v1Out2, this.ownership, topology); // [N,H,W,1]
 
       return { policy, policyPass, value, scoreValue, ownership };
     });

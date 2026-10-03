@@ -58,13 +58,13 @@ A complete game can also be replayed on the cylinder, torus, or Möbius strip, a
 
 - Cylinder, torus, and Möbius-strip boards
 - 9×9, 13×13, and 19×19 presets
-- Custom board sizes from 5×5 to 25×25
+- Custom board sizes from 5×5 to 30×30
 - Seam-aware group connection and liberty counting
 - Captures across connected edges
 - Suicide prevention
 - Positional superko
 - Territory traversal and dead-stone marking
-- Chinese area scoring and Japanese territory scoring
+- Chinese area scoring and simplified territory scoring (Japanese-style; seki eyes are not excluded)
 - Configurable komi
 
 ### Ways to play
@@ -76,6 +76,8 @@ A complete game can also be replayed on the cylinder, torus, or Möbius strip, a
 - Spectator mode
 - Reconnection and room-state recovery
 - Negotiated undo for online games
+
+Use **Invite friend** to open the lobby, or visit `/lobby` directly. Create or join a room there, then send and accept a game invitation to start a round. Joining a room does not start a game automatically.
 
 ### Replay and analysis
 
@@ -238,3 +240,23 @@ Because ordinary KataGo networks were trained on standard flat Go boards, the pr
 npm install
 npm run dev
 ```
+
+Use Node.js 22 or newer. `npm run dev` builds the client and starts the local Worker with multiplayer support at `http://localhost:8787`.
+
+### Verify a change
+
+```bash
+npm test
+npm run build
+npx wrangler deploy --dry-run --strict
+npm audit
+```
+
+With the local Worker running, check the multiplayer and scoring flows:
+
+```bash
+npm run test:live
+node scripts/live-scoring-smoke.mjs
+```
+
+Pull requests run the test suite, build, deployment dry-run, and dependency audit. Release commands and compatibility notes are in [docs/RELEASES.md](docs/RELEASES.md); the audit findings and verification evidence are in [the audit follow-up](docs/AUDIT_FOLLOWUP_2026-10-01.md).

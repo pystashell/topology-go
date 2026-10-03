@@ -13,8 +13,15 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test",
+    "test:release": "node --test scripts/release.test.mjs",
     "test:live": "node scripts/live-room-smoke.mjs",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "release:version": "node scripts/release.mjs version",
+    "release:plan": "node scripts/release.mjs plan",
+    "release:check": "node scripts/release.mjs check",
+    "release:publish": "node scripts/release.mjs publish",
+    "release:list": "node scripts/release.mjs list",
+    "release:rollback": "node scripts/release.mjs rollback"
   },
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
@@ -23,7 +30,8 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "miniflare": "5.20260930.0-alpha",
     "vite": "^8.1.4",
-    "wrangler": "^4.110.0"
+    "wrangler": "4.145.0"
   }
 }

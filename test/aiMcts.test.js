@@ -100,7 +100,71 @@ test("pass is selected when every intersection is occupied", () => {
   });
 
   assert.deepEqual(result.move, { type: "pass" });
+  assert.deepEqual(result.stats.candidates[0].move, { type: "pass" });
+  assert.deepEqual(result.stats.candidates[0].variation[0], { type: "pass" });
+  assert.ok(result.stats.candidates[0].variation.length <= 8);
+  const line = GoEngine.fromState(before);
+  result.stats.candidates[0].variation.forEach((move, index, variation) => {
+    const played = move.type === "pass"
+      ? line.pass()
+      : line.play(move.row, move.col);
+    assert.equal(played.ok, true);
+    if (line.phase !== "play") assert.equal(index, variation.length - 1);
+  });
   assert.deepEqual(game.exportState(), before);
+});
+
+test("candidate PVs stay legal and bounded on rectangular boards for every topology", () => {
+  for (const topology of ["cylinder", "torus", "mobius"]) {
+    const game = new GoEngine({ width: 5, height: 3, topology });
+    const before = game.exportState({ includeReplay: false });
+    const result = chooseMonteCarloMove(game, {
+      seed: `pv-${topology}`,
+      iterations: 72,
+      timeLimitMs: Infinity,
+      rolloutLimit: 4,
+      candidateLimit: 24,
+    });
+
+    assert.ok(result.stats.candidates.length <= 25);
+    assert.equal(result.stats.wireCandidateLimit, 25);
+    assert.equal(result.stats.variationCandidateLimit, 5);
+    assert.equal(result.stats.variationLimit, 8);
+    const candidatesWithVariation = result.stats.candidates.filter(
+      (candidate) => Object.hasOwn(candidate, "variation"),
+    );
+    assert.ok(candidatesWithVariation.length >= 1);
+    assert.ok(candidatesWithVariation.length <= 5);
+    assert.ok(
+      candidatesWithVariation.some((candidate) =>
+        JSON.stringify(candidate.move) === JSON.stringify(result.move)
+      ),
+      "the selected tactical recommendation must retain a PV",
+    );
+    assert.ok(
+      result.stats.candidates.reduce(
+        (total, candidate) => total + (candidate.variation?.length ?? 0),
+        0,
+      ) <= 40,
+    );
+
+    for (const candidate of candidatesWithVariation) {
+      assert.deepEqual(candidate.variation[0], candidate.move);
+      assert.ok(candidate.variation.length <= 8);
+      const line = GoEngine.fromState(before);
+      for (const move of candidate.variation) {
+        const played = move.type === "pass"
+          ? line.pass()
+          : line.play(move.row, move.col);
+        assert.equal(
+          played.ok,
+          true,
+          `${topology} PV contains an illegal ${JSON.stringify(move)}`,
+        );
+      }
+    }
+    assert.deepEqual(game.exportState({ includeReplay: false }), before);
+  }
 });
 
 test("sync search supports cooperative cancellation", () => {
