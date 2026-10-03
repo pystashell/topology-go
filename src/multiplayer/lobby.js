@@ -120,6 +120,15 @@ function hasBlackHumanHost(room, controllers) {
   );
 }
 
+function hasBlackSeatOccupant(room, controllers) {
+  const black = controllers?.black;
+  return Boolean(
+    (room?.players ?? []).some((player) => player?.color === "black") ||
+    black?.kind === "ai" ||
+    (typeof black?.operatorId === "string" && black.operatorId.length > 0),
+  );
+}
+
 function fallbackStatus(room) {
   if (room?.game?.phase === "finished" || room?.timeControl?.outcome) {
     return LOBBY_STATUS_FINISHED;
@@ -206,6 +215,12 @@ export function lobbySummaryFromRoom(room, now = Date.now()) {
     revision: Number.isSafeInteger(room.revision) && room.revision >= 1
       ? room.revision
       : 1,
+    ...(Number.isSafeInteger(room.directoryRevision) && room.directoryRevision >= 1
+      ? { directoryRevision: room.directoryRevision }
+      : {}),
+    ...(typeof room.incarnationId === "string" && room.incarnationId.length > 0
+      ? { incarnationId: room.incarnationId }
+      : {}),
     status,
     mode,
     roundNumber: Number.isSafeInteger(match.roundId)
@@ -230,10 +245,13 @@ export function lobbySummaryFromRoom(room, now = Date.now()) {
     lastMove,
     players,
     spectatorCount: (room.spectators ?? []).filter((spectator) => spectator?.online !== false).length,
-    // The lobby is only a hint; the room object still arbitrates concurrent
-    // claims atomically. A released white seat may be filled even if an older
-    // round remains in playing/finished state.
-    joinable: mode === "friend" && blackHostPresent && !whiteSeatOccupied,
+    // The room arbitrates concurrent claims atomically. A released white seat
+    // can be filled during an older round; a hostless setup can take a new black
+    // player after its previous operator explicitly leaves.
+    joinable: mode === "friend" && (
+      (blackHostPresent && !whiteSeatOccupied) ||
+      (status === LOBBY_STATUS_SETUP && !hasBlackSeatOccupant(room, controllers))
+    ),
     watchable: true,
     createdAt: finiteTimestamp(room.createdAt, updatedAt),
     updatedAt,
@@ -252,6 +270,11 @@ export function isLobbySummary(value) {
     typeof value.code === "string" &&
     Number.isSafeInteger(value.revision) &&
     value.revision >= 1 &&
+    (value.directoryRevision === undefined ||
+      (Number.isSafeInteger(value.directoryRevision) && value.directoryRevision >= 1)) &&
+    (value.incarnationId === undefined ||
+      (typeof value.incarnationId === "string" &&
+        value.incarnationId.length > 0 && value.incarnationId.length <= 128)) &&
     VALID_STATUSES.has(value.status) &&
     VALID_MODES.has(value.mode) &&
     Number.isInteger(value.width) &&

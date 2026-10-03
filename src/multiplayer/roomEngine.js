@@ -265,11 +265,11 @@ function roundSettingsFromGame(game, timeControl) {
 function normalizeRoundSettings(payload, game, timeControl) {
   const requestedWidth = normalizeDimension(
     payload.width ?? payload.size ?? game.width,
-    "board width",
+    "棋盘宽度",
   );
   const requestedHeight = normalizeDimension(
     payload.height ?? payload.size ?? game.height,
-    "board height",
+    "棋盘高度",
   );
   const previousTimeControl = timeControlConfig(timeControl);
   const requestedTimeControl = roomTimeControlConfig({
@@ -770,6 +770,11 @@ function validateSerializedState(state) {
     !isRoomCode(state.code) ||
     !Number.isSafeInteger(state.revision) ||
     state.revision < 1 ||
+    (state.directoryRevision !== undefined &&
+      (!Number.isSafeInteger(state.directoryRevision) || state.directoryRevision < 1)) ||
+    (state.incarnationId !== undefined &&
+      (typeof state.incarnationId !== "string" ||
+        state.incarnationId.length === 0 || state.incarnationId.length > 128)) ||
     (state.moveCount !== undefined &&
       (!Number.isSafeInteger(state.moveCount) || state.moveCount < 0)) ||
     (state.positionEpoch !== undefined &&
@@ -973,6 +978,8 @@ export class RoomEngine {
       schemaVersion: SERIALIZED_SCHEMA_VERSION,
       code,
       revision: 1,
+      directoryRevision: 1,
+      incarnationId: crypto.randomUUID(),
       moveCount: 0,
       positionEpoch: 1,
       scoringRevision: 1,
@@ -1027,6 +1034,8 @@ export class RoomEngine {
     }
     state = migrateSerializedState(state);
     validateSerializedState(state);
+    state.directoryRevision ??= state.revision;
+    state.incarnationId ??= `legacy:${state.code}:${state.createdAt}`;
     state.moveCount ??= 0;
     state.positionEpoch ??= 1;
     // Old confirmations were not tied to any scoring proposal. Keep the game,
@@ -1148,6 +1157,15 @@ export class RoomEngine {
     return clone({ ...this.state, game: serializeGame(this.game) });
   }
 
+  bumpDirectoryRevision() {
+    const next = this.state.directoryRevision + 1;
+    if (!Number.isSafeInteger(next)) {
+      throw new RangeError("Room directory revision exhausted");
+    }
+    this.state.directoryRevision = next;
+    return next;
+  }
+
   scoringToken() {
     return fingerprint("score", {
       room: this.state.code,
@@ -1234,6 +1252,8 @@ export class RoomEngine {
     return {
       code: this.state.code,
       revision: this.state.revision,
+      directoryRevision: this.state.directoryRevision,
+      incarnationId: this.state.incarnationId,
       version: this.state.revision,
       positionToken: positionToken(this.game, this.state),
       scoringToken: this.scoringToken(),
@@ -1270,6 +1290,7 @@ export class RoomEngine {
       game,
       players,
       spectators,
+      createdAt: this.state.createdAt,
       updatedAt: this.state.updatedAt,
       expiresAt: this.state.expiresAt,
     };
@@ -1576,23 +1597,66 @@ export class RoomEngine {
     const now = readNow(nowInput);
     this.prepare(now);
     const member = this.requireMember(normalizePlayerId(playerId));
+    const resetOperatorRound = member.role === "player" &&
+      member.color === BLACK && this.state.match?.mode !== MATCH_MODE_FRIEND;
+    let nextGame = null;
+    let nextTimeControl = null;
+    if (resetOperatorRound) {
+      // An AI/local round has one browser operating both colors. Once that
+      // identity explicitly leaves, preserve its replay but give the next
+      // host a fresh setup instead of orphaned controllers or a live clock.
+      const settings = roundSettingsFromGame(this.game, this.state.timeControl);
+      nextGame = gameFromRoundSettings(settings);
+      nextTimeControl = timeControlFromRoundSettings(settings, now);
+      this.archiveCurrentRound(now);
+    }
     if (member.role === "player") {
       this.state.scoreConfirmations = this.state.scoreConfirmations.filter(
         (color) => color !== member.color,
       );
       this.state.undoRequest = null;
     }
+    const departingIds = new Set([member.playerId]);
+    if (resetOperatorRound) {
+      for (const candidate of this.state.members) {
+        if (candidate.automated === true) departingIds.add(candidate.playerId);
+      }
+    }
     this.state.members = this.state.members.filter(
-      (candidate) => candidate.playerId !== member.playerId,
+      (candidate) => !departingIds.has(candidate.playerId),
     );
+    if (resetOperatorRound) {
+      this.game = nextGame;
+      this.state.timeControl = nextTimeControl;
+      this.state.resignationOutcome = null;
+      this.state.moveCount = 0;
+      this.state.scoreConfirmations = [];
+      this.state.scoringRevision += 1;
+      this.state.allowLegacyNewGame = false;
+      this.state.match = {
+        roundId: this.state.match.roundId,
+        status: MATCH_STATUS_SETUP,
+        mode: MATCH_MODE_FRIEND,
+        controllers: controllersForMode({
+          mode: MATCH_MODE_FRIEND,
+          hostId: null,
+          whiteId: this.humanWhitePlayer()?.playerId ?? null,
+        }),
+        request: null,
+        startedAt: null,
+        finishedAt: null,
+        aiAutoplayPaused: false,
+      };
+      this.bumpPositionEpoch();
+    }
     this.refreshFriendControllers();
     for (const [connectionId, connectedPlayerId] of this.connections) {
-      if (connectedPlayerId === member.playerId) {
+      if (departingIds.has(connectedPlayerId)) {
         this.connections.delete(connectionId);
       }
     }
     this.state.receipts = this.state.receipts.filter(
-      (receipt) => receipt.playerId !== member.playerId,
+      (receipt) => !departingIds.has(receipt.playerId),
     );
     this.syncTimeControlRunning(now);
     this.commit(now);
@@ -2421,61 +2485,19 @@ export class RoomEngine {
           "FORBIDDEN",
         );
       }
-      const requestedWidth = normalizeDimension(
-        payload.width ?? payload.size ?? this.game.width,
-        "棋盘宽度",
-      );
-      const requestedHeight = normalizeDimension(
-        payload.height ?? payload.size ?? this.game.height,
-        "棋盘高度",
-      );
-      const previousTimeControl = timeControlConfig(this.state.timeControl);
-      const requestedTimeControl = roomTimeControlConfig({
-        mainTimeSeconds:
-          payload.mainTimeSeconds ?? previousTimeControl?.mainTimeSeconds ?? 0,
-        byoYomiPeriods:
-          payload.byoYomiPeriods ?? previousTimeControl?.byoYomiPeriods ?? 0,
-        byoYomiSeconds:
-          payload.byoYomiSeconds ?? previousTimeControl?.byoYomiSeconds ?? 0,
-      });
-      const newGame = new GoEngine({
-        ...(requestedWidth === requestedHeight ? { size: requestedWidth } : {}),
-        width: requestedWidth,
-        height: requestedHeight,
-        komi: normalizeKomi(payload.komi ?? this.game.komi),
-        scoringRule: normalizeScoringRule(
-          payload.scoringRule ?? this.game.scoringRule,
-        ),
-        topology: normalizeTopology(
-          payload.topology ?? this.game.topology ?? TOPOLOGY_CYLINDER,
-        ),
-      });
-      this.archiveCurrentRound(now);
-      this.game = newGame;
-      this.state.resignationOutcome = null;
-      this.state.timeControl = freshRoomTimeControl(requestedTimeControl, now);
-      this.state.moveCount = 0;
-      this.state.undoRequest = null;
       const legacyMode = normalizeMatchMode(
         payload.mode ??
           (this.automatedPlayer() ? MATCH_MODE_HUMAN_AI : this.state.match?.mode),
       );
-      this.state.match = {
-        roundId: (this.state.match?.roundId ?? 0) + 1,
-        status: MATCH_STATUS_PLAYING,
+      const settings = normalizeRoundSettings(payload, this.game, this.state.timeControl);
+      const controllers = controllersForMode({
         mode: legacyMode,
-        controllers: controllersForMode({
-          mode: legacyMode,
-          hostId: member.playerId,
-          whiteId: this.humanWhitePlayer()?.playerId ?? null,
-          aiModelId: payload.aiModelId ?? this.automatedPlayer()?.modelId ?? "b10",
-          aiModelIds: payload.aiModelIds,
-        }),
-        request: null,
-        startedAt: now,
-        finishedAt: null,
-        aiAutoplayPaused: false,
-      };
+        hostId: member.playerId,
+        whiteId: this.humanWhitePlayer()?.playerId ?? null,
+        aiModelId: payload.aiModelId ?? this.automatedPlayer()?.modelId ?? "b10",
+        aiModelIds: payload.aiModelIds,
+      });
+      this.startRound({ settings, mode: legacyMode, controllers, now });
       move = { ok: true, type: "new_game", phase: PHASE_PLAY };
       }
     } else {
@@ -2771,6 +2793,18 @@ export class RoomEngine {
   refreshFriendControllers() {
     const hostId = this.hostPlayer()?.playerId ?? null;
     const whiteId = this.humanWhitePlayer()?.playerId ?? null;
+    const request = this.state.match?.request;
+    if (this.state.match?.status === MATCH_STATUS_INVITED &&
+        request?.mode === MATCH_MODE_FRIEND &&
+        (request.requestedBy !== hostId ||
+          request.controllers?.[WHITE]?.operatorId !== whiteId)) {
+      // An invitation belongs to its original two players. A new occupant of
+      // either seat must receive a fresh invitation from the current host.
+      this.state.match.status = request.previousStatus === MATCH_STATUS_FINISHED
+        ? MATCH_STATUS_FINISHED
+        : MATCH_STATUS_SETUP;
+      this.state.match.request = null;
+    }
     if (this.state.match?.mode === MATCH_MODE_FRIEND) {
       this.state.match.controllers = controllersForMode({
         mode: MATCH_MODE_FRIEND,
@@ -2928,9 +2962,12 @@ export class RoomEngine {
   }
 
   startRound({ settings, mode, controllers, now }) {
+    const nextGame = gameFromRoundSettings(settings);
+    const nextTimeControl = timeControlFromRoundSettings(settings, now);
+    const nextControllers = clone(controllers);
     this.archiveCurrentRound(now);
-    this.game = gameFromRoundSettings(settings);
-    this.state.timeControl = timeControlFromRoundSettings(settings, now);
+    this.game = nextGame;
+    this.state.timeControl = nextTimeControl;
     this.state.resignationOutcome = null;
     this.state.moveCount = 0;
     this.state.undoRequest = null;
@@ -2939,7 +2976,7 @@ export class RoomEngine {
       roundId: (this.state.match?.roundId ?? 0) + 1,
       status: MATCH_STATUS_PLAYING,
       mode,
-      controllers: clone(controllers),
+      controllers: nextControllers,
       request: null,
       startedAt: now,
       finishedAt: null,

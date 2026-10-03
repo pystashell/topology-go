@@ -2,11 +2,28 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { BadukLobby } from "../worker/BadukLobby.js";
+import { lobbySummaryFromRoom } from "../src/multiplayer/lobby.js";
+
+const CREATED_AT = Date.now() - 1_000;
+
+function roomCodeAt(index) {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let value = index;
+  let code = "B";
+  for (let digit = 0; digit < 5; digit += 1) {
+    code += alphabet[value % alphabet.length];
+    value = Math.floor(value / alphabet.length);
+  }
+  return code;
+}
 
 function roomSnapshot(overrides = {}) {
   return {
     code: "ABC123",
     revision: 3,
+    directoryRevision: overrides.directoryRevision ?? overrides.revision ?? 3,
+    incarnationId: "room-instance-1",
+    createdAt: CREATED_AT,
     updatedAt: Date.now(),
     expiresAt: Date.now() + 60_000,
     players: [{ id: "host", name: "Host", color: "black", online: true }],
@@ -37,6 +54,7 @@ function directory() {
   const instance = Object.create(BadukLobby.prototype);
   instance.ready = Promise.resolve();
   instance.rooms = new Map();
+  instance.watermarks = new Map();
   instance.ctx = {
     storage: {
       async put(key, value) {
@@ -166,6 +184,195 @@ test("stale or duplicate room revisions cannot regress an indexed room", async (
   assert.equal(writes.length, 1, "ignored upserts must not rewrite durable storage");
 });
 
+test("directory versions order same-game presence and protect a reused room code", async () => {
+  const { instance } = directory();
+  const post = (path, body) => instance.fetch(new Request(`https://index${path}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  }));
+  const old = roomSnapshot({ revision: 9, directoryRevision: 12 });
+  assert.equal((await post("/internal/upsert", old)).status, 200);
+  assert.equal((await post("/internal/upsert", roomSnapshot({
+    revision: 9,
+    directoryRevision: 13,
+    players: [{ id: "host", name: "Host", color: "black", online: false }],
+  }))).status, 200);
+  assert.equal(instance.rooms.get(old.code).players[0].online, false);
+  assert.deepEqual(await (await post("/internal/upsert", old)).json(),
+    { ok: true, ignored: "stale" });
+
+  const newer = roomSnapshot({
+    revision: 1,
+    directoryRevision: 2,
+    incarnationId: "room-instance-2",
+    createdAt: CREATED_AT + 10_000,
+  });
+  assert.equal((await post("/internal/upsert", newer)).status, 200);
+  assert.equal(instance.rooms.get(old.code).incarnationId, newer.incarnationId);
+  assert.deepEqual(await (await post("/internal/upsert", roomSnapshot({
+    revision: 10,
+    directoryRevision: 14,
+  }))).json(), { ok: true, ignored: "stale" });
+  assert.deepEqual(await (await post("/internal/remove", {
+    code: old.code,
+    incarnationId: old.incarnationId,
+  })).json(), { ok: true, ignored: "stale" });
+  assert.equal(instance.rooms.get(old.code).incarnationId, newer.incarnationId);
+  assert.equal((await post("/internal/remove", { code: old.code })).status, 400);
+  assert.equal((await post("/internal/remove", {
+    code: newer.code,
+    incarnationId: newer.incarnationId,
+  })).status, 200);
+  assert.equal(instance.rooms.has(old.code), false);
+});
+
+test("capacity eviction retains a high-water mark across restart", async (t) => {
+  const { instance, writes } = directory();
+  const post = (lobby, path, body) => lobby.fetch(new Request(`https://index${path}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  }));
+  const current = roomSnapshot({ directoryRevision: 2 });
+  await post(instance, "/internal/upsert", current);
+  for (let index = 0; index < 500; index += 1) {
+    const code = roomCodeAt(index);
+    instance.rooms.set(code, lobbySummaryFromRoom(roomSnapshot({
+      code,
+      incarnationId: `room-${index}`,
+      updatedAt: Date.now() + 1_000,
+    })));
+  }
+  await instance.prune();
+  assert.equal(instance.rooms.has(current.code), false);
+  assert.equal(instance.watermarks.get(current.code).directoryRevision, 2);
+  await post(instance, "/internal/remove", {
+    code: roomCodeAt(0),
+    incarnationId: "room-0",
+  });
+  const stale = roomSnapshot({
+    directoryRevision: 1,
+    players: [{ id: "host", name: "Host", color: "black", online: false }],
+  });
+  assert.deepEqual(await (await post(instance, "/internal/upsert", stale)).json(),
+    { ok: true, ignored: "stale" });
+  assert.equal(instance.rooms.has(current.code), false);
+
+  let stored = structuredClone(writes.at(-1).value);
+  const restarted = new BadukLobby({
+    blockConcurrencyWhile: (initialize) => initialize(),
+    storage: {
+      async get() { return stored; },
+      async put(_key, value) { stored = structuredClone(value); },
+    },
+    abort() { throw new Error("Lobby reset"); },
+  });
+  await restarted.ready;
+  assert.equal(restarted.watermarks.get(current.code).directoryRevision, 2);
+  assert.deepEqual(await (await post(restarted, "/internal/upsert", stale)).json(),
+    { ok: true, ignored: "stale" });
+  assert.equal((await post(restarted, "/internal/upsert", roomSnapshot({
+    directoryRevision: 3,
+  }))).status, 200);
+  assert.equal(restarted.rooms.get(current.code).directoryRevision, 3);
+
+  const replacement = roomSnapshot({
+    revision: 1,
+    directoryRevision: 1,
+    incarnationId: "replacement",
+    createdAt: CREATED_AT + 10_000,
+  });
+  await post(restarted, "/internal/upsert", replacement);
+  assert.equal(restarted.rooms.get(current.code).incarnationId, "replacement");
+  assert.deepEqual(await (await post(restarted, "/internal/upsert", roomSnapshot({
+    revision: 100,
+    directoryRevision: 100,
+  }))).json(), { ok: true, ignored: "stale" });
+  assert.deepEqual(await (await post(restarted, "/internal/remove", {
+    code: current.code,
+    incarnationId: current.incarnationId,
+  })).json(), { ok: true, ignored: "stale" });
+  assert.equal(restarted.rooms.get(current.code).incarnationId, "replacement");
+  await restarted.prune(replacement.expiresAt + 1);
+  assert.equal(restarted.watermarks.has(current.code), false);
+  t.mock.method(Date, "now", () => replacement.expiresAt + 1);
+  assert.deepEqual(await (await post(restarted, "/internal/upsert", replacement)).json(),
+    { ok: true, ignored: "expired" });
+});
+
+test("tracked-code bound leaves room under the SQLite value limit", async () => {
+  const { instance, writes } = directory();
+  const incarnationId = "三".repeat(128);
+  const latest = Number.MAX_SAFE_INTEGER;
+  const name = "棋".repeat(20);
+  const expiresAt = latest;
+  const createdAt = latest - 1;
+  const post = (snapshot) => instance.fetch(new Request("https://index/internal/upsert", {
+    method: "POST",
+    body: JSON.stringify(snapshot),
+  }));
+  for (let index = 0; index < 500; index += 1) {
+    const code = roomCodeAt(index);
+    instance.rooms.set(code, lobbySummaryFromRoom(roomSnapshot({
+      code,
+      incarnationId,
+      revision: latest,
+      directoryRevision: latest,
+      createdAt,
+      updatedAt: latest,
+      expiresAt,
+      players: [
+        { id: "host", name, color: "black", online: true },
+        { id: "friend", name, color: "white", online: true },
+      ],
+      game: {
+        width: 30,
+        height: 30,
+        topology: "mobius",
+        scoringRule: "japanese",
+        komi: 7.5,
+        phase: "play",
+      },
+      match: {
+        status: "playing",
+        mode: "friend",
+        roundId: latest,
+        controllers: {
+          black: { kind: "human", operatorId: "host" },
+          white: { kind: "human", operatorId: "friend" },
+        },
+      },
+    })));
+  }
+  for (let index = 500; index < 2_000; index += 1) {
+    const code = roomCodeAt(index);
+    instance.watermarks.set(code, {
+      code,
+      incarnationId,
+      createdAt,
+      directoryRevision: index === 500 ? 1 : latest,
+      expiresAt,
+    });
+  }
+  const value = {
+    rooms: [...instance.rooms.values()],
+    watermarks: [...instance.watermarks.values()],
+  };
+  assert.ok(Buffer.byteLength(JSON.stringify(value), "utf8") < 1_800_000,
+    "the bounded value needs headroom below Cloudflare's 2 MB key/value limit");
+
+  assert.equal((await post(roomSnapshot({ code: roomCodeAt(2_000) }))).status, 503);
+  assert.equal(writes.length, 0);
+  assert.equal((await post(roomSnapshot({ code: "X".repeat(10_000) }))).status, 400);
+  assert.equal((await post(roomSnapshot({
+    code: roomCodeAt(500),
+    incarnationId,
+    createdAt,
+    expiresAt,
+    directoryRevision: 2,
+  }))).status, 200, "a known code remains updatable at capacity");
+  assert.ok(Buffer.byteLength(JSON.stringify(writes.at(-1).value), "utf8") < 1_800_000);
+});
+
 test("a failed directory write resets memory before retrying its revision", async () => {
   for (const failurePoint of ["before", "after"]) {
     let stored = null;
@@ -209,7 +416,7 @@ test("a failed directory write resets memory before retrying its revision", asyn
       ? { ok: true }
       : { ok: true, ignored: "stale" });
     await upsert(lobby, roomSnapshot({ code: "BCA234", revision: 1 }));
-    assert.deepEqual(stored.map(({ code, revision }) => ({ code, revision }))
+    assert.deepEqual(stored.rooms.map(({ code, revision }) => ({ code, revision }))
       .sort((left, right) => left.code.localeCompare(right.code)), [
       { code: "ABC123", revision: 2 },
       { code: "BCA234", revision: 1 },

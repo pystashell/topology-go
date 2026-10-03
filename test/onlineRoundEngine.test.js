@@ -51,6 +51,48 @@ function request(room, payload, now) {
   });
 }
 
+function roundBusinessState(room) {
+  const stored = room.serialize();
+  return Object.fromEntries([
+    "game", "moveCount", "match", "timeControl", "undoRequest",
+    "scoreConfirmations", "scoringRevision", "roundArchive",
+    "resignationOutcome", "positionEpoch",
+  ].map((key) => [key, stored[key]]));
+}
+
+test("rejected legacy restart preserves the active round and its archive", () => {
+  const original = createSetupRoom({ startImmediately: true });
+  joinWhite(original);
+  original.applyAction({
+    playerId: "host",
+    action: "play",
+    payload: { row: 0, col: 0 },
+    now: 1_200,
+  });
+  const baseline = original.serialize();
+
+  for (const payload of [
+    { mode: "not-a-mode" },
+    { mode: MATCH_MODE_AI_AI, aiModelIds: { black: "invalid-model" } },
+    { mode: MATCH_MODE_AI_AI, aiModelIds: { white: "invalid-model" } },
+  ]) {
+    const room = RoomEngine.restore(baseline);
+    const before = roundBusinessState(room);
+    assert.throws(
+      () => room.applyAction({
+        playerId: "host",
+        action: "new_game",
+        payload,
+        now: 1_300,
+      }),
+      (error) => error instanceof RoomEngineError &&
+        error.status === 400 && error.code === "BAD_REQUEST",
+    );
+    assert.deepEqual(roundBusinessState(room), before);
+    assert.deepEqual(roundBusinessState(RoomEngine.restore(room.serialize())), before);
+  }
+});
+
 test("setup-first friend rooms persist an invitation until the opponent accepts", () => {
   const room = createSetupRoom({
     mainTimeSeconds: 30,
@@ -97,6 +139,49 @@ test("setup-first friend rooms persist an invitation until the opponent accepts"
   assert.equal(accepted.game.height, 9);
   assert.equal(accepted.game.topology, "torus");
   assert.equal(accepted.timeControl.running, true);
+});
+
+test("a pending friend invitation ends when either invited seat changes identity", () => {
+  for (const departure of ["host-leave", "white-leave", "white-release"]) {
+    const room = createSetupRoom();
+    joinWhite(room);
+    const invited = request(room, { mode: MATCH_MODE_FRIEND, size: 13 }, 1_200);
+    const requestRevision = invited.room.match.request.requestRevision;
+    if (departure === "host-leave") {
+      room.leave({ playerId: "host", now: 1_300 });
+    } else if (departure === "white-leave") {
+      room.leave({ playerId: "friend", now: 1_300 });
+    } else {
+      room.releaseSeat({ playerId: "friend", now: 1_300 });
+    }
+    const afterDeparture = room.snapshot(1_300);
+    assert.equal(afterDeparture.match.status, MATCH_STATUS_SETUP, departure);
+    assert.equal(afterDeparture.match.request, null, departure);
+    assert.equal(afterDeparture.game.width, 9, departure);
+
+    const replacementId = `${departure}-replacement`;
+    const replacement = room.join({
+      name: "Replacement",
+      role: "player",
+      playerId: replacementId,
+      tokenHash: "c".repeat(64),
+      now: 1_400,
+    });
+    assert.equal(replacement.identity.color,
+      departure === "host-leave" ? "black" : "white");
+    assert.throws(
+      () => room.applyAction({
+        playerId: departure === "host-leave" ? "friend" : replacementId,
+        action: "respond_game",
+        payload: { accept: true, requestRevision },
+        now: 1_500,
+      }),
+      (error) => error instanceof RoomEngineError &&
+        error.code === "STALE_GAME_REQUEST",
+      departure,
+    );
+    assert.equal(room.snapshot(1_500).match.status, MATCH_STATUS_SETUP);
+  }
 });
 
 test("a friend invitation stays unavailable until a human opponent occupies white", () => {
@@ -219,6 +304,66 @@ test("non-friend online modes start immediately with browser-owned controllers",
     },
     now: 1_300,
   }));
+});
+
+test("an AI or local host leaving archives the round and frees a fresh setup", () => {
+  for (const mode of [MATCH_MODE_LOCAL, MATCH_MODE_HUMAN_AI, MATCH_MODE_AI_AI]) {
+    const room = createSetupRoom({ mainTimeSeconds: 30 });
+    const started = request(room, { mode }, 1_100).room;
+    const played = room.applyAction({
+      playerId: "host",
+      action: mode === MATCH_MODE_AI_AI ? "ai_play" : "play",
+      payload: {
+        row: 0,
+        col: 0,
+        ...(mode === MATCH_MODE_AI_AI ? {
+          expectedMoveCount: started.moveCount,
+          expectedPositionToken: started.positionToken,
+        } : {}),
+      },
+      now: 1_200,
+    }).room;
+    assert.equal(played.moveCount, 1);
+    assert.equal(played.timeControl.running, true);
+    const oldPositionToken = played.positionToken;
+
+    // A lost connection is still a reconnectable seat; only explicit leave
+    // ends the operator-owned round.
+    room.resumeConnection("host", `host-${mode}`, 1_250);
+    room.disconnect({ connectionId: `host-${mode}`, now: 1_260 });
+    assert.equal(room.snapshot(1_260).match.status, MATCH_STATUS_PLAYING);
+    assert.equal(room.snapshot(1_260).match.controllers.black.operatorId, "host");
+
+    room.leave({ playerId: "host", now: 1_300 });
+    const after = room.snapshot(1_300);
+    assert.equal(after.match.status, MATCH_STATUS_SETUP);
+    assert.equal(after.match.mode, MATCH_MODE_FRIEND);
+    assert.equal(after.match.controllers.black.operatorId, null);
+    assert.equal(after.match.controllers.white.operatorId, null);
+    assert.equal(after.moveCount, 0);
+    assert.equal(after.game.board[0][0], null);
+    assert.equal(after.timeControl.running, false);
+    assert.notEqual(after.positionToken, oldPositionToken);
+    assert.equal(after.roundArchive.length, 1);
+    assert.equal(after.roundArchive[0].mode, mode);
+    assert.equal(after.roundArchive[0].moveCount, 1);
+    assert.equal(room.nextOpenColor(), "black");
+
+    for (const nextId of ["same-person-new-identity", "other-person"]) {
+      const restored = RoomEngine.restore(room.serialize());
+      const joined = restored.join({
+        name: "Next host",
+        role: "player",
+        playerId: nextId,
+        tokenHash: "c".repeat(64),
+        now: 1_400,
+      });
+      assert.equal(joined.identity.color, "black");
+      assert.equal(joined.room.match.status, MATCH_STATUS_SETUP);
+      assert.equal(joined.room.match.controllers.black.operatorId, nextId);
+      assert.equal(joined.room.roundArchive.length, 1);
+    }
+  }
 });
 
 test("AI and local controllers occupy the opponent seat for later HTTP joins", () => {

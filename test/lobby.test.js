@@ -256,7 +256,7 @@ test("v2 match controllers derive human, AI, and local seats", () => {
   ]);
 });
 
-test("only friend rooms with a genuinely open white seat are joinable", () => {
+test("friend rooms advertise an open white seat or an unoccupied setup host seat", () => {
   const players = [
     { id: "host", name: "Host", color: "black", role: "player", online: true },
     { id: "friend", name: "Friend", color: "white", role: "player", online: true },
@@ -333,7 +333,23 @@ test("only friend rooms with a genuinely open white seat are joinable", () => {
       },
     },
   }));
-  assert.equal(hostless.joinable, false, "the lobby must not advertise a hostless room");
+  assert.equal(hostless.joinable, true, "a hostless setup accepts a new black player");
+
+  const staleController = lobbySummaryFromRoom(room({
+    code: "STALE2",
+    players: players.slice(0, 1),
+    match: {
+      status: "setup",
+      mode: "friend",
+      roundId: 0,
+      controllers: {
+        black: { kind: "human", operatorId: null },
+        white: { kind: "human", operatorId: "friend" },
+      },
+    },
+  }));
+  assert.equal(staleController.joinable, false,
+    "a black member still reserves the seat when its controller is stale");
 });
 
 test("lobby pruning drops stale rooms and keeps the newest order", () => {

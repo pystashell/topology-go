@@ -44,6 +44,7 @@ test("stale spectator commands persist their rate-limit token before replying", 
     },
   };
   durableObject.engine = {
+    bumpDirectoryRevision() {},
     inspectCommand() {
       return { kind: "stale", previousSequence: 7 };
     },
@@ -154,6 +155,7 @@ test("room persistence never depends on the optional one-way room index", async 
     },
   };
   durableObject.engine = {
+    bumpDirectoryRevision() {},
     serialize() {
       return { durable: true };
     },

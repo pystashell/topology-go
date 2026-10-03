@@ -97,6 +97,8 @@ export class BadukRoom {
       if (advanced.changed) {
         await this.persist();
         this.broadcastState();
+      } else {
+        this.queueIndexPublish();
       }
       await this.scheduleAlarm();
     });
@@ -294,6 +296,7 @@ export class BadukRoom {
       }
       this.engine = RoomEngine.restore(stored);
       this.unavailableError = null;
+      this.queueIndexPublish();
       await this.scheduleAlarmAfterCommit();
     } catch (error) {
       if (stored) this.markUnavailable("ROOM_RESTORE_FAILED", error, stored);
@@ -382,6 +385,7 @@ export class BadukRoom {
       if (this.unavailableError?.code === "ROOM_COMMIT_FAILED") {
         this.engine = recovered;
         this.unavailableError = null;
+        this.queueIndexPublish();
         await this.scheduleAlarmAfterCommit();
       }
       const member = recovered.member(playerId);
@@ -668,6 +672,9 @@ export class BadukRoom {
   async persist() {
     if (!this.engine) return;
     try {
+      // Presence and TTL can change without a game revision. Give every
+      // persisted directory projection its own strictly ordered version.
+      this.engine.bumpDirectoryRevision();
       const snapshot = this.engine.serialize();
       await this.ctx.storage.put(STORAGE_KEY, snapshot);
     } catch (error) {
@@ -678,6 +685,10 @@ export class BadukRoom {
       this.markUnavailable("ROOM_COMMIT_FAILED", error);
       throw this.unavailableError;
     }
+    this.queueIndexPublish();
+  }
+
+  queueIndexPublish() {
     const publishing = this.publishRoomIndexSnapshot();
     if (typeof this.ctx.waitUntil === "function") this.ctx.waitUntil(publishing);
     else void publishing;
@@ -705,15 +716,15 @@ export class BadukRoom {
     }
   }
 
-  async removeRoomIndexEntry(code) {
-    if (!this.env?.BADUK_ROOM_INDEX || !code) return;
+  async removeRoomIndexEntry(code, incarnationId) {
+    if (!this.env?.BADUK_ROOM_INDEX || !code || !incarnationId) return;
     try {
       const index = this.env.BADUK_ROOM_INDEX.getByName("global");
       await index.fetch(
         new Request("https://room-index.internal/internal/remove", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code }),
+          body: JSON.stringify({ code, incarnationId }),
         }),
       );
     } catch (error) {
@@ -769,6 +780,7 @@ export class BadukRoom {
     if (this.retiring) return;
     this.retiring = true;
     const roomCode = this.engine?.state?.code ?? null;
+    const incarnationId = this.engine?.state?.incarnationId ?? null;
     this.engine = null;
     for (const socket of this.ctx.getWebSockets()) {
       this.sendError(socket, {
@@ -782,7 +794,7 @@ export class BadukRoom {
         await this.ctx.storage.deleteAlarm();
       }
       await this.ctx.storage.deleteAll();
-      const removal = this.removeRoomIndexEntry(roomCode);
+      const removal = this.removeRoomIndexEntry(roomCode, incarnationId);
       if (typeof this.ctx.waitUntil === "function") this.ctx.waitUntil(removal);
       else void removal;
     } finally {
