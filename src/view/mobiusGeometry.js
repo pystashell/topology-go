@@ -172,6 +172,15 @@ export function minimumMobiusNeighborDistance({
 }
 
 /**
+ * Stone radius for the shortest neighbour spacing on the band. Stones fill
+ * 90% of that spacing so the tightest neighbours still keep a visible gap;
+ * the strip is strongly anisotropic, so smaller stones would read as specks.
+ */
+export function mobiusStoneRadius(neighborSpacing) {
+  return THREE.MathUtils.clamp(neighborSpacing * 0.45, 0.07, 0.36);
+}
+
+/**
  * Convert the surface mesh UV into a canonical board point.  At the duplicated
  * u=1 seam the row must be mirrored, matching P(2 PI, v) = P(0, -v).
  */

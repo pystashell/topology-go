@@ -16,6 +16,7 @@ import {
   mobiusBoardLayout,
   mobiusGridFrame,
   mobiusGridPointFromUv,
+  mobiusStoneRadius,
 } from "./mobiusGeometry.js";
 
 const LOCAL_UP = new THREE.Vector3(0, 1, 0);
@@ -88,13 +89,7 @@ export class MobiusBoard extends TorusBoard {
       majorRadius: this.majorRadius,
       halfWidth: this.gridHalfWidth,
     });
-    this.mobiusStoneRadius = Math.max(
-      0.07,
-      Math.min(
-        0.36,
-        this.mobiusNeighborSpacing * 0.34,
-      ),
-    );
+    this.mobiusStoneRadius = mobiusStoneRadius(this.mobiusNeighborSpacing);
     this.mobiusStoneThickness = Math.max(0.035, this.mobiusStoneRadius * 0.34);
 
     const geometry = createMobiusSurfaceGeometry({
