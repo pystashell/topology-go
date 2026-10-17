@@ -54,8 +54,9 @@ export const SGF_EXTENSION_PROPERTIES = Object.freeze({
 
 export const SGF_DEFAULT_LIMITS = Object.freeze({
   maxBytes: 2 * 1024 * 1024,
+  // Every game tree needs at least one node, so maxNodes also bounds how
+  // deeply variations can nest; parsing uses an explicit stack.
   maxNodes: 10_000,
-  maxTreeDepth: 64,
   maxPropertiesPerNode: 256,
   maxPropertyValues: 20_000,
   maxValueLength: 256 * 1024,
@@ -558,7 +559,7 @@ class SgfParser {
     const trees = [];
     this.skipWhitespace();
     while (this.text[this.offset] === "(") {
-      trees.push(this.parseTree(1));
+      trees.push(this.parseTree());
       this.skipWhitespace();
     }
     if (!trees.length) this.fail("SGF collection must contain a game tree");
@@ -568,25 +569,32 @@ class SgfParser {
     return trees;
   }
 
-  parseTree(depth) {
-    if (depth > this.limits.maxTreeDepth) {
-      this.fail("SGF variation nesting exceeds the configured limit", "SGF_TOO_DEEP");
-    }
-    this.expect("(");
-    this.skipWhitespace();
-    const nodes = [];
-    while (this.text[this.offset] === ";") {
-      nodes.push(this.parseNode());
-      this.skipWhitespace();
-    }
-    if (!nodes.length) this.fail("Every SGF game tree must contain at least one node");
-    const children = [];
-    while (this.text[this.offset] === "(") {
-      children.push(this.parseTree(depth + 1));
-      this.skipWhitespace();
-    }
-    this.expect(")");
-    return { nodes, children };
+  // A main line with many branch points nests one level per branch, so game
+  // trees are parsed with an explicit stack rather than recursion. Hostile
+  // nesting is still bounded because every tree costs at least one node.
+  parseTree() {
+    const open = [];
+    let root = null;
+    do {
+      if (this.text[this.offset] === "(") {
+        this.expect("(");
+        this.skipWhitespace();
+        const tree = { nodes: [], children: [] };
+        while (this.text[this.offset] === ";") {
+          tree.nodes.push(this.parseNode());
+          this.skipWhitespace();
+        }
+        if (!tree.nodes.length) this.fail("Every SGF game tree must contain at least one node");
+        if (open.length) open[open.length - 1].children.push(tree);
+        else root = tree;
+        open.push(tree);
+      } else {
+        this.expect(")");
+        open.pop();
+        if (open.length) this.skipWhitespace();
+      }
+    } while (open.length);
+    return root;
   }
 
   parseNode() {
@@ -659,15 +667,22 @@ class SgfParser {
   }
 }
 
-function flattenMainLine(tree, output = []) {
-  output.push(...tree.nodes);
-  if (tree.children[0]) flattenMainLine(tree.children[0], output);
+function flattenMainLine(tree) {
+  const output = [];
+  for (let current = tree; current; current = current.children[0]) {
+    output.push(...current.nodes);
+  }
   return output;
 }
 
 function countVariations(tree) {
-  let count = Math.max(0, tree.children.length - 1);
-  for (const child of tree.children) count += countVariations(child);
+  let count = 0;
+  const pending = [tree];
+  while (pending.length) {
+    const current = pending.pop();
+    count += Math.max(0, current.children.length - 1);
+    pending.push(...current.children);
+  }
   return count;
 }
 
@@ -691,14 +706,23 @@ function parseSize(value, limits) {
   };
 }
 
-function decodeSetupValue(value, width, height) {
+function decodeSetupValue(value, width, height, budget) {
   const parts = String(value).split(":");
-  if (parts.length === 1) return [decodeSgfPoint(parts[0], width, height)];
-  if (parts.length !== 2) {
+  if (parts.length > 2) {
     throw new SgfError(`Invalid compressed point '${value}'`, "INVALID_POINT");
   }
   const start = decodeSgfPoint(parts[0], width, height);
-  const end = decodeSgfPoint(parts[1], width, height);
+  const end = parts.length === 1 ? start : decodeSgfPoint(parts[1], width, height);
+  // Each value may name the whole board, so bound the total expansion before
+  // materializing it rather than trusting the per-file value-count limit.
+  budget.remaining -=
+    (Math.abs(end.row - start.row) + 1) * (Math.abs(end.col - start.col) + 1);
+  if (budget.remaining < 0) {
+    throw new SgfError(
+      "Setup properties list more than twice the board's points",
+      "SGF_TOO_LARGE",
+    );
+  }
   const points = [];
   for (let row = Math.min(start.row, end.row); row <= Math.max(start.row, end.row); row += 1) {
     for (let col = Math.min(start.col, end.col); col <= Math.max(start.col, end.col); col += 1) {
@@ -708,13 +732,38 @@ function decodeSetupValue(value, width, height) {
   return points;
 }
 
-function setSetupStones(board, values, color, width, height) {
+function setSetupStones(board, values, color, width, height, budget) {
   for (const value of values) {
-    for (const { row, col } of decodeSetupValue(value, width, height)) {
+    for (const { row, col } of decodeSetupValue(value, width, height, budget)) {
       if (board[row][col] !== EMPTY && board[row][col] !== color) {
         throw new SgfError(`Setup stones overlap at '${value}'`, "OVERLAPPING_SETUP");
       }
       board[row][col] = color;
+    }
+  }
+}
+
+// Setup is a position, not a sequence of moves, so nothing would capture
+// stones placed without liberties; they would then count in area scoring.
+// Play never reaches such a position, so no exported record contains one.
+function rejectSetupWithoutLiberties(board, width, height, topology) {
+  // Larger boards are only inspected as metadata and cannot be replayed.
+  if (width > MAX_BOARD_DIMENSION || height > MAX_BOARD_DIMENSION) return;
+  const game = new GoEngine({ width, height, topology, komi: 0, initialBoard: board });
+  const seen = new Set();
+  for (let row = 0; row < height; row += 1) {
+    for (let col = 0; col < width; col += 1) {
+      if (board[row][col] === EMPTY || seen.has(`${row},${col}`)) continue;
+      const group = game.getGroup(row, col);
+      for (const stone of group.stones) seen.add(`${stone.row},${stone.col}`);
+      if (group.liberties.length === 0) {
+        const point = encodeSgfPoint(row, col, width, height);
+        throw new SgfError(
+          `Setup stones at '${point}' have no liberties`,
+          "INVALID_SETUP",
+          { point },
+        );
+      }
     }
   }
 }
@@ -740,14 +789,26 @@ function decodeMove(value, width, height, warnings, context) {
   }
 }
 
-function parseKomi(value, warnings) {
-  if (value === undefined || value === "") return 0;
-  const komi = Number(value);
-  if (!Number.isFinite(komi)) {
-    warnings.push(warning("INVALID_KOMI", `Invalid KM value '${value}' was replaced with 0.`));
+// SGF Real: an optional sign, digits and an optional decimal fraction.
+// Number() would also accept hexadecimal, exponents and "Infinity".
+const SGF_REAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/u;
+// Rooms allow komi up to 50. Beyond that, or beyond the board's point count
+// on larger boards, komi alone would decide every game.
+const ROOM_KOMI_LIMIT = 50;
+
+function parseKomi(value, warnings, pointCount) {
+  const text = String(value ?? "").trim();
+  if (!text) return 0;
+  const limit = Math.max(ROOM_KOMI_LIMIT, pointCount);
+  const komi = SGF_REAL.test(text) ? Number(text) : NaN;
+  if (!Number.isFinite(komi) || Math.abs(komi) > limit) {
+    warnings.push(warning(
+      "INVALID_KOMI",
+      `Invalid KM value '${value}' was replaced with 0; komi must be a decimal number from -${limit} to ${limit}.`,
+    ));
     return 0;
   }
-  return komi;
+  return komi === 0 ? 0 : komi;
 }
 
 function gameInfoNode(nodes, partialBase) {
@@ -782,13 +843,13 @@ function gameInfoNode(nodes, partialBase) {
   return selected;
 }
 
-function readMetadata(root, info, warnings) {
+function readMetadata(root, info, warnings, pointCount) {
   return {
     format: firstProperty(root, "FF") ?? "",
     game: firstProperty(root, "GM") ?? "",
     charset: firstProperty(root, "CA") ?? "",
     application: firstProperty(root, "AP") ?? "",
-    komi: parseKomi(info ? firstProperty(info, "KM") : undefined, warnings),
+    komi: parseKomi(info ? firstProperty(info, "KM") : undefined, warnings, pointCount),
     rules: info ? firstProperty(info, "RU") ?? "" : "",
     blackPlayer: info ? firstProperty(info, "PB") ?? "" : "",
     whitePlayer: info ? firstProperty(info, "PW") ?? "" : "",
@@ -956,7 +1017,7 @@ export function importSgf(input, options = {}) {
   const sizeValue = firstProperty(root, "SZ");
   if (sizeValue === undefined) warnings.push(warning("MISSING_SIZE", "SZ was absent; 19x19 was assumed."));
   const { width, height } = parseSize(sizeValue ?? "19", limits);
-  const metadata = readMetadata(root, info, warnings);
+  const metadata = readMetadata(root, info, warnings, width * height);
   const scoringRule = normalizeRule(metadata.rules, warnings);
 
   const topologyValue = firstProperty(root, SGF_EXTENSION_PROPERTIES.topology);
@@ -974,8 +1035,10 @@ export function importSgf(input, options = {}) {
   }
 
   const board = Array.from({ length: height }, () => Array(width).fill(EMPTY));
-  setSetupStones(board, propertyValues(root, "AB"), BLACK, width, height);
-  setSetupStones(board, propertyValues(root, "AW"), WHITE, width, height);
+  const setupBudget = { remaining: 2 * width * height };
+  setSetupStones(board, propertyValues(root, "AB"), BLACK, width, height, setupBudget);
+  setSetupStones(board, propertyValues(root, "AW"), WHITE, width, height, setupBudget);
+  rejectSetupWithoutLiberties(board, width, height, topology);
 
   let firstMoveColor = null;
   for (const node of nodes) {
@@ -995,6 +1058,7 @@ export function importSgf(input, options = {}) {
   const extensionEvents = [];
   const unknownExtensions = [];
   let expectedPlayer = currentPlayer;
+  let consecutivePasses = 0;
 
   for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
     const node = nodes[nodeIndex];
@@ -1021,21 +1085,31 @@ export function importSgf(input, options = {}) {
           warnings.push(
             warning(
               "NON_ALTERNATING_MOVE",
-              `Node ${nodeIndex} plays ${identifier} when ${colorToSgf(expectedPlayer)} was expected.`,
+              `Node ${nodeIndex} plays ${identifier} when ${colorToSgf(expectedPlayer)} was expected; a pass was inserted for ${colorToSgf(expectedPlayer)}.`,
               { nodeIndex },
             ),
           );
+          // GoEngine replays strictly alternate, so record the skipped turn as
+          // a pass. If that pass would end play, resume with the mover.
+          replayEvents.push({ type: "pass", color: expectedPlayer });
+          consecutivePasses += 1;
+          if (consecutivePasses >= 2) {
+            replayEvents.push({ type: "resume_play", nextPlayer: color });
+            consecutivePasses = 0;
+          }
         }
         const point = decodeMove(values[0], width, height, warnings, { nodeIndex });
         replayEvents.push(
           point ? { type: "play", color, ...point } : { type: "pass", color },
         );
+        consecutivePasses = point ? 0 : consecutivePasses + 1;
         expectedPlayer = oppositeColor(color);
       } else if (identifier === SGF_EXTENSION_PROPERTIES.resumePlay) {
         for (const value of values) {
           const nextPlayer = colorFromSgf(value, SGF_EXTENSION_PROPERTIES.resumePlay);
           replayEvents.push({ type: "resume_play", nextPlayer });
           expectedPlayer = nextPlayer;
+          consecutivePasses = 0;
         }
       } else if (identifier === SGF_EXTENSION_PROPERTIES.toggleDead) {
         for (const value of values) {

@@ -5,6 +5,7 @@ import { GoEngine, PHASE_FINISHED, WHITE } from "../src/game/goEngine.js";
 import { buildReplayFrames } from "../src/game/replay.js";
 import {
   SgfError,
+  encodeSgfPoint,
   escapeSgfValue,
   exportSgf,
   importSgf,
@@ -448,8 +449,156 @@ test("malformed, oversized, too-deep and out-of-board SGF is rejected", () => {
     { code: "SGF_TOO_LARGE" },
   );
   const nested = `${"(;C[x]".repeat(6)}${")".repeat(6)}`;
-  assert.throws(() => importSgf(nested, { limits: { maxTreeDepth: 5 } }), {
-    code: "SGF_TOO_DEEP",
+  assert.throws(() => importSgf(nested, { limits: { maxNodes: 5 } }), {
+    code: "SGF_TOO_MANY_NODES",
   });
   assert.throws(() => importSgf("(;FF[4]GM[1]SZ[5]PB[unterminated)"), SgfError);
+});
+
+test("long main lines with many branch points import; nesting is bounded by node count", () => {
+  // Each branch point nests the rest of the main line one level deeper:
+  // ;B[aa](;W[ba](...)(;B[ss]))(;W[ss])
+  const branches = 100;
+  let line = ";B[rr]";
+  for (let index = branches - 1; index >= 0; index--) {
+    const color = index % 2 === 0 ? "B" : "W";
+    const point = encodeSgfPoint(Math.floor(index / 19), index % 19, 19);
+    line = `;${color}[${point}](${line})(;${color === "B" ? "W" : "B"}[ss])`;
+  }
+  const imported = importSgf(`(;FF[4]GM[1]SZ[19]XTOP[torus]${line})`);
+  assert.equal(imported.replay.events.length, branches + 1);
+  assert.deepEqual(imported.replay.events.at(-1), { type: "play", color: "black", row: 17, col: 17 });
+  assert.equal(
+    imported.warnings.find(({ code }) => code === "IGNORED_VARIATIONS").message,
+    `${branches} non-main SGF variation branch(es) were ignored.`,
+  );
+  assert.equal(buildReplayFrames(imported.replay).frames.length, branches + 2);
+
+  // Hostile nesting fails fast on the node limit instead of the call stack.
+  const hostile = `(;GM[1]${"(;C[x]".repeat(100_000)}${")".repeat(100_001)}`;
+  assert.throws(() => importSgf(hostile), { code: "SGF_TOO_MANY_NODES" });
+  // With the limits raised, nesting that overflowed the old recursive parser
+  // is handled iteratively.
+  const deep = `(;GM[1]${"(;C[x]".repeat(30_000)}${")".repeat(30_001)}`;
+  const raised = importSgf(deep, {
+    limits: { maxNodes: 50_000, maxPropertyValues: 50_000 },
+  });
+  assert.deepEqual(raised.replay.events, []);
+  assert.throws(() => importSgf("(;GM[1](;C[x]"), { code: "INVALID_SGF" });
+  assert.throws(() => importSgf("(;GM[1](;C[x])))"), { code: "INVALID_SGF" });
+  assert.throws(() => importSgf("(;GM[1](;C[x])x)"), { code: "INVALID_SGF" });
+});
+
+test("non-alternating SGF moves import as replayable passes for the skipped color", () => {
+  const repeated = importSgf("(;FF[4]GM[1]SZ[9]XTOP[torus];B[aa];B[bb];W[cc])");
+  assert.deepEqual(repeated.replay.events, [
+    { type: "play", color: "black", row: 0, col: 0 },
+    { type: "pass", color: "white" },
+    { type: "play", color: "black", row: 1, col: 1 },
+    { type: "play", color: "white", row: 2, col: 2 },
+  ]);
+  assert.deepEqual(
+    repeated.warnings.filter(({ code }) => code === "NON_ALTERNATING_MOVE")
+      .map(({ nodeIndex }) => nodeIndex),
+    [2],
+  );
+  const frames = buildReplayFrames(repeated.replay).frames;
+  assert.equal(frames.at(-1).board[1][1], "black");
+  assert.equal(frames.at(-1).board[2][2], "white");
+  assert.equal(frames.at(-1).currentPlayer, "black");
+
+  const wrongFirst = importSgf("(;FF[4]GM[1]SZ[9]XTOP[torus]PL[W];B[aa];W[bb])");
+  assert.equal(wrongFirst.replay.base.currentPlayer, "white");
+  assert.deepEqual(wrongFirst.replay.events.slice(0, 2), [
+    { type: "pass", color: "white" },
+    { type: "play", color: "black", row: 0, col: 0 },
+  ]);
+  assert.ok(wrongFirst.warnings.some(({ code }) => code === "NON_ALTERNATING_MOVE"));
+  assert.equal(buildReplayFrames(wrongFirst.replay).frames.length, 4);
+
+  // An inserted pass that would end play resumes with the player who moved.
+  const afterPass = importSgf("(;FF[4]GM[1]SZ[5]XTOP[cylinder];B[];B[aa];W[bb])");
+  assert.deepEqual(afterPass.replay.events.slice(0, 4), [
+    { type: "pass", color: "black" },
+    { type: "pass", color: "white" },
+    { type: "resume_play", nextPlayer: "black" },
+    { type: "play", color: "black", row: 0, col: 0 },
+  ]);
+  const last = buildReplayFrames(afterPass.replay).frames.at(-1);
+  assert.equal(last.phase, "play");
+  assert.equal(last.board[1][1], "white");
+});
+
+test("setup stones without liberties are rejected on the record's topology", () => {
+  // aa touches ba, ab and, through the cylinder seam, ea.
+  const surrounded = "AB[aa]AW[ba][ea][ab];W[cc])";
+  assert.throws(
+    () => importSgf(`(;FF[4]GM[1]SZ[5]XTOP[cylinder]${surrounded}`),
+    (error) => error instanceof SgfError &&
+      error.code === "INVALID_SETUP" && error.point === "aa",
+  );
+  // On a torus aa also touches ae, so the same setup is a legal position.
+  const torus = importSgf(`(;FF[4]GM[1]SZ[5]XTOP[torus]${surrounded}`);
+  const last = buildReplayFrames(torus.replay).frames.at(-1);
+  assert.equal(last.board[0][0], "black");
+  assert.equal(last.board[2][2], "white");
+
+  assert.throws(() => importSgf("(;FF[4]GM[1]SZ[3]AB[aa:cc])"), {
+    code: "INVALID_SETUP",
+  });
+  assert.throws(
+    () => importSgf("(;FF[4]GM[1]SZ[5]XTOP[cylinder]AW[ac][bc]AB[ab][bb][ad][bd][cc][ec])"),
+    { code: "INVALID_SETUP" },
+  );
+});
+
+test("compressed setup ranges are capped at twice the board's points", () => {
+  const started = performance.now();
+  assert.throws(
+    () => importSgf(`(;FF[4]GM[1]SZ[30]AB${"[aa:DD]".repeat(19_990)})`),
+    { code: "SGF_TOO_LARGE" },
+  );
+  assert.ok(performance.now() - started < 500, "rejected before expanding millions of points");
+
+  // Repeating a range is tolerated up to the cap of 2 * 81 points.
+  const repeated = importSgf("(;FF[4]GM[1]SZ[9]AB[aa:ie][aa:ie]AW[ag:ii])");
+  assert.equal(repeated.replay.base.board[4][8], "black");
+  assert.equal(repeated.replay.base.board[8][0], "white");
+  assert.throws(
+    () => importSgf("(;FF[4]GM[1]SZ[9]AB[aa:ii][aa:ii]AW[ii])"),
+    { code: "SGF_TOO_LARGE" },
+  );
+});
+
+test("KM is a bounded SGF decimal and invalid komi falls back to 0 with a warning", () => {
+  const komiOf = (value, size = 9) => {
+    const imported = importSgf(`(;FF[4]GM[1]SZ[${size}]XTOP[torus]KM[${value}])`);
+    return {
+      komi: imported.replay.base.komi,
+      warned: imported.warnings.some(({ code }) => code === "INVALID_KOMI"),
+    };
+  };
+  for (const [value, komi] of [
+    ["6.5", 6.5], ["-3", -3], ["+7", 7], [".5", 0.5], [" 7.5 ", 7.5], ["-0", 0],
+    ["", 0], ["50", 50],
+  ]) {
+    assert.deepEqual(komiOf(value), { komi, warned: false }, value);
+  }
+  for (const value of ["0x10", "1e2", "1e308", "-1e300", "Infinity", "NaN", "6,5", "7.5.1", "-81.5"]) {
+    assert.deepEqual(komiOf(value), { komi: 0, warned: true }, value);
+  }
+  // The bound is the room limit of 50, or the point count of larger boards.
+  assert.deepEqual(komiOf("50", 5), { komi: 50, warned: false });
+  assert.deepEqual(komiOf("50.5", 5), { komi: 0, warned: true });
+  assert.deepEqual(komiOf("-81", 9), { komi: -81, warned: false });
+  assert.deepEqual(komiOf("361", 19), { komi: 361, warned: false });
+  assert.deepEqual(komiOf("361.5", 19), { komi: 0, warned: true });
+
+  // Every komi a room can use survives an SGF round trip, even on 5x5.
+  const game = new GoEngine({ size: 5, komi: 50, scoringRule: "chinese" });
+  game.play(2, 2);
+  const { sgf } = exportSgf({ replay: game.getReplayState() });
+  const imported = importSgf(sgf);
+  assert.equal(imported.replay.base.komi, 50);
+  assert.equal(imported.warnings.some(({ code }) => code === "INVALID_KOMI"), false);
 });

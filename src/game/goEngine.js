@@ -625,6 +625,40 @@ export class GoEngine {
     return game;
   }
 
+  /**
+   * Equivalent to GoEngine.fromSearchState(this.exportSearchState()), but
+   * without re-validating every superko hash. This engine already upholds
+   * those invariants, so AI search can branch from trusted internal positions
+   * cheaply; untrusted snapshots must still go through fromSearchState().
+   */
+  cloneForSearch() {
+    const game = new GoEngine({
+      width: this.width,
+      height: this.height,
+      komi: this.komi,
+      scoringRule: this.scoringRule,
+      topology: this.topology,
+      currentPlayer: this.currentPlayer,
+    });
+    game.board = copyBoard(this.board);
+    game.phase = this.phase;
+    game.consecutivePasses = this.consecutivePasses;
+    game.captures = { ...this.captures };
+    game.deadStones = new Set(this.deadStones);
+    game.lastMove = copyLastMove(this.lastMove, this.width, this.height);
+    game.result =
+      this.result === null ? null : cloneSerializable(this.result, "result");
+    game.positionHistory = new Set(this.positionHistory);
+    game.replay = {
+      version: REPLAY_VERSION,
+      complete: false,
+      base: game.#replayBaseSnapshot(),
+      events: [],
+    };
+    game.#recordHistory = false;
+    return game;
+  }
+
   #validateAndCopyBoard(board) {
     if (!Array.isArray(board) || board.length !== this.height) {
       throw new RangeError(`Initial board must contain ${this.height} rows`);
@@ -1485,9 +1519,28 @@ export class GoEngine {
     return suggested;
   }
 
+  /**
+   * Report whether play(row, col) would succeed, and the exact failure reason
+   * play() would return, without changing any game state. Searches use this
+   * to probe every point of one position instead of cloning it per point.
+   *
+   * @returns {{ok: true} | {ok: false, reason: string}}
+   */
+  checkPlay(row, col) {
+    if (this.phase !== PHASE_PLAY) {
+      return this.#failure(MOVE_ERRORS.GAME_NOT_PLAYING);
+    }
+    return this.#simulatePlacement(row, col, this.currentPlayer, {
+      checkSuperko: true,
+    });
+  }
+
   #simulatePlacement(row, col, color, { checkSuperko }) {
-    if (!this.#validPoint(row, col) || this.board[row][col] !== EMPTY) {
-      return { ok: false };
+    if (!this.#validPoint(row, col)) {
+      return this.#failure(MOVE_ERRORS.OUT_OF_BOUNDS);
+    }
+    if (this.board[row][col] !== EMPTY) {
+      return this.#failure(MOVE_ERRORS.OCCUPIED);
     }
 
     const board = copyBoard(this.board);
@@ -1511,10 +1564,10 @@ export class GoEngine {
     }
 
     if (this.#collectGroup(row, col, board).liberties.length === 0) {
-      return { ok: false };
+      return this.#failure(MOVE_ERRORS.SUICIDE);
     }
     if (checkSuperko && this.positionHistory.has(this.#positionHash(board))) {
-      return { ok: false };
+      return this.#failure(MOVE_ERRORS.SUPERKO);
     }
     return { ok: true };
   }

@@ -92,16 +92,16 @@ function boardDimensions(value) {
   return { width, height };
 }
 
-function normalizeState(gameOrState) {
-  if (gameOrState instanceof GoEngine) {
-    return gameOrState.exportSearchState();
-  }
+/**
+ * Validate external input once and return a private search engine. Search
+ * nodes then branch with cloneForSearch(), which skips re-validating the
+ * superko history that this trusted engine already guarantees.
+ */
+function searchGame(gameOrState) {
   if (gameOrState && typeof gameOrState.exportSearchState === "function") {
-    return GoEngine.fromSearchState(
-      gameOrState.exportSearchState(),
-    ).exportSearchState();
+    return GoEngine.fromSearchState(gameOrState.exportSearchState());
   }
-  return GoEngine.fromSearchState(gameOrState).exportSearchState();
+  return GoEngine.fromSearchState(gameOrState);
 }
 
 function normalizeDifficulty(value = "easy") {
@@ -255,10 +255,6 @@ function pointKey(row, col) {
   return `${row},${col}`;
 }
 
-function includesPoint(points, row, col) {
-  return points.some((point) => point.row === row && point.col === col);
-}
-
 /**
  * Build each string once and map all of its stones back to the shared record.
  * GoEngine owns the topology, so groups crossing columns 0/width-1 are handled
@@ -282,69 +278,205 @@ function groupMap(game) {
   return { byStone, groups };
 }
 
-function rawMoveAnalysis(game, groups, row, col, random) {
-  const player = game.currentPlayer;
-  const opponent = player === BLACK ? WHITE : BLACK;
-  const friendly = new Set();
-  const enemy = new Set();
-  const emptyLiberties = new Set();
+// Move ranking analyses every empty point on every rollout ply, so it runs
+// on flat typed arrays rather than string-keyed sets. Adjacency is read from
+// GoEngine.neighbors() once per board shape, so every topology's seams stay
+// exact. Scratch buffers are reused: a search analyses one position at a time
+// and nothing here yields between filling and reading them.
+const BOARD_SHAPES = new Map();
+const MAX_CACHED_BOARD_SHAPES = 32;
+const EMPTY_POINT = 0;
+const BLACK_POINT = 1;
+const WHITE_POINT = 2;
 
-  for (const neighbour of game.neighbors(row, col)) {
-    const value = game.get(neighbour.row, neighbour.col);
-    if (value === null) {
-      emptyLiberties.add(pointKey(neighbour.row, neighbour.col));
-      continue;
+function boardShape(game) {
+  const key = `${game.topology}:${game.width}x${game.height}`;
+  const cached = BOARD_SHAPES.get(key);
+  if (cached) return cached;
+
+  const count = game.width * game.height;
+  const neighbourStart = new Int32Array(count + 1);
+  const neighbours = [];
+  for (let point = 0; point < count; point += 1) {
+    neighbourStart[point] = neighbours.length;
+    const row = Math.floor(point / game.width);
+    for (const neighbour of game.neighbors(row, point % game.width)) {
+      neighbours.push(neighbour.row * game.width + neighbour.col);
     }
-    const group = groups.byStone.get(pointKey(neighbour.row, neighbour.col));
-    if (value === player) friendly.add(group);
-    else if (value === opponent) enemy.add(group);
+  }
+  neighbourStart[count] = neighbours.length;
+  const shape = {
+    width: game.width,
+    count,
+    neighbourStart,
+    neighbours: Int32Array.from(neighbours),
+    board: new Int8Array(count),
+    group: new Int32Array(count),
+    groupSize: new Int32Array(count),
+    stoneStart: new Int32Array(count),
+    stones: new Int32Array(count),
+    libertyStart: new Int32Array(count),
+    libertyCount: new Int32Array(count),
+    // Each (string, liberty) pair needs a stone adjacent to that liberty, so
+    // the adjacency count bounds every string's liberties together.
+    liberties: new Int32Array(neighbours.length),
+    friendly: new Int32Array(4),
+    enemy: new Int32Array(4),
+    marks: new Int32Array(count),
+    mark: 0,
+    groups: 0,
+  };
+  if (BOARD_SHAPES.size >= MAX_CACHED_BOARD_SHAPES) BOARD_SHAPES.clear();
+  BOARD_SHAPES.set(key, shape);
+  return shape;
+}
+
+/** A fresh value for `shape.marks`, so marked sets never need clearing. */
+function nextMark(shape) {
+  if (shape.mark >= 0x3fffffff) {
+    shape.marks.fill(0);
+    shape.mark = 0;
+  }
+  shape.mark += 1;
+  return shape.mark;
+}
+
+/** Copy the board and label every string with its stones and liberties. */
+function loadBoardShape(shape, game) {
+  const { board, group, stones, liberties, neighbourStart, neighbours, marks } = shape;
+  let point = 0;
+  for (const cells of game.board) {
+    for (const value of cells) {
+      board[point] =
+        value === BLACK ? BLACK_POINT : value === WHITE ? WHITE_POINT : EMPTY_POINT;
+      group[point] = -1;
+      point += 1;
+    }
   }
 
+  let groups = 0;
+  let stoneCursor = 0;
+  let libertyCursor = 0;
+  for (let start = 0; start < shape.count; start += 1) {
+    const color = board[start];
+    if (color === EMPTY_POINT || group[start] >= 0) continue;
+    const id = groups;
+    groups += 1;
+    const mark = nextMark(shape);
+    shape.stoneStart[id] = stoneCursor;
+    shape.libertyStart[id] = libertyCursor;
+    group[start] = id;
+    stones[stoneCursor] = start;
+    stoneCursor += 1;
+    // The string's own stone list doubles as the flood-fill queue.
+    for (let index = shape.stoneStart[id]; index < stoneCursor; index += 1) {
+      const stone = stones[index];
+      for (let edge = neighbourStart[stone]; edge < neighbourStart[stone + 1]; edge += 1) {
+        const neighbour = neighbours[edge];
+        const value = board[neighbour];
+        if (value === EMPTY_POINT) {
+          if (marks[neighbour] !== mark) {
+            marks[neighbour] = mark;
+            liberties[libertyCursor] = neighbour;
+            libertyCursor += 1;
+          }
+        } else if (value === color && group[neighbour] < 0) {
+          group[neighbour] = id;
+          stones[stoneCursor] = neighbour;
+          stoneCursor += 1;
+        }
+      }
+    }
+    shape.groupSize[id] = stoneCursor - shape.stoneStart[id];
+    shape.libertyCount[id] = libertyCursor - shape.libertyStart[id];
+  }
+  shape.groups = groups;
+}
+
+function addDistinct(list, length, value) {
+  for (let index = 0; index < length; index += 1) {
+    if (list[index] === value) return length;
+  }
+  list[length] = value;
+  return length + 1;
+}
+
+/**
+ * Tactical and positional features of playing at one empty point for the
+ * player to move. `loadBoardShape()` must describe the current position.
+ */
+function analysePoint(shape, game, point, random) {
+  const {
+    board, group, groupSize, stoneStart, stones, libertyStart, libertyCount,
+    liberties, neighbourStart, neighbours, friendly, enemy, marks,
+  } = shape;
+  const player = game.currentPlayer === BLACK ? BLACK_POINT : WHITE_POINT;
+  const row = Math.floor(point / shape.width);
+  const col = point % shape.width;
+  const resultMark = nextMark(shape);
+  let resultingLiberties = 0;
+  let friendlyCount = 0;
+  let enemyCount = 0;
+  let ownNeighbours = 0;
+  const firstEdge = neighbourStart[point];
+  const neighbourCount = neighbourStart[point + 1] - firstEdge;
+
+  for (let edge = firstEdge; edge < firstEdge + neighbourCount; edge += 1) {
+    const neighbour = neighbours[edge];
+    const value = board[neighbour];
+    if (value === EMPTY_POINT) {
+      if (marks[neighbour] !== resultMark) {
+        marks[neighbour] = resultMark;
+        resultingLiberties += 1;
+      }
+    } else if (value === player) {
+      ownNeighbours += 1;
+      friendlyCount = addDistinct(friendly, friendlyCount, group[neighbour]);
+    } else {
+      enemyCount = addDistinct(enemy, enemyCount, group[neighbour]);
+    }
+  }
+
+  // The point itself is a liberty of every adjacent string.
   let capturedStones = 0;
   let rescuedStones = 0;
   let rescuedGroups = 0;
   let atariStones = 0;
-  const resultingLiberties = new Set(emptyLiberties);
-
-  for (const group of friendly) {
-    for (const liberty of group.liberties) {
-      if (liberty.row !== row || liberty.col !== col) {
-        resultingLiberties.add(pointKey(liberty.row, liberty.col));
+  for (let index = 0; index < friendlyCount; index += 1) {
+    const id = friendly[index];
+    const first = libertyStart[id];
+    for (let cursor = first; cursor < first + libertyCount[id]; cursor += 1) {
+      const liberty = liberties[cursor];
+      if (liberty !== point && marks[liberty] !== resultMark) {
+        marks[liberty] = resultMark;
+        resultingLiberties += 1;
       }
     }
-    if (
-      group.liberties.length === 1 &&
-      includesPoint(group.liberties, row, col)
-    ) {
+    if (libertyCount[id] === 1) {
       rescuedGroups += 1;
-      rescuedStones += group.stones.length;
+      rescuedStones += groupSize[id];
     }
   }
-
-  for (const group of enemy) {
-    if (
-      group.liberties.length === 1 &&
-      includesPoint(group.liberties, row, col)
-    ) {
-      capturedStones += group.stones.length;
-      for (const stone of group.stones) {
-        resultingLiberties.add(pointKey(stone.row, stone.col));
+  for (let index = 0; index < enemyCount; index += 1) {
+    const id = enemy[index];
+    if (libertyCount[id] === 1) {
+      capturedStones += groupSize[id];
+      const first = stoneStart[id];
+      for (let cursor = first; cursor < first + groupSize[id]; cursor += 1) {
+        if (marks[stones[cursor]] !== resultMark) {
+          marks[stones[cursor]] = resultMark;
+          resultingLiberties += 1;
+        }
       }
-    } else if (
-      group.liberties.length === 2 &&
-      includesPoint(group.liberties, row, col)
-    ) {
-      atariStones += group.stones.length;
+    } else if (libertyCount[id] === 2) {
+      atariStones += groupSize[id];
     }
   }
 
-  const neighbours = game.neighbors(row, col);
-  const ownEye =
-    neighbours.length >= 3 &&
-    neighbours.every((point) => game.get(point.row, point.col) === player);
-  const fragileResult = resultingLiberties.size <= 1;
+  const ownEye = neighbourCount >= 3 && ownNeighbours === neighbourCount;
+  const fragileResult = resultingLiberties <= 1;
   const selfAtari = capturedStones === 0 && fragileResult;
-  const connections = Math.max(0, friendly.size - 1);
+  const connections = Math.max(0, friendlyCount - 1);
   const openingLine = Math.min(3, Math.max(1, Math.floor(game.height / 3)));
 
   let score = 0;
@@ -362,8 +494,8 @@ function rawMoveAnalysis(game, groups, row, col, random) {
     tacticalPriority = Math.max(tacticalPriority, TACTICAL_ATARI);
   }
   score += connections * 700;
-  score += resultingLiberties.size * 24;
-  score += friendly.size * 20 + enemy.size * 12;
+  score += resultingLiberties * 24;
+  score += friendlyCount * 20 + enemyCount * 12;
   // Cylinders retain meaningful first/second lines at the open row edges.
   // Every torus point is middle-board, so applying that preference would
   // invent a top and bottom edge that the rules do not have.
@@ -374,11 +506,11 @@ function rawMoveAnalysis(game, groups, row, col, random) {
 
   // Connecting multiple endangered strings through their shared liberty is a
   // forcing rescue, including the visually easy-to-miss cylinder seam case.
-  if (rescuedGroups >= 2 && resultingLiberties.size >= 2) {
+  if (rescuedGroups >= 2 && resultingLiberties >= 2) {
     score += 8_000;
     tacticalPriority = Math.max(tacticalPriority, TACTICAL_RESCUE);
   }
-  if (selfAtari) score -= 35_000 + friendly.size * 1_000;
+  if (selfAtari) score -= 35_000 + friendlyCount * 1_000;
   if (ownEye && capturedStones === 0) score -= 60_000;
 
   // Randomness only breaks equivalent positional ties. Seeded searches remain
@@ -392,11 +524,32 @@ function rawMoveAnalysis(game, groups, row, col, random) {
     tacticalPriority,
     capturedStones,
     rescuedStones,
-    resultingLiberties: resultingLiberties.size,
+    resultingLiberties,
     snapbackLoss: 0,
     selfAtari,
     ownEye,
   };
+}
+
+/**
+ * Tactical and positional features of every empty point for the player to
+ * move, in row-major order: the move ranking used by search and rollouts.
+ * `random` breaks positional ties exactly as it does during search.
+ */
+export function analyseMoves(gameOrState, random = Math.random) {
+  const game =
+    gameOrState instanceof GoEngine
+      ? gameOrState
+      : GoEngine.fromSearchState(gameOrState);
+  const shape = boardShape(game);
+  loadBoardShape(shape, game);
+  const entries = [];
+  for (let point = 0; point < shape.count; point += 1) {
+    if (shape.board[point] === EMPTY_POINT) {
+      entries.push(analysePoint(shape, game, point, random));
+    }
+  }
+  return entries;
 }
 
 function refineFragileTactic(game, analysis) {
@@ -404,7 +557,7 @@ function refineFragileTactic(game, analysis) {
     return analysis;
   }
 
-  const trial = GoEngine.fromSearchState(game.exportSearchState());
+  const trial = game.cloneForSearch();
   const played = trial.play(analysis.move.row, analysis.move.col);
   if (!played.ok) return analysis;
 
@@ -475,18 +628,9 @@ function rankedMoveEntries(
       ? gameOrState
       : GoEngine.fromSearchState(gameOrState);
   if (game.phase !== PHASE_PLAY) return [];
-  const groups = groupMap(game);
-  const entries = [];
-  let emptyCount = 0;
-
-  for (let row = 0; row < game.height; row += 1) {
-    for (let col = 0; col < game.width; col += 1) {
-      if (game.get(row, col) !== null) continue;
-      emptyCount += 1;
-      entries.push(rawMoveAnalysis(game, groups, row, col, settings.random));
-    }
-    cancellationCheck(settings);
-  }
+  const entries = analyseMoves(game, settings.random);
+  const emptyCount = entries.length;
+  cancellationCheck(settings);
 
   applyRootPolicy(entries, rootPolicy, game.width, game.height);
   entries.sort((left, right) => right.score - left.score);
@@ -568,18 +712,17 @@ function cancellationCheck(settings) {
 
 /** Return all exact GoEngine-legal moves without modifying the supplied game. */
 export function listLegalMoves(gameOrState, { includePass = true } = {}) {
-  const state = normalizeState(gameOrState);
-  if (state.phase !== PHASE_PLAY) return [];
+  const game = searchGame(gameOrState);
+  if (game.phase !== PHASE_PLAY) return [];
   const moves = [];
 
-  for (const move of emptyPointMoves(state)) {
-    const trial = GoEngine.fromSearchState(state);
-    if (applyMove(trial, move).ok) moves.push(copyMove(move));
+  // checkPlay() runs play()'s capture, suicide and superko rules on one
+  // position, so no per-point clone is needed.
+  for (const move of emptyPointMoves(game)) {
+    if (game.checkPlay(move.row, move.col).ok) moves.push(copyMove(move));
   }
-  if (includePass) {
-    const trial = GoEngine.fromSearchState(state);
-    if (trial.pass().ok) moves.push({ type: "pass" });
-  }
+  // Passing is always legal while play is active.
+  if (includePass) moves.push({ type: "pass" });
   return moves;
 }
 
@@ -638,7 +781,9 @@ function expand(node, settings) {
   );
   if (node.children.length >= allowedChildren) return null;
 
-  const game = GoEngine.fromSearchState(node.state);
+  // Illegal moves leave the clone unchanged, so one clone serves every
+  // attempt and becomes the child's own position on success.
+  const game = node.state.cloneForSearch();
   while (node.untriedMoves.length > 0) {
     cancellationCheck(settings);
     const analysis = node.untriedMoves.shift();
@@ -646,7 +791,7 @@ function expand(node, settings) {
     if (!result.ok) continue;
 
     const child = createNode(
-      game.exportSearchState(),
+      game,
       copyMove(analysis.move),
       analysis,
     );
@@ -700,8 +845,16 @@ function rolloutPassProbability(game, emptyCount) {
   return 0.002 + filledRatio * 0.08;
 }
 
+function emptyPointCount(game) {
+  let count = 0;
+  for (const cells of game.board) {
+    for (const value of cells) if (value === null) count += 1;
+  }
+  return count;
+}
+
 function playWeightedMove(game, settings) {
-  const emptyCount = emptyPointMoves(game).length;
+  const emptyCount = emptyPointCount(game);
   if (
     randomUnit(settings.random) < rolloutPassProbability(game, emptyCount)
   ) {
@@ -749,9 +902,7 @@ function playWeightedMove(game, settings) {
   game.pass();
 }
 
-function groupSafety(group) {
-  const stones = group.stones.length;
-  const liberties = group.liberties.length;
+function groupSafety(stones, liberties) {
   if (liberties === 1) return -4 - stones * 0.8;
   if (liberties === 2) return -1.2 - stones * 0.15;
   return Math.min(4, liberties) * 0.35 + Math.min(8, stones) * 0.12;
@@ -800,29 +951,167 @@ function reliableTerritory(game) {
   return territory;
 }
 
+/**
+ * Conservative dead-stone estimate for scoring a finished search line.
+ *
+ * GoEngine only proposes groups whose last liberty cannot be defended, so an
+ * obviously dead stone left inside settled territory would otherwise turn
+ * that territory neutral and make passing look like a loss. Stones of one
+ * colour are treated as dead only when all of these hold:
+ *
+ * - they lie in a connected area of empty and own-colour points that the
+ *   opponent walls off from less than half of the board;
+ * - they fill less than a quarter of that area, like stones left inside
+ *   territory rather than a wall whose open space is still contested;
+ * - no empty region inside that area touches their colour alone, so they
+ *   have no eye at all, not even a false or one-point eye; and
+ * - every opponent string bordering the area has more liberties than each
+ *   enclosed string, plus a liberty the enclosed stones do not touch, so the
+ *   opponent wins the liberty race and seki is left alone.
+ *
+ * Areas and liberties use GoEngine's neighbours, so every topology's seams
+ * count. The result is a defensive copy and the game is not changed.
+ *
+ * @returns {{row: number, col: number}[]}
+ */
+export function estimateDeadStones(gameOrState) {
+  const game =
+    gameOrState instanceof GoEngine
+      ? gameOrState
+      : GoEngine.fromSearchState(gameOrState);
+  const groups = groupMap(game);
+  const pointCount = game.width * game.height;
+  const dead = [];
+
+  for (const color of [BLACK, WHITE]) {
+    const opponent = color === BLACK ? WHITE : BLACK;
+    const visited = new Set();
+    for (const group of groups.groups) {
+      const [start] = group.stones;
+      if (group.color !== color || visited.has(pointKey(start.row, start.col))) {
+        continue;
+      }
+
+      const area = [];
+      const borders = new Set();
+      const pending = [start];
+      visited.add(pointKey(start.row, start.col));
+      while (pending.length > 0) {
+        const point = pending.pop();
+        area.push(point);
+        for (const neighbour of game.neighbors(point.row, point.col)) {
+          const key = pointKey(neighbour.row, neighbour.col);
+          if (game.get(neighbour.row, neighbour.col) === opponent) {
+            borders.add(groups.byStone.get(key));
+          } else if (!visited.has(key)) {
+            visited.add(key);
+            pending.push(neighbour);
+          }
+        }
+      }
+      if (area.length * 2 >= pointCount || borders.size === 0) continue;
+      const enclosed = new Set();
+      let enclosedStones = 0;
+      for (const point of area) {
+        const stoneGroup = groups.byStone.get(pointKey(point.row, point.col));
+        if (!stoneGroup) continue;
+        enclosed.add(stoneGroup);
+        enclosedStones += 1;
+      }
+      if (enclosedStones * 4 >= area.length) continue;
+      if (hasEyeInArea(game, area, opponent)) continue;
+
+      const enclosedLiberties = new Set();
+      let mostLiberties = 0;
+      for (const inner of enclosed) {
+        mostLiberties = Math.max(mostLiberties, inner.liberties.length);
+        for (const liberty of inner.liberties) {
+          enclosedLiberties.add(pointKey(liberty.row, liberty.col));
+        }
+      }
+      const opponentWinsRace = [...borders].every(
+        (outer) =>
+          outer.liberties.length > mostLiberties &&
+          outer.liberties.some(
+            (liberty) => !enclosedLiberties.has(pointKey(liberty.row, liberty.col)),
+          ),
+      );
+      if (!opponentWinsRace) continue;
+      for (const inner of enclosed) {
+        dead.push(...inner.stones.map((stone) => ({ ...stone })));
+      }
+    }
+  }
+  return dead;
+}
+
+/** Whether some empty region inside `area` is bordered without `opponent`. */
+function hasEyeInArea(game, area, opponent) {
+  const seen = new Set();
+  for (const start of area) {
+    const startKey = pointKey(start.row, start.col);
+    if (game.get(start.row, start.col) !== null || seen.has(startKey)) continue;
+    const pending = [start];
+    seen.add(startKey);
+    let touchesOpponent = false;
+    while (pending.length > 0) {
+      const point = pending.pop();
+      for (const neighbour of game.neighbors(point.row, point.col)) {
+        const value = game.get(neighbour.row, neighbour.col);
+        const key = pointKey(neighbour.row, neighbour.col);
+        if (value === opponent) touchesOpponent = true;
+        else if (value === null && !seen.has(key)) {
+          seen.add(key);
+          pending.push(neighbour);
+        }
+      }
+    }
+    if (!touchesOpponent) return true;
+  }
+  return false;
+}
+
+function markEstimatedDeadStones(game) {
+  for (const stone of estimateDeadStones(game)) {
+    if (!game.isMarkedDead(stone.row, stone.col)) {
+      game.toggleDead(stone.row, stone.col);
+    }
+  }
+}
+
 function evaluate(game, rootPlayer) {
   let difference;
   if (game.phase !== PHASE_PLAY) {
+    // Both players passed in this line. Score it the way players would agree
+    // to: remove clearly dead stones that the engine's narrow proof skipped.
+    markEstimatedDeadStones(game);
     const score = game.score();
     difference =
       rootPlayer === BLACK
         ? score.black - score.white
         : score.white - score.black;
   } else {
-    const { groups } = groupMap(game);
+    const shape = boardShape(game);
+    loadBoardShape(shape, game);
     const safety = { [BLACK]: 0, [WHITE]: 0 };
     const stones = { [BLACK]: 0, [WHITE]: 0 };
-    for (const group of groups) {
-      safety[group.color] += groupSafety(group);
-      stones[group.color] += group.stones.length;
+    for (let id = 0; id < shape.groups; id += 1) {
+      const color =
+        shape.board[shape.stones[shape.stoneStart[id]]] === BLACK_POINT ? BLACK : WHITE;
+      safety[color] += groupSafety(shape.groupSize[id], shape.libertyCount[id]);
+      stones[color] += shape.groupSize[id];
     }
     const territory = reliableTerritory(game);
     const opponent = rootPlayer === BLACK ? WHITE : BLACK;
+    // Komi counts exactly as in game.score(). Without it, passing (scored
+    // with komi) and playing on (estimated without it) were not comparable.
+    const komi = rootPlayer === WHITE ? game.komi : -game.komi;
     difference =
       (game.captures[rootPlayer] - game.captures[opponent]) * 2.5 +
       (safety[rootPlayer] - safety[opponent]) +
       (territory[rootPlayer] - territory[opponent]) * 0.9 +
-      (stones[rootPlayer] - stones[opponent]) * 0.12;
+      (stones[rootPlayer] - stones[opponent]) * 0.12 +
+      komi;
   }
   // Smooth bounded values preserve useful information from unfinished lines.
   const scale = Math.max(4, Math.sqrt(game.width * game.height) * 0.75);
@@ -830,7 +1119,7 @@ function evaluate(game, rootPlayer) {
 }
 
 function rollout(state, rootPlayer, settings) {
-  const game = GoEngine.fromSearchState(state);
+  const game = state.cloneForSearch();
   for (let ply = 0; ply < settings.rolloutLimit; ply += 1) {
     cancellationCheck(settings);
     if (game.phase !== PHASE_PLAY) break;
@@ -870,7 +1159,7 @@ function runIteration(root, rootPlayer, settings) {
 }
 
 function fallbackMove(state, settings) {
-  const game = GoEngine.fromSearchState(state);
+  const game = state.cloneForSearch();
   const ranked = rankedMoveEntries(
     game,
     settings,
@@ -981,7 +1270,7 @@ function variationRootChildren(ranked, selected) {
 }
 
 function createSearch(gameOrState, options) {
-  const state = normalizeState(gameOrState);
+  const state = searchGame(gameOrState);
   if (state.phase !== PHASE_PLAY) {
     throw new RangeError("The AI can only choose a move while play is active");
   }
