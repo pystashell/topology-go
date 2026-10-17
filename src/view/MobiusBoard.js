@@ -413,6 +413,7 @@ export class MobiusBoard extends TorusBoard {
     this.camera.up.copy(frame.tangentV).normalize();
     this.controls.update();
     this.needsFit = false;
+    this.requestRender();
   }
 }
 

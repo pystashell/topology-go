@@ -21,6 +21,7 @@ import {
   updatePlayerViewLighting,
 } from "./playerViewLighting.js";
 import { translateText } from "../i18n.js";
+import { createRenderScheduler } from "./renderScheduler.js";
 import {
   createAnalysisVariationMarker,
   placeAnalysisVariationMarker,
@@ -152,7 +153,7 @@ export class TorusBoard {
     this.movePreviewEnabled = true;
     this.active = true;
     this.destroyed = false;
-    this.animationFrame = null;
+    this.renderScheduler = createRenderScheduler(() => this.renderFrame());
     this.needsFit = true;
     this.lastVisibleAspect = null;
 
@@ -188,6 +189,8 @@ export class TorusBoard {
     this.controls.autoRotateSpeed = 0.68;
     this.controls.mouseButtons.LEFT = -1;
     this.controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
+    this.onControlsChange = () => this.requestRender();
+    this.controls.addEventListener("change", this.onControlsChange);
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
@@ -219,7 +222,7 @@ export class TorusBoard {
     canvas.addEventListener("contextmenu", this.onContextMenu);
 
     this.rebuild(boardWidth, boardHeight);
-    this.animate();
+    this.requestRender();
   }
 
   refreshLanguage() {
@@ -549,6 +552,7 @@ export class TorusBoard {
       );
     }
     this.refreshHover();
+    this.requestRender();
   }
 
   territoryMarkerOptions() {
@@ -782,6 +786,7 @@ export class TorusBoard {
     const point = this.hoveredPoint;
     const empty = point && !this.board?.[point.row]?.[point.col];
     if (!this.movePreviewEnabled || this.phase !== "play" || !empty) {
+      if (this.hoverStone.visible) this.requestRender();
       this.hoverStone.visible = false;
       return;
     }
@@ -791,6 +796,7 @@ export class TorusBoard {
         : this.hoverWhiteMaterial;
     this.positionStone(this.hoverStone, point.row, point.col);
     this.hoverStone.visible = true;
+    this.requestRender();
   }
 
   setMovePreviewEnabled(enabled) {
@@ -802,6 +808,9 @@ export class TorusBoard {
 
   setAutoRotate(enabled) {
     this.controls.autoRotate = Boolean(enabled);
+    // While auto-rotating, every controls update moves the camera and emits
+    // "change", which keeps requesting frames.
+    this.requestRender();
   }
 
   setActive(active) {
@@ -810,14 +819,11 @@ export class TorusBoard {
     this.controls.enabled = active;
     if (active) {
       this.resize();
-      if (this.animationFrame === null) this.animate();
+      this.requestRender();
     } else {
       this.pointerStart = null;
       this.setHoveredPoint(null);
-      if (this.animationFrame !== null) {
-        cancelAnimationFrame(this.animationFrame);
-        this.animationFrame = null;
-      }
+      this.renderScheduler.cancel();
     }
   }
 
@@ -833,6 +839,7 @@ export class TorusBoard {
     this.controls.target.set(0, 0, 0);
     this.controls.update();
     this.needsFit = false;
+    this.requestRender();
   }
 
   focusPoint(point) {
@@ -866,6 +873,7 @@ export class TorusBoard {
     }
     this.controls.update();
     this.needsFit = false;
+    this.requestRender();
   }
 
   resize() {
@@ -889,14 +897,18 @@ export class TorusBoard {
     this.renderer.setPixelRatio(clampPixelRatio());
     this.renderer.setSize(width, height, false);
     if (this.active && measurable && this.needsFit) this.resetView();
+    this.requestRender();
   }
 
-  animate() {
-    if (!this.active || this.destroyed) {
-      this.animationFrame = null;
-      return;
-    }
-    this.animationFrame = requestAnimationFrame(() => this.animate());
+  requestRender() {
+    if (!this.active || this.destroyed) return;
+    this.renderScheduler.request();
+  }
+
+  renderFrame() {
+    if (!this.active || this.destroyed) return;
+    // Damping and auto-rotation move the camera inside update(); it then
+    // emits "change", which requests the next frame until the camera rests.
     this.controls.update();
     updatePlayerViewLighting(
       this.playerViewLighting,
@@ -910,9 +922,9 @@ export class TorusBoard {
   destroy() {
     this.destroyed = true;
     this.active = false;
-    if (this.animationFrame !== null) cancelAnimationFrame(this.animationFrame);
-    this.animationFrame = null;
+    this.renderScheduler.cancel();
     this.resizeObserver.disconnect();
+    this.controls.removeEventListener("change", this.onControlsChange);
     const canvas = this.renderer.domElement;
     canvas.removeEventListener("pointerdown", this.onPointerDown);
     canvas.removeEventListener("pointermove", this.onPointerMove);

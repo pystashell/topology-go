@@ -5,6 +5,7 @@ import {
   preventBoardContextMenu,
 } from "./pointerGestures.js";
 import { translateText } from "../i18n.js";
+import { createRenderScheduler } from "./renderScheduler.js";
 import { createAnalysisVariationMarker } from "./analysisVariationMarkers.js";
 import {
   createTerritoryMarkerLayer,
@@ -137,7 +138,7 @@ export class ArcBoard {
     this.movePreviewEnabled = true;
     this.active = true;
     this.destroyed = false;
-    this.animationFrame = null;
+    this.renderScheduler = createRenderScheduler((now) => this.renderFrame(now));
     this.needsFit = true;
     this.lastVisibleAspect = null;
 
@@ -168,6 +169,8 @@ export class ArcBoard {
     this.controls.enablePan = false;
     this.controls.enableRotate = false;
     this.controls.zoomSpeed = 0.72;
+    this.onControlsChange = () => this.requestRender();
+    this.controls.addEventListener("change", this.onControlsChange);
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
@@ -211,7 +214,7 @@ export class ArcBoard {
     canvas.addEventListener("contextmenu", this.onContextMenu);
 
     this.rebuild(boardWidth, boardHeight);
-    this.animate();
+    this.requestRender();
   }
 
   refreshLanguage() {
@@ -536,6 +539,7 @@ export class ArcBoard {
       frameAt: (row, col) => this.frame(row, col, 0),
     });
     this.refreshHover();
+    this.requestRender();
   }
 
   pixelsPerColumn() {
@@ -674,6 +678,7 @@ export class ArcBoard {
       );
     }
     this.refreshHover();
+    this.requestRender();
   }
 
   syncTerritoryMarkers(territoryRegions, deadStones) {
@@ -907,6 +912,8 @@ export class ArcBoard {
       canvas.releasePointerCapture(event.pointerId);
     }
 
+    // An auto-slide paused by this drag resumes on the next frame.
+    this.requestRender();
     if (moved) {
       if (!pointer.moved) {
         this.offsetColumns = mod(
@@ -933,6 +940,7 @@ export class ArcBoard {
     this.container.classList.remove("dragging");
     this.setHoveredPoint(null);
     if (!this.autoSlide) this.snapToColumn();
+    this.requestRender();
   }
 
   snapToColumn() {
@@ -985,6 +993,7 @@ export class ArcBoard {
     const point = this.hoveredPoint;
     const empty = point && !this.board?.[point.row]?.[point.col];
     if (!this.movePreviewEnabled || this.phase !== "play" || !empty) {
+      if (this.hoverStone.visible) this.requestRender();
       this.hoverStone.visible = false;
       return;
     }
@@ -992,6 +1001,7 @@ export class ArcBoard {
       this.currentPlayer === "black" ? this.hoverBlackMaterial : this.hoverWhiteMaterial;
     this.positionStone(this.hoverStone, point.row, point.col);
     this.hoverStone.visible = true;
+    this.requestRender();
   }
 
   setMovePreviewEnabled(enabled) {
@@ -1008,7 +1018,7 @@ export class ArcBoard {
     if (active) {
       this.resize();
       this.lastAnimationTime = null;
-      if (this.animationFrame === null) this.animate();
+      this.requestRender();
     } else {
       this.pointerState = null;
       this.activePointers.clear();
@@ -1016,10 +1026,7 @@ export class ArcBoard {
       this.setHoveredPoint(null);
       this.cancelSnap();
       this.lastAnimationTime = null;
-      if (this.animationFrame !== null) {
-        cancelAnimationFrame(this.animationFrame);
-        this.animationFrame = null;
-      }
+      this.renderScheduler.cancel();
     }
   }
 
@@ -1061,13 +1068,18 @@ export class ArcBoard {
     this.controls.maxDistance = distance * 2.8;
     this.controls.update();
     this.needsFit = false;
+    this.requestRender();
   }
 
   setAutoRotate(enabled) {
     this.autoSlide = Boolean(enabled);
     this.controls.autoRotate = false;
-    if (this.autoSlide) this.cancelSnap();
-    else this.snapToColumn();
+    if (this.autoSlide) {
+      this.cancelSnap();
+      this.requestRender();
+    } else {
+      this.snapToColumn();
+    }
   }
 
   resize() {
@@ -1091,31 +1103,37 @@ export class ArcBoard {
     this.renderer.setPixelRatio(clampPixelRatio());
     this.renderer.setSize(width, height, false);
     if (this.active && measurable && this.needsFit) this.fitCamera();
+    this.requestRender();
   }
 
-  animate(now = performance.now()) {
-    if (!this.active || this.destroyed) {
-      this.animationFrame = null;
-      return;
+  requestRender() {
+    if (!this.active || this.destroyed) return;
+    this.renderScheduler.request();
+  }
+
+  renderFrame(now = performance.now()) {
+    if (!this.active || this.destroyed) return;
+    const sliding =
+      this.autoSlide && !this.pointerState && this.snapFrame === null;
+    if (sliding) {
+      const deltaSeconds =
+        this.lastAnimationTime === null
+          ? 0
+          : Math.min(0.05, Math.max(0, (now - this.lastAnimationTime) / 1000));
+      this.lastAnimationTime = now;
+      if (deltaSeconds > 0) {
+        this.offsetColumns = mod(
+          this.offsetColumns + deltaSeconds * (this.width / 30),
+          this.width,
+        );
+        this.updateContentLayout();
+      }
+      // Auto-slide is the arc view's only continuous animation.
+      this.requestRender();
+    } else {
+      this.lastAnimationTime = null;
     }
-    const deltaSeconds =
-      this.lastAnimationTime === null
-        ? 0
-        : Math.min(0.05, Math.max(0, (now - this.lastAnimationTime) / 1000));
-    this.lastAnimationTime = now;
-    if (
-      this.autoSlide &&
-      !this.pointerState &&
-      this.snapFrame === null &&
-      deltaSeconds > 0
-    ) {
-      this.offsetColumns = mod(
-        this.offsetColumns + deltaSeconds * (this.width / 30),
-        this.width,
-      );
-      this.updateContentLayout();
-    }
-    this.animationFrame = requestAnimationFrame((next) => this.animate(next));
+    // Zoom damping emits "change" from update(), requesting the next frame.
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
@@ -1127,9 +1145,9 @@ export class ArcBoard {
     this.pointerState = null;
     this.activePointers.clear();
     this.container.classList.remove("dragging");
-    if (this.animationFrame !== null) cancelAnimationFrame(this.animationFrame);
-    this.animationFrame = null;
+    this.renderScheduler.cancel();
     this.resizeObserver.disconnect();
+    this.controls.removeEventListener("change", this.onControlsChange);
     const canvas = this.renderer.domElement;
     canvas.removeEventListener("pointerdown", this.onPointerDown);
     canvas.removeEventListener("pointermove", this.onPointerMove);

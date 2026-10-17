@@ -58,5 +58,6 @@ test("key and fill lights stay on the player's side from every camera axis", () 
 
 test("Mobius reuses the torus lighting and animation lifecycle", () => {
   assert.equal(Object.getPrototypeOf(MobiusBoard.prototype), TorusBoard.prototype);
-  assert.equal(MobiusBoard.prototype.animate, TorusBoard.prototype.animate);
+  assert.equal(MobiusBoard.prototype.renderFrame, TorusBoard.prototype.renderFrame);
+  assert.equal(MobiusBoard.prototype.requestRender, TorusBoard.prototype.requestRender);
 });
