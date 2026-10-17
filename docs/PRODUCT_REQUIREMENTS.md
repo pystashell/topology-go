@@ -950,9 +950,11 @@ Cloudflare Worker（静态资源、REST 路由、同源校验）
 - `match.controllers` 是本轮黑白控制权的唯一权威来源。服务端对每个 `play/pass/ai_play/ai_pass` 核对已认证发送者是否等于当前颜色的 `operatorId`，并核对 `kind`、轮次、坐标、合法性、拓扑、超级劫、阶段、手数和 positionToken；客户端预检只用于即时提示。
 - 两次连续停着进入 `scoring`。获授权的 human operator 可以切换一整块死子；任何死子变更都清空确认。双方 human operator 分别确认；同一 operator 拥有两色或拥有人机中的 human controller 时，可按 controller 归属补齐所需确认。
 - 在线不同 operator 的 `human/human` 使用 `request_undo/respond_undo/cancel_undo` 协商；同一 operator 拥有两个 human controller 时使用 `direct_undo_local_round` 撤回一手；拥有人类与 AI controller 时使用 `direct_undo_ai_round` 回到该人类上次决策点。三条路径均由 DO 原子修改 GoEngine、Replay、moveCount 和权威时钟。
+- 协商悔棋撤回的是申请方自己最近的一手：若对方已经应手，则连同对方的应手一起撤回（停着也算一手）；申请方没有可撤回的落子时拒绝。
+- 好友对局已有落子且未终局（含点目阶段）时，`release_seat`、`claim_seat`、`attach_ai` 和 `detach_ai` 一律拒绝（`GAME_IN_PROGRESS`），HTTP 加入只能成为观众；在座真人此时 `leave` 按该色认输处理，再移出房间，确认框须事先说明。这样空座期间时钟不会暂停，也不会有他人代为落子或认输。
 - 认输不是协商操作：已认证 human operator 在未终局时可代表自己控制的颜色发起，不受轮次限制且无需对手确认。服务端拒绝伪造未受其控制的颜色；成功后立即停止时钟、清空悔棋申请与点目确认、持久化并广播。
-- 每轮终局进入 `finished`；房主再次 `request_game` 时可沿用或调整设置，开始新轮前把上一轮完整 Replay、结果、设置、controller 和手数写入最多 24 轮的 `roundArchive`。成员、房间码、聊天和观众不因换轮丢失。
-- 房间快照必须同时带 `revision`（兼容别名 `version`）、`positionToken`、`match`、`roundArchive`/公开 `rounds` 摘要、`moveCount`、`game`、`replay`、`timeControl`、`undoAvailable`、`undoRequest`、`scoreConfirmations`、公开 `players/spectators`、聊天摘要和到期时间。超时时 `game.phase="finished"`、`game.result`、`replay.outcome` 与 `timeControl.outcome` 必须一致；公开部分不得包含任何 token/hash。
+- 每轮终局进入 `finished`；房主再次 `request_game` 时可沿用或调整设置，开始新轮前把上一轮完整 Replay、结果、设置、controller 和手数写入最多 24 轮、序列化总量不超过 384 KiB 的 `roundArchive`（超出时丢弃最旧的轮次）。成员、房间码、聊天和观众不因换轮丢失。
+- 房间快照必须同时带 `revision`（兼容别名 `version`）、`positionToken`、`match`、公开 `rounds` 摘要（完整 `roundArchive` 只保存在 DO 中，不随快照下发）、`moveCount`、`game`、`replay`、`timeControl`、`undoAvailable`、`undoRequest`、`scoreConfirmations`、公开 `players/spectators`、聊天摘要和到期时间。超时时 `game.phase="finished"`、`game.result`、`replay.outcome` 与 `timeControl.outcome` 必须一致；公开部分不得包含任何 token/hash。
 
 ~~~ts
 interface OnlineRoomSnapshotV2 {
@@ -971,11 +973,13 @@ interface OnlineRoomSnapshotV2 {
     startedAt: number | null;
     finishedAt: number | null;
   };
-  roundArchive: ArchivedRound[];
+  rounds: RoundSummary[]; // 完整 roundArchive 不下发
   players: PublicMember[];
   spectators: PublicMember[];
 }
 ~~~
+
+每名棋手的非聊天命令按令牌桶限速（突发 40、每秒 8），被限速的命令不写存储；每次点目的死子切换不超过棋盘点数的 4 倍。Worker 按客户端 IP 限制建房、HTTP 加入、WebSocket 握手和大厅读取（每分钟 10/30/60/120），超限返回 429 `RATE_LIMITED`。房间只在大厅可见字段变化、到期时间推后 30 分钟以上或上次发布失败时才向大厅发布。
 
 `operatorId` 是控制归属而不是单独的凭据；DO 仍按当前已认证连接核对。任何 token/hash、命令限速桶和内部连接 ID 都必须从公开快照删除。旧 `players[].automated/controllerId` 只能作为 schema v1 迁移输入，不能覆盖 v2 `match.controllers`。
 - Durable Object 的 alarm 同时负责房间 TTL 和最终用时截止点。每次合法动作、加入/离开、恢复、悔棋协商或 alarm 后重新安排 `min(clockDeadline, expiresAt)`；超时时持久化一次、递增 revision 并广播，随后仍保留 TTL alarm。
@@ -1182,7 +1186,7 @@ interface StoredRoomV2 {
     startedAt: number | null;
     finishedAt: number | null;
   };
-  roundArchive: ArchivedRound[]; // 最多 24 轮，含完整 replay
+  roundArchive: ArchivedRound[]; // 最多 24 轮且总量 ≤ 384 KiB，含完整 replay
   members: StoredMember[];       // 含 tokenHash，不含明文 token
   receipts: CommandReceipt[];    // 最后 256 条
   scoreConfirmations: Color[];
