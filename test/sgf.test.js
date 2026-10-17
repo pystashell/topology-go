@@ -488,3 +488,43 @@ test("long main lines with many branch points import; nesting is bounded by node
   assert.throws(() => importSgf("(;GM[1](;C[x])))"), { code: "INVALID_SGF" });
   assert.throws(() => importSgf("(;GM[1](;C[x])x)"), { code: "INVALID_SGF" });
 });
+
+test("non-alternating SGF moves import as replayable passes for the skipped color", () => {
+  const repeated = importSgf("(;FF[4]GM[1]SZ[9]XTOP[torus];B[aa];B[bb];W[cc])");
+  assert.deepEqual(repeated.replay.events, [
+    { type: "play", color: "black", row: 0, col: 0 },
+    { type: "pass", color: "white" },
+    { type: "play", color: "black", row: 1, col: 1 },
+    { type: "play", color: "white", row: 2, col: 2 },
+  ]);
+  assert.deepEqual(
+    repeated.warnings.filter(({ code }) => code === "NON_ALTERNATING_MOVE")
+      .map(({ nodeIndex }) => nodeIndex),
+    [2],
+  );
+  const frames = buildReplayFrames(repeated.replay).frames;
+  assert.equal(frames.at(-1).board[1][1], "black");
+  assert.equal(frames.at(-1).board[2][2], "white");
+  assert.equal(frames.at(-1).currentPlayer, "black");
+
+  const wrongFirst = importSgf("(;FF[4]GM[1]SZ[9]XTOP[torus]PL[W];B[aa];W[bb])");
+  assert.equal(wrongFirst.replay.base.currentPlayer, "white");
+  assert.deepEqual(wrongFirst.replay.events.slice(0, 2), [
+    { type: "pass", color: "white" },
+    { type: "play", color: "black", row: 0, col: 0 },
+  ]);
+  assert.ok(wrongFirst.warnings.some(({ code }) => code === "NON_ALTERNATING_MOVE"));
+  assert.equal(buildReplayFrames(wrongFirst.replay).frames.length, 4);
+
+  // An inserted pass that would end play resumes with the player who moved.
+  const afterPass = importSgf("(;FF[4]GM[1]SZ[5]XTOP[cylinder];B[];B[aa];W[bb])");
+  assert.deepEqual(afterPass.replay.events.slice(0, 4), [
+    { type: "pass", color: "black" },
+    { type: "pass", color: "white" },
+    { type: "resume_play", nextPlayer: "black" },
+    { type: "play", color: "black", row: 0, col: 0 },
+  ]);
+  const last = buildReplayFrames(afterPass.replay).frames.at(-1);
+  assert.equal(last.phase, "play");
+  assert.equal(last.board[1][1], "white");
+});

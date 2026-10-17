@@ -1010,6 +1010,7 @@ export function importSgf(input, options = {}) {
   const extensionEvents = [];
   const unknownExtensions = [];
   let expectedPlayer = currentPlayer;
+  let consecutivePasses = 0;
 
   for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
     const node = nodes[nodeIndex];
@@ -1036,21 +1037,31 @@ export function importSgf(input, options = {}) {
           warnings.push(
             warning(
               "NON_ALTERNATING_MOVE",
-              `Node ${nodeIndex} plays ${identifier} when ${colorToSgf(expectedPlayer)} was expected.`,
+              `Node ${nodeIndex} plays ${identifier} when ${colorToSgf(expectedPlayer)} was expected; a pass was inserted for ${colorToSgf(expectedPlayer)}.`,
               { nodeIndex },
             ),
           );
+          // GoEngine replays strictly alternate, so record the skipped turn as
+          // a pass. If that pass would end play, resume with the mover.
+          replayEvents.push({ type: "pass", color: expectedPlayer });
+          consecutivePasses += 1;
+          if (consecutivePasses >= 2) {
+            replayEvents.push({ type: "resume_play", nextPlayer: color });
+            consecutivePasses = 0;
+          }
         }
         const point = decodeMove(values[0], width, height, warnings, { nodeIndex });
         replayEvents.push(
           point ? { type: "play", color, ...point } : { type: "pass", color },
         );
+        consecutivePasses = point ? 0 : consecutivePasses + 1;
         expectedPlayer = oppositeColor(color);
       } else if (identifier === SGF_EXTENSION_PROPERTIES.resumePlay) {
         for (const value of values) {
           const nextPlayer = colorFromSgf(value, SGF_EXTENSION_PROPERTIES.resumePlay);
           replayEvents.push({ type: "resume_play", nextPlayer });
           expectedPlayer = nextPlayer;
+          consecutivePasses = 0;
         }
       } else if (identifier === SGF_EXTENSION_PROPERTIES.toggleDead) {
         for (const value of values) {
