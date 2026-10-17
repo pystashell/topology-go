@@ -227,7 +227,10 @@ const elements = {
   gesturePrimary: $("#gesture-primary"),
   gestureSecondary: $("#gesture-secondary"),
   gesturePlace: $("#gesture-place"),
-  viewButtons: [...document.querySelectorAll("[data-view-mode]")],
+  // The board stage itself also carries data-view-mode for CSS. Only the
+  // switch buttons are view controls; matching the stage would mark it
+  // pressed and re-run setViewMode on every board tap.
+  viewButtons: [...document.querySelectorAll(".view-switch [data-view-mode]")],
   arcViewButton: $("#arc-view-button"),
   threeDViewLabel: $("#three-d-view-label"),
   rulesSummary: $("#rules-summary"),
