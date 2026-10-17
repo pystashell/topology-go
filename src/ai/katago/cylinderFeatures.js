@@ -1,6 +1,7 @@
 import {
   BLACK,
   GoEngine,
+  MOVE_ERRORS,
   PHASE_PLAY,
   SCORING_CHINESE,
   WHITE,
@@ -27,10 +28,7 @@ function pointKey(row, col) {
  * reconstruct them without weakening superko authority.
  */
 export function buildCylinderFeatures(gameOrState) {
-  const game =
-    gameOrState instanceof GoEngine
-      ? GoEngine.fromSearchState(gameOrState.exportSearchState())
-      : GoEngine.fromSearchState(gameOrState);
+  const game = searchPosition(gameOrState);
   const { width, height } = game;
   const spatial = new Float32Array(
     width * height * KATAGO_SPATIAL_CHANNELS,
@@ -73,15 +71,30 @@ export function buildCylinderFeatures(gameOrState) {
     }
   }
 
-  // A positional-superko point cannot be represented by KataGo's single-ko
-  // plane, so exact legality remains the responsibility of GoEngine. The most
-  // recent ordinary move is still useful as the first history plane.
-  if (game.lastMove?.type === "play" && game.lastMove.color === opponent) {
-    spatial[
-      featureIndex(width, game.lastMove.row, game.lastMove.col, 9)
-    ] = 1;
-  } else if (game.lastMove?.type === "pass") {
-    global[0] = 1;
+  // KataGo v7 marks every empty point the player to move may not take
+  // because of ko, including positional superko. Exact legality remains the
+  // responsibility of GoEngine through the policy mask.
+  for (let row = 0; row < height; row += 1) {
+    for (let col = 0; col < width; col += 1) {
+      if (
+        game.get(row, col) === null &&
+        game.checkPlay(row, col).reason === MOVE_ERRORS.SUPERKO
+      ) {
+        spatial[featureIndex(width, row, col, 6)] = 1;
+      }
+    }
+  }
+
+  // History planes describe the opponent's previous move only. After a
+  // resumed scoring phase the last pass can belong to the player to move.
+  if (game.lastMove?.color === opponent) {
+    if (game.lastMove.type === "play") {
+      spatial[
+        featureIndex(width, game.lastMove.row, game.lastMove.col, 9)
+      ] = 1;
+    } else {
+      global[0] = 1;
+    }
   }
 
   const selfKomi = player === WHITE ? game.komi : -game.komi;
