@@ -247,3 +247,69 @@ test("socket churn writes only reservations, stale connections and spectator gra
   assert.equal(restarted.room.engine.advance(Date.now()).evictedSpectators, 1);
   assert.ok(restarted.room.engine.member("friend"), "a connected player is never a reservation");
 });
+
+test("host presence that opens or closes the lobby seat is written and published", async (t) => {
+  withFakeWebSockets(t);
+  t.mock.timers.enable({ apis: ["Date"], now: 1_800_000_000_000 });
+  const { BadukLobby } = await import("../worker/BadukLobby.js");
+  const lobby = new BadukLobby({
+    blockConcurrencyWhile: (initialize) => initialize(),
+    storage: { async get() { return null; }, async put() {} },
+    abort() { throw new Error("Lobby reset"); },
+  });
+  await lobby.ready;
+  const tokens = { host: "host-secret", friend: "friend-secret" };
+  const engine = RoomEngine.create({
+    code: "BUD234", name: "Host", size: 9, playerId: "host",
+    tokenHash: await hashRoomToken(tokens.host), startImmediately: false,
+  });
+  const sockets = [];
+  let ready;
+  const pending = [];
+  const storage = {
+    value: engine.serialize(), writes: 0, alarm: null,
+    async get() { return structuredClone(this.value); },
+    async put(_key, value) { this.writes += 1; this.value = structuredClone(value); },
+    async getAlarm() { return this.alarm; },
+    async setAlarm(value) { this.alarm = value; },
+    async deleteAlarm() { this.alarm = null; },
+  };
+  const room = new BadukRoom({
+    storage,
+    id: { toString: () => "joinable-room" },
+    getWebSockets: () => sockets.filter((socket) => socket.readyState < 2),
+    acceptWebSocket(socket) { sockets.push(socket); },
+    blockConcurrencyWhile(callback) { ready = callback(); },
+    waitUntil(promise) { pending.push(promise); },
+  }, { BADUK_ROOM_INDEX: { getByName: () => lobby } });
+  await ready;
+  const settle = () => Promise.all(pending.splice(0));
+  const joinable = async () => { await settle(); return lobby.rooms.get("BUD234").joinable; };
+  const close = (playerId) => room.webSocketClose(sockets.filter((socket) =>
+    socket.attachment?.identity?.playerId === playerId).at(-1), 1000, "bye");
+
+  assert.equal(await joinable(), false, "a created room whose host never connected");
+  await openSocket(room, tokens.host);
+  assert.equal(await joinable(), true);
+  const writes = storage.writes;
+
+  t.mock.timers.tick(1_000);
+  await close("host");
+  assert.equal(storage.writes, writes + 1, "the host leaving the page closes the seat");
+  assert.equal(await joinable(), false);
+  await openSocket(room, tokens.host);
+  assert.equal(storage.writes, writes + 2, "a quick return reopens it despite the write interval");
+  assert.equal(await joinable(), true);
+
+  // Once the white seat is taken, presence no longer changes the listing.
+  room.engine.join({
+    name: "Friend", role: "player", playerId: "friend", tokenHash: await hashRoomToken(tokens.friend),
+  });
+  await room.persist();
+  assert.equal(await joinable(), false);
+  await openSocket(room, tokens.friend);
+  const settled = storage.writes;
+  await close("friend");
+  await close("host");
+  assert.equal(storage.writes, settled);
+});

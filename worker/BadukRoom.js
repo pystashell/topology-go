@@ -458,6 +458,7 @@ export class BadukRoom {
 
     try {
       const connectionId = crypto.randomUUID();
+      const joinableBefore = this.lobbyJoinable();
       const connected = await this.engine.connectByToken({
         token,
         connectionId,
@@ -488,7 +489,8 @@ export class BadukRoom {
       const playerId = connected.identity.playerId;
       const lastWrite = this.connectionWrites?.get(playerId);
       if (connected.firstConnection !== false || lastWrite === undefined ||
-          connectedAt - lastWrite >= CONNECTION_WRITE_INTERVAL_MS) {
+          connectedAt - lastWrite >= CONNECTION_WRITE_INTERVAL_MS ||
+          this.lobbyJoinable() !== joinableBefore) {
         await this.persist();
         this.connectionWrites?.set(playerId, connectedAt);
       }
@@ -690,12 +692,17 @@ export class BadukRoom {
     const attachment = this.readAttachment(socket);
     if (!attachment.identity) return;
     try {
+      const joinableBefore = this.lobbyJoinable();
       const disconnected = this.engine.disconnect({
         connectionId: attachment.connectionId,
       });
       // Only a spectator's reconnect grace starts here and must survive a
-      // restart; presence alone is not worth rewriting the room.
-      if (disconnected?.spectatorOffline !== false) await this.persist();
+      // restart, and the lobby must learn when a host's presence opens or
+      // closes the room to joiners; other presence is not worth a rewrite.
+      if (disconnected?.spectatorOffline !== false ||
+          this.lobbyJoinable() !== joinableBefore) {
+        await this.persist();
+      }
       await this.scheduleAlarm();
       this.broadcastState(socket);
       this.broadcastPresence(socket);
@@ -723,6 +730,17 @@ export class BadukRoom {
       throw this.unavailableError;
     }
     this.queueIndexPublish();
+  }
+
+  lobbyJoinable() {
+    // Presence decides whether the lobby advertises a seat, and a publish
+    // needs a stored directory revision, so socket events that flip it write.
+    if (!this.engine || !this.env?.BADUK_ROOM_INDEX) return null;
+    try {
+      return lobbySummaryFromRoom(this.engine.directorySnapshot()).joinable;
+    } catch {
+      return null;
+    }
   }
 
   queueIndexPublish() {

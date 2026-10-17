@@ -375,3 +375,30 @@ test("lobby entries follow the room expiry without an independent index TTL", ()
   );
   assert.deepEqual(pruneLobbyRooms([roomOwnedExpiry], 100_000_000), []);
 });
+
+test("only rooms with someone present advertise a seat", () => {
+  const friendSetup = (players, spectators = []) => lobbySummaryFromRoom(room({
+    code: "PRS234",
+    players,
+    spectators,
+    match: {
+      status: "setup",
+      mode: "friend",
+      roundId: 0,
+      controllers: {
+        black: { kind: "human", operatorId: players[0]?.id ?? null },
+        white: { kind: "human", operatorId: null },
+      },
+    },
+  }));
+  const host = (online) => ({ id: "host", name: "Host", color: "black", role: "player", online });
+  assert.equal(friendSetup([host(true)]).joinable, true);
+  assert.equal(friendSetup([host(false)]).joinable, false,
+    "a create that never connected, or a host who left the page, is not joinable");
+  assert.equal(friendSetup([host(false)], [{ online: true }]).joinable, false,
+    "watchers do not stand in for an absent host");
+  assert.equal(friendSetup([]).joinable, false, "an empty hostless room is abandoned");
+  assert.equal(friendSetup([], [{ online: false }]).joinable, false);
+  assert.equal(friendSetup([], [{ online: true }]).joinable, true,
+    "people still in a hostless room can take a new host");
+});
