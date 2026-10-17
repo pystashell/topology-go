@@ -7034,17 +7034,15 @@ if (initialRoute.mode === "online" && initialRoute.roomCode.length === 6) {
     setMessage(`正在恢复房间 ${sharedRoomCode}…`);
     updateRoomUI();
   } else if (roomClient.pendingCreateCode === sharedRoomCode) {
+    // Resume through the dialog's create flow so the request carries an abort
+    // signal: cancelling must stop this page adopting a late result.
+    const candidates = roomClient.listPendingCreates()
+      .filter((entry) => entry.roomCode === sharedRoomCode);
+    showOnlineDialog("", { intent: "create" });
     setMessage(`正在恢复房间 ${sharedRoomCode}…`);
-    void roomClient.retryPendingCreate(sharedRoomCode).then((result) => {
-      updateRoomUrl(result.roomCode);
-      elements.playerName.value = result.session.playerName;
-      rememberPlayerName(result.session.playerName);
-      setMessage(`房间 ${result.roomCode} 已恢复上次建房请求，房主为 ${result.session.playerName}；请核对棋盘设置。`);
-      updateUI();
-    }).catch((error) => {
-      showOnlineDialog("", { intent: "create" });
-      showOnlineError(error.message || "恢复建房请求失败，请重试。");
-    });
+    if (candidates.length === 1) {
+      void createOnlineRoom({ pendingPlayerId: candidates[0].playerId });
+    }
   } else {
     showOnlineDialog(sharedRoomCode, { intent: initialRoute.role });
     if (roomClient.hasStoredSession(sharedRoomCode)) {
