@@ -3083,6 +3083,52 @@ select:disabled {
   }
 }
 
+/* Touch screens: board toolbar, shape and view switches stay at least 40 px
+   tall (44 px where they sit over the board), after the phone sizing above. */
+@media (pointer: coarse) {
+  .topology-switch button,
+  .language-switch button,
+  .size-buttons button {
+    min-height: 40px;
+  }
+
+  .language-switch button {
+    min-width: 40px;
+  }
+
+  .scene-toolbar .icon-button {
+    min-width: 40px;
+    min-height: 40px;
+    justify-content: center;
+  }
+
+  .view-switch button {
+    min-height: 40px;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 560px) {
+  /* Fit the larger toolbar beside the view switch on a phone: size the
+     switch to its labels instead of equal (placeholder-widened) columns
+     and drop the decorative glyphs. */
+  .scene-toolbar {
+    gap: 6px;
+  }
+
+  .view-switch {
+    grid-template-columns: repeat(6, auto);
+  }
+
+  .board-stage:not([data-topology="cylinder"]) .view-switch::before,
+  .view-switch button span {
+    display: none;
+  }
+
+  .view-switch button {
+    padding: 6px 5px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

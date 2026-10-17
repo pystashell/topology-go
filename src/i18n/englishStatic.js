@@ -379,6 +379,7 @@ export const ENGLISH_STATIC = Object.freeze({
   "黑方 · 你先行": "Black · You move first",
   "黑方提子": "Black captures",
   "黑方落子": "Black to move",
+  "3D Baduk：竹筒棋盘上的围棋": "3D Baduk: Go on a cylinder board",
   // Online dialog identity recovery panels
   "此浏览器保存了房间身份": "This browser saved a room identity",
   "请选择要恢复的身份；若要以新身份观战或加入，请使用下方按钮。":

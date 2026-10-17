@@ -1,0 +1,22 @@
+{
+  "name": "3D Baduk · Go on Unusual Boards",
+  "short_name": "3D Baduk",
+  "description": "Go on cylinder, torus and Möbius boards with KataGo AI, online rooms, replay and flat or 3D views.",
+  "lang": "en",
+  "start_url": "/single",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b100f",
+  "theme_color": "#101715",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
