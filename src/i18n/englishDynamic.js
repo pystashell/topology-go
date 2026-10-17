@@ -734,6 +734,10 @@ export const ENGLISH_PATTERNS = Object.freeze([
     replace: (_, count, activity) => `${count} spectator${count === "1" ? "" : "s"} · ${capturedPhrase(activity)}`,
   },
   {
+    pattern: /^显示 (\d+) \/ 共 (\d+) 个公开房间$/u,
+    replace: (_, shown, total) => `Showing ${shown} of ${total} public room${total === "1" ? "" : "s"}`,
+  },
+  {
     pattern: /^共 (\d+) 个公开房间$/u,
     replace: (_, count) => `${count} public room${count === "1" ? "" : "s"}`,
   },

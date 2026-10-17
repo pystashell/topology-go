@@ -405,6 +405,9 @@ let lobbyPreviewObserver = null;
 let lobbyPreviewRenderer = null;
 let lobbyStatusFilter = "all";
 let lobbyLoading = false;
+let lobbyLoadError = "";
+let lobbyLastRefreshAt = 0;
+let lobbyPollTimer = null;
 let lobbyModulesPromise = null;
 let appRouteMode = "single";
 const autoRotateByView = { arc: false, "3d": false };
@@ -479,6 +482,10 @@ const CHAT_EMOJIS = Object.freeze([
 const PLAYER_NAME_KEY = "bamboo-baduk-player-name";
 const SOUND_ENABLED_KEY = "3d-baduk-sound-enabled";
 const AI_MODEL_KEY = "3d-baduk-ai-model";
+// The lobby refreshes itself while it is on screen. 3 reads a minute stays
+// far below the server's per-IP lobby budget (~120 GETs a minute).
+const LOBBY_POLL_INTERVAL_MS = 20_000;
+const LOBBY_RATE_LIMIT_BACKOFF_MS = 60_000;
 const LOBBY_BOARD_SETTINGS_KEY = "3d-baduk-lobby-board-settings-v1";
 const roomClient = new RoomClient();
 
@@ -3229,36 +3236,92 @@ async function renderLobbyRooms() {
     cursor = card.nextElementSibling;
   }
   elements.lobbyEmpty.hidden = filtered.length > 0;
+  if (!lobbyLoading) syncLobbyStatus(filtered.length);
+}
+
+function lobbyCountText(shown, total) {
+  return shown === total
+    ? `共 ${total} 个公开房间`
+    : `显示 ${shown} / 共 ${total} 个公开房间`;
+}
+
+/** The status line counts the rooms the filters leave visible. */
+function syncLobbyStatus(shown) {
+  const text = lobbyLoadError || lobbyCountText(shown, lobbyRooms.length);
+  // An unchanged count must not re-announce in this live region every poll.
+  if (elements.lobbyStatus.textContent !== text) elements.lobbyStatus.textContent = text;
+  elements.lobbyStatus.classList.toggle("error", Boolean(lobbyLoadError));
+}
+
+function clearLobbyPoll() {
+  if (lobbyPollTimer !== null) window.clearTimeout(lobbyPollTimer);
+  lobbyPollTimer = null;
+}
+
+function lobbyPollingActive() {
+  return appRouteMode === "lobby" && document.visibilityState !== "hidden";
+}
+
+function scheduleLobbyPoll(delayMs = LOBBY_POLL_INTERVAL_MS) {
+  clearLobbyPoll();
+  if (!lobbyPollingActive()) return;
+  lobbyPollTimer = window.setTimeout(() => {
+    lobbyPollTimer = null;
+    void refreshLobby();
+  }, delayMs);
 }
 
 async function refreshLobby({ announce = false } = {}) {
   if (appRouteMode !== "lobby" || lobbyLoading) return;
+  clearLobbyPoll();
   lobbyLoading = true;
   lobbyRefreshController?.abort();
-  lobbyRefreshController = new AbortController();
+  const request = new AbortController();
+  lobbyRefreshController = request;
   elements.lobbyRefresh.disabled = true;
-  elements.lobbyStatus.classList.remove("error");
-  if (announce || !lobbyRooms.length) elements.lobbyStatus.textContent = "正在读取公开房间…";
+  if (announce || lobbyLastRefreshAt === 0) {
+    elements.lobbyStatus.classList.remove("error");
+    elements.lobbyStatus.textContent = "正在读取公开房间…";
+  }
+  let nextPollMs = LOBBY_POLL_INTERVAL_MS;
   try {
     const { fetchLobbyRooms } = await loadLobbyModules();
-    lobbyRooms = await fetchLobbyRooms({ signal: lobbyRefreshController.signal });
-    await renderLobbyRooms();
-    elements.lobbyStatus.textContent = `共 ${lobbyRooms.length} 个公开房间`;
+    lobbyRooms = await fetchLobbyRooms({ signal: request.signal });
+    lobbyLoadError = "";
   } catch (error) {
-    if (error?.cause?.name === "AbortError") return;
-    elements.lobbyStatus.textContent = localizedErrorMessage(error, "暂时无法读取在线大厅。");
-    elements.lobbyStatus.classList.add("error");
-    await renderLobbyRooms();
+    if (error?.cause?.name === "AbortError" || request.signal.aborted) return;
+    lobbyLoadError = localizedErrorMessage(error, "暂时无法读取在线大厅。");
+    if (error?.code === "RATE_LIMITED" || error?.status === 429) {
+      nextPollMs = Math.max(
+        LOBBY_RATE_LIMIT_BACKOFF_MS,
+        (Number(error?.retryAfterSeconds) || 0) * 1_000,
+      );
+    }
   } finally {
-    lobbyLoading = false;
+    if (lobbyRefreshController === request) lobbyLoading = false;
     elements.lobbyRefresh.disabled = false;
   }
+  lobbyLastRefreshAt = Date.now();
+  await renderLobbyRooms();
+  scheduleLobbyPoll(nextPollMs);
 }
 
 function cancelLobbyRequest() {
+  clearLobbyPoll();
   lobbyRefreshController?.abort();
   lobbyRefreshController = null;
   lobbyLoading = false;
+}
+
+function resumeLobbyPolling() {
+  if (appRouteMode !== "lobby") return;
+  if (document.visibilityState === "hidden") {
+    clearLobbyPoll();
+    return;
+  }
+  const elapsed = Date.now() - lobbyLastRefreshAt;
+  if (elapsed >= LOBBY_POLL_INTERVAL_MS) void refreshLobby();
+  else scheduleLobbyPoll(LOBBY_POLL_INTERVAL_MS - elapsed);
 }
 
 function loadLobbyOnce() {
@@ -6820,6 +6883,7 @@ elements.lobbyJoinRoom.addEventListener("click", () => {
   showOnlineDialog("", { intent: "join" });
 });
 elements.lobbyRefresh.addEventListener("click", () => void refreshLobby({ announce: true }));
+document.addEventListener("visibilitychange", resumeLobbyPolling);
 for (const button of elements.lobbyStatusButtons) {
   button.addEventListener("click", () => {
     lobbyStatusFilter = button.dataset.lobbyStatus || "all";

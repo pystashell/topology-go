@@ -87,7 +87,7 @@ test("main.js shows room, lobby and chat errors through the localized helper", (
   const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
   assert.match(main, /const message = localizedErrorMessage\(error\);\s*if \(elements\.onlineDialog\.open\) showOnlineError\(message\);/u);
   assert.match(main, /setMessage\(localizedErrorMessage\(error, "房间拒绝了这个操作。"\), true\)/u);
-  assert.match(main, /lobbyStatus\.textContent = localizedErrorMessage\(error, "暂时无法读取在线大厅。"\)/u);
+  assert.match(main, /lobbyLoadError = localizedErrorMessage\(error, "暂时无法读取在线大厅。"\)/u);
   assert.match(main, /setChatStatus\(localizedErrorMessage\(error, "消息发送失败，请稍后重试。"\), true\)/u);
   assert.doesNotMatch(main, /(?:setMessage|showOnlineError|setChatStatus)\(error\.message/u);
 });
