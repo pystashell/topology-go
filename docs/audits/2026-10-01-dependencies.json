@@ -1,0 +1,29 @@
+{
+  "checkedAt": "2026-09-30T20:25:55.230Z",
+  "node": "v24.14.0",
+  "versions": {
+    "wrangler": "4.145.0",
+    "miniflare": "5.20260930.0-alpha",
+    "workerd": "1.20260930.2",
+    "sharp": "0.35.4",
+    "undici": "7.29.1",
+    "postcss": "8.5.28",
+    "nanoid": "3.3.19"
+  },
+  "allDependencies": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "productionDependencies": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  }
+}

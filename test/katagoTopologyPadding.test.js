@@ -47,3 +47,47 @@ test("KataGo cylinder padding keeps ordinary row orientation", async () => {
   input.dispose();
   padded.dispose();
 });
+
+test("KataGo topology padding preserves rectangular tensor axes", async () => {
+  const input = tf.tensor4d(
+    [
+      1, 2, 3, 4,
+      5, 6, 7, 8,
+    ],
+    [1, 2, 4, 1],
+  );
+  const cylinder = padSpatialForTopology(input, 1, 1, "cylinder");
+  const torus = padSpatialForTopology(input, 1, 1, "torus");
+  const mobius = padSpatialForTopology(input, 1, 1, "mobius");
+
+  assert.deepEqual(cylinder.shape, [1, 4, 6, 1]);
+  assert.deepEqual(torus.shape, [1, 4, 6, 1]);
+  assert.deepEqual(mobius.shape, [1, 4, 6, 1]);
+  assert.deepEqual(Array.from(await mobius.data()), [
+    0, 0, 0, 0, 0, 0,
+    8, 1, 2, 3, 4, 5,
+    4, 5, 6, 7, 8, 1,
+    0, 0, 0, 0, 0, 0,
+  ]);
+
+  input.dispose();
+  cylinder.dispose();
+  torus.dispose();
+  mobius.dispose();
+});
+
+test("KataGo topology padding preserves a 30x20 board without cropping", () => {
+  const input = tf.zeros([1, 20, 30, 22]);
+  const cylinder = padSpatialForTopology(input, 1, 1, "cylinder");
+  const torus = padSpatialForTopology(input, 1, 1, "torus");
+  const mobius = padSpatialForTopology(input, 1, 1, "mobius");
+
+  assert.deepEqual(cylinder.shape, [1, 22, 32, 22]);
+  assert.deepEqual(torus.shape, [1, 22, 32, 22]);
+  assert.deepEqual(mobius.shape, [1, 22, 32, 22]);
+
+  input.dispose();
+  cylinder.dispose();
+  torus.dispose();
+  mobius.dispose();
+});

@@ -1,6 +1,8 @@
 import {
   BLACK,
   GoEngine,
+  MOVE_ERRORS,
+  PHASE_PLAY,
   SCORING_CHINESE,
   WHITE,
 } from "../../game/goEngine.js";
@@ -8,8 +10,8 @@ import {
 export const KATAGO_SPATIAL_CHANNELS = 22;
 export const KATAGO_GLOBAL_CHANNELS = 19;
 
-function featureIndex(size, row, col, channel) {
-  return (row * size + col) * KATAGO_SPATIAL_CHANNELS + channel;
+function featureIndex(width, row, col, channel) {
+  return (row * width + col) * KATAGO_SPATIAL_CHANNELS + channel;
 }
 
 function pointKey(row, col) {
@@ -26,28 +28,25 @@ function pointKey(row, col) {
  * reconstruct them without weakening superko authority.
  */
 export function buildCylinderFeatures(gameOrState) {
-  const game =
-    gameOrState instanceof GoEngine
-      ? GoEngine.fromState(gameOrState.exportState({ includeReplay: false }))
-      : GoEngine.fromState(gameOrState);
-  const { size } = game;
+  const game = searchPosition(gameOrState);
+  const { width, height } = game;
   const spatial = new Float32Array(
-    size * size * KATAGO_SPATIAL_CHANNELS,
+    width * height * KATAGO_SPATIAL_CHANNELS,
   );
   const global = new Float32Array(KATAGO_GLOBAL_CHANNELS);
   const player = game.currentPlayer;
   const opponent = player === BLACK ? WHITE : BLACK;
 
-  for (let row = 0; row < size; row += 1) {
-    for (let col = 0; col < size; col += 1) {
-      spatial[featureIndex(size, row, col, 0)] = 1;
+  for (let row = 0; row < height; row += 1) {
+    for (let col = 0; col < width; col += 1) {
+      spatial[featureIndex(width, row, col, 0)] = 1;
     }
   }
 
-  const liberties = new Uint8Array(size * size);
+  const liberties = new Uint8Array(width * height);
   const visited = new Set();
-  for (let row = 0; row < size; row += 1) {
-    for (let col = 0; col < size; col += 1) {
+  for (let row = 0; row < height; row += 1) {
+    for (let col = 0; col < width; col += 1) {
       if (game.get(row, col) === null || visited.has(pointKey(row, col))) {
         continue;
       }
@@ -55,35 +54,55 @@ export function buildCylinderFeatures(gameOrState) {
       const count = Math.min(4, group.liberties.length);
       for (const stone of group.stones) {
         visited.add(pointKey(stone.row, stone.col));
-        liberties[stone.row * size + stone.col] = count;
+        liberties[stone.row * width + stone.col] = count;
       }
     }
   }
 
-  for (let row = 0; row < size; row += 1) {
-    for (let col = 0; col < size; col += 1) {
+  for (let row = 0; row < height; row += 1) {
+    for (let col = 0; col < width; col += 1) {
       const color = game.get(row, col);
       if (color === null) continue;
-      spatial[featureIndex(size, row, col, color === player ? 1 : 2)] = 1;
-      const count = liberties[row * size + col];
+      spatial[featureIndex(width, row, col, color === player ? 1 : 2)] = 1;
+      const count = liberties[row * width + col];
       if (count >= 1 && count <= 3) {
-        spatial[featureIndex(size, row, col, count + 2)] = 1;
+        spatial[featureIndex(width, row, col, count + 2)] = 1;
       }
     }
   }
 
-  // A positional-superko point cannot be represented by KataGo's single-ko
-  // plane, so exact legality remains the responsibility of GoEngine. The most
-  // recent ordinary move is still useful as the first history plane.
-  if (game.lastMove?.type === "play" && game.lastMove.color === opponent) {
-    spatial[
-      featureIndex(size, game.lastMove.row, game.lastMove.col, 9)
-    ] = 1;
-  } else if (game.lastMove?.type === "pass") {
-    global[0] = 1;
+  // KataGo v7 marks every empty point the player to move may not take
+  // because of ko, including positional superko. Exact legality remains the
+  // responsibility of GoEngine through the policy mask.
+  for (let row = 0; row < height; row += 1) {
+    for (let col = 0; col < width; col += 1) {
+      if (
+        game.get(row, col) === null &&
+        game.checkPlay(row, col).reason === MOVE_ERRORS.SUPERKO
+      ) {
+        spatial[featureIndex(width, row, col, 6)] = 1;
+      }
+    }
   }
 
-  const selfKomi = player === WHITE ? game.komi : -game.komi;
+  // History planes describe the opponent's previous move only. After a
+  // resumed scoring phase the last pass can belong to the player to move.
+  if (game.lastMove?.color === opponent) {
+    if (game.lastMove.type === "play") {
+      spatial[
+        featureIndex(width, game.lastMove.row, game.lastMove.col, 9)
+      ] = 1;
+    } else {
+      global[0] = 1;
+    }
+  }
+
+  // Like KataGo, bound komi to the board area plus 20 before encoding it.
+  const komiBound = width * height + 20;
+  const selfKomi = Math.max(
+    -komiBound,
+    Math.min(komiBound, player === WHITE ? game.komi : -game.komi),
+  );
   global[5] = selfKomi / 20;
   // KataGo v7 rule features: positional superko is represented by the two
   // ko-rule inputs below. Exact repetition checks are still done by GoEngine.
@@ -93,7 +112,7 @@ export function buildCylinderFeatures(gameOrState) {
   if (game.scoringRule !== SCORING_CHINESE) {
     global[9] = 1; // territory scoring
   } else {
-    const drawableKomisAreEven = (size * size) % 2 === 0;
+    const drawableKomisAreEven = (width * height) % 2 === 0;
     const komiFloor = drawableKomisAreEven
       ? Math.floor(selfKomi / 2) * 2
       : Math.floor((selfKomi - 1) / 2) * 2 + 1;
@@ -103,37 +122,55 @@ export function buildCylinderFeatures(gameOrState) {
   }
   global[14] = game.consecutivePasses === 1 ? 1 : 0;
 
-  return { size, spatial, global };
+  return {
+    ...(game.size === undefined ? {} : { size: game.size }),
+    width,
+    height,
+    spatial,
+    global,
+  };
+}
+
+/**
+ * Validate a snapshot once. Features and masks only read the position, so
+ * every probe below can share this one engine.
+ */
+function searchPosition(gameOrState) {
+  return GoEngine.fromSearchState(
+    gameOrState instanceof GoEngine
+      ? gameOrState.exportSearchState()
+      : gameOrState,
+  );
+}
+
+/**
+ * Probe every point of one position. GoEngine.checkPlay() applies the same
+ * topology-aware capture, suicide and positional-superko rules as play()
+ * without mutating or cloning the game, so the live game is never changed.
+ */
+function legalMaskFor(game) {
+  const pointCount = game.width * game.height;
+  const mask = new Uint8Array(pointCount + 1);
+  for (let row = 0; row < game.height; row += 1) {
+    for (let col = 0; col < game.width; col += 1) {
+      if (game.get(row, col) !== null) continue;
+      if (game.checkPlay(row, col).ok) mask[row * game.width + col] = 1;
+    }
+  }
+  // Passing is legal exactly when play is.
+  if (game.phase === PHASE_PLAY) mask[pointCount] = 1;
+  return mask;
 }
 
 /**
  * Return one exact GoEngine legality flag per point plus pass.
  *
  * KataGo was trained for a different topology, and its policy head does not
- * know this game's positional-superko history. Clone the complete state for
- * every probe so the same topology-aware capture, suicide and repetition rules
- * used by actual play remain authoritative without mutating the live game.
+ * know this game's positional-superko history, so GoEngine's own rules remain
+ * authoritative for every point.
  */
 export function buildLegalPolicyMask(gameOrState) {
-  const game =
-    gameOrState instanceof GoEngine
-      ? GoEngine.fromState(gameOrState.exportState({ includeReplay: false }))
-      : GoEngine.fromState(gameOrState);
-  const state = game.exportState({ includeReplay: false });
-  const pointCount = game.size * game.size;
-  const mask = new Uint8Array(pointCount + 1);
-
-  for (let row = 0; row < game.size; row += 1) {
-    for (let col = 0; col < game.size; col += 1) {
-      if (game.get(row, col) !== null) continue;
-      const trial = GoEngine.fromState(state);
-      if (trial.play(row, col).ok) mask[row * game.size + col] = 1;
-    }
-  }
-
-  const passTrial = GoEngine.fromState(state);
-  if (passTrial.pass().ok) mask[pointCount] = 1;
-  return mask;
+  return legalMaskFor(searchPosition(gameOrState));
 }
 
 /**
@@ -149,12 +186,9 @@ export function policyPriorsFromLogits({
   gameOrState,
   policyChannels,
 }) {
-  const game =
-    gameOrState instanceof GoEngine
-      ? GoEngine.fromState(gameOrState.exportState({ includeReplay: false }))
-      : GoEngine.fromState(gameOrState);
-  const { size } = game;
-  const pointCount = size * size;
+  const game = searchPosition(gameOrState);
+  const { width, height } = game;
+  const pointCount = width * height;
   if (!Number.isInteger(policyChannels) || policyChannels < 1) {
     throw new RangeError("policyChannels must be a positive integer");
   }
@@ -165,7 +199,7 @@ export function policyPriorsFromLogits({
     throw new RangeError("pass tensor has no policy channel");
   }
 
-  const mask = buildLegalPolicyMask(game);
+  const mask = legalMaskFor(game);
   const logits = new Float64Array(pointCount + 1);
   let maximum = -Infinity;
   for (let index = 0; index < pointCount; index += 1) {

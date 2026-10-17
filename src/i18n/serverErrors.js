@@ -1,0 +1,148 @@
+// Room and lobby errors carry a stable `code` next to a Chinese message
+// written by the server. The client cannot rely on a dictionary entry for
+// every server sentence (they change with the server), so each code maps to
+// a Chinese source sentence that the English dictionary below translates.
+// Unknown codes fall back to a generic sentence instead of raw Chinese.
+
+export const GENERIC_SERVER_ERROR = "房间拒绝了这个操作。";
+const GENERIC_RATE_LIMIT = "RATE_LIMITED";
+
+/** Chinese source copy for every error code the room, lobby or worker emits. */
+export const SERVER_ERROR_COPY = Object.freeze({
+  // HTTP entry points and rate limits (worker/index.js)
+  BAD_REQUEST: "请求无效，请刷新页面后重试。",
+  FORBIDDEN: "你没有权限执行这个操作。",
+  UNAUTHORIZED: "房间身份已经失效，请重新加入。",
+  CONFLICT: "房间已经存在。",
+  RATE_LIMITED: "请求过于频繁，请稍后再试。",
+  ROOM_CODE_TAKEN: "房间码已被使用，请重试建房。",
+  CREATE_COMMIT_UNCERTAIN: "建房结果尚未确认；请使用“核对并恢复”重试。",
+  JOIN_COMMIT_UNCERTAIN: "加入结果尚未确认；请使用“核对并恢复”重试。",
+  JOIN_NOT_COMMITTED: "加入结果尚未确认。",
+  PROTOCOL_UPGRADE_REQUIRED: "客户端与房间服务版本不兼容，请刷新页面。",
+  INTERNAL_ERROR: "房间服务出现内部错误，请稍后重试。",
+  // Room durable object (worker/BadukRoom.js)
+  ROOM_NOT_FOUND: "没有找到这个房间。",
+  ROOM_EXPIRED: "房间已因长时间无活动而关闭。",
+  ROOM_COMMIT_FAILED: "房间暂时无法保存，请稍后重试。",
+  ROOM_RESTORE_FAILED: "房间暂时无法恢复或保存，请稍后重新连接。",
+  SESSION_REPLACED: "这个席位已在另一个窗口打开，本页已停止重连。",
+  UNSUPPORTED_MESSAGE: "房间无法识别这条消息，请刷新页面。",
+  INVALID_JSON: "房间无法识别这条消息，请刷新页面。",
+  INVALID_COMMAND: "房间无法识别这个操作，请刷新页面。",
+  MESSAGE_TOO_LARGE: "这条消息太大，房间无法处理。",
+  COMMAND_REJECTED: GENERIC_SERVER_ERROR,
+  // Room engine (src/multiplayer/roomEngine.js)
+  BAD_ROOM_STATE: "房间数据暂时无法读取，请稍后重新连接。",
+  STALE_COMMAND: "这个操作已经过期，请按最新棋局重试。",
+  STALE_GAME_STATE: "棋局已经更新，请按最新局面重试。",
+  STALE_SCORING: "点目结果已经变化，请核对最新结果后重新确认。",
+  STALE_UNDO_REQUEST: "悔棋申请已经变化，请按最新状态操作。",
+  STALE_GAME_REQUEST: "对局邀请已经变化，请按最新邀请操作。",
+  GAME_FINISHED: "本局已经结束。",
+  GAME_IN_PROGRESS: "当前对局尚未结束，不能发起新棋。",
+  GAME_NOT_STARTED: "棋局尚未开始。",
+  GAME_TIMED_OUT: "本局已超时结束。",
+  GAME_INVITATION_PENDING: "当前邀请仍在等待回应；请先取消邀请再修改。",
+  ILLEGAL_MOVE: "这一手不能下。",
+  NOT_YOUR_TURN: "还没有轮到你。",
+  NOT_AI_TURN: "现在不是在线 AI 行棋。",
+  AI_NOT_ATTACHED: "房间里没有在线 AI。",
+  AI_PAUSED: "在线 AI 自对弈已暂停。",
+  AI_SEAT_UNAVAILABLE: "当前白方座位不能接入 AI。",
+  AI_UNDO_IS_DIRECT: "与 AI 对局时悔棋直接生效，不需要申请。",
+  ALREADY_SEATED: "你已经占用了一个席位。",
+  SEAT_UNAVAILABLE: "这个席位已经有人使用。",
+  OPPONENT_SEAT_OCCUPIED: "白方席位已经有人使用。",
+  OPPONENT_REQUIRED: "请先让对手进入房间并成为白方。",
+  WAITING_FOR_OPPONENT: "请等待对手加入。",
+  SPECTATOR_FULL: "观战人数已满。",
+  SPECTATOR_RATE_LIMITED: "观战请求过于频繁，请稍后再试。",
+  CHAT_RATE_LIMITED: "发言太快了，请稍等一下再发送。",
+  COMMAND_RATE_LIMITED: "操作太频繁了，请稍等一下再试。",
+  SCORING_TOGGLE_LIMIT: "本次点目的死子标记次数已达上限，请确认结果或继续对局。",
+  UNDO_PENDING: "悔棋申请正在等待回应。",
+  UNDO_UNAVAILABLE: "现在不能悔棋。",
+  // Chat validation shared by client and room (src/multiplayer/chat.js)
+  EMPTY_CHAT: "请输入聊天内容。",
+  INVALID_CHAT: "聊天内容格式不正确。",
+  CHAT_TOO_LONG: "聊天内容太长，请缩短后再发送。",
+  CHAT_TOO_MANY_LINES: "聊天内容行数太多，请合并后再发送。",
+  CHAT_TOO_LARGE: "这条消息包含的字符过大，请缩短后再发送。",
+  UNKNOWN_STICKER: "这个表情包不存在。",
+  // Lobby reads (src/multiplayer/lobbyClient.js)
+  LOBBY_REJECTED: "在线大厅暂时不可用。",
+  LOBBY_UNREACHABLE: "暂时无法连接在线大厅。",
+  // Client transport failures (src/multiplayer/roomClient.js)
+  NETWORK_ERROR: "无法连接联机服务。",
+  HTTP_ERROR: "联机服务暂时不可用，请稍后重试。",
+  SYNC_TIMEOUT: "房间同步超时，正在重新连接。",
+  ACK_TIMEOUT: "等待服务器确认超时。",
+});
+
+/** English for the copy above that is not already in the main dictionary. */
+export const ENGLISH_SERVER_ERRORS = Object.freeze({
+  "请求无效，请刷新页面后重试。": "The request was invalid. Refresh the page and try again.",
+  "你没有权限执行这个操作。": "You are not allowed to do that.",
+  "房间已经存在。": "That room already exists.",
+  "请求过于频繁，请稍后再试。": "Too many requests. Wait a minute and try again.",
+  "房间码已被使用，请重试建房。": "That room code is already taken. Try creating the room again.",
+  "建房结果尚未确认；请使用“核对并恢复”重试。":
+    "The room creation is not confirmed yet. Use Check and recover to retry it.",
+  "加入结果尚未确认；请使用“核对并恢复”重试。":
+    "The join is not confirmed yet. Use Check and recover to retry it.",
+  "加入结果尚未确认。": "The join is not confirmed yet.",
+  "房间服务出现内部错误，请稍后重试。": "The room service hit an internal error. Try again shortly.",
+  "没有找到这个房间。": "That room was not found.",
+  "房间暂时无法保存，请稍后重试。": "The room could not be saved right now. Try again shortly.",
+  "房间无法识别这条消息，请刷新页面。": "The room could not read that message. Refresh the page.",
+  "房间无法识别这个操作，请刷新页面。": "The room could not read that action. Refresh the page.",
+  "这条消息太大，房间无法处理。": "That message is too large for the room.",
+  "房间数据暂时无法读取，请稍后重新连接。": "The room data cannot be read right now. Reconnect shortly.",
+  "这个操作已经过期，请按最新棋局重试。": "That action is out of date. Try again on the latest position.",
+  "棋局已经更新，请按最新局面重试。": "The game has changed. Try again on the latest position.",
+  "悔棋申请已经变化，请按最新状态操作。": "The undo request has changed. Respond to its latest state.",
+  "对局邀请已经变化，请按最新邀请操作。": "The game invitation has changed. Respond to the latest one.",
+  "本局已经结束。": "This game is already over.",
+  "棋局尚未开始。": "The game has not started yet.",
+  "本局已超时结束。": "This game has already ended on time.",
+  "现在不是在线 AI 行棋。": "It is not the online AI's turn.",
+  "房间里没有在线 AI。": "No online AI is attached to this room.",
+  "在线 AI 自对弈已暂停。": "Online AI self-play is paused.",
+  "与 AI 对局时悔棋直接生效，不需要申请。": "Undo against the AI takes effect directly; no request is needed.",
+  "你已经占用了一个席位。": "You already hold a seat.",
+  "这个席位已经有人使用。": "That seat is already taken.",
+  "白方席位已经有人使用。": "The White seat is already taken.",
+  "请先让对手进入房间并成为白方。": "Ask your opponent to enter the room and take White first.",
+  "请等待对手加入。": "Wait for your opponent to join.",
+  "观战人数已满。": "This room has no spectator places left.",
+  "观战请求过于频繁，请稍后再试。": "Too many spectator requests. Try again shortly.",
+  "发言太快了，请稍等一下再发送。": "You are sending messages too quickly. Wait a moment.",
+  "操作太频繁了，请稍等一下再试。": "Too many actions. Wait a moment and try again.",
+  "本次点目的死子标记次数已达上限，请确认结果或继续对局。":
+    "Dead-stone marks for this scoring reached their limit. Confirm the result or resume play.",
+  "悔棋申请正在等待回应。": "An undo request is already waiting for a response.",
+  "聊天内容太长，请缩短后再发送。": "That chat message is too long. Shorten it and try again.",
+  "聊天内容行数太多，请合并后再发送。": "That chat message has too many lines. Combine them and try again.",
+  "联机服务暂时不可用，请稍后重试。": "The online service is unavailable right now. Try again shortly.",
+  "房间同步超时，正在重新连接。": "The room did not sync in time. Reconnecting.",
+});
+
+/**
+ * Pick the copy to show for an error. Chinese keeps the server's own wording;
+ * English keeps a message that already reads (or translates) cleanly and
+ * otherwise falls back to the copy for its code, then to a generic sentence.
+ */
+export function errorCopy(error, {
+  fallback = GENERIC_SERVER_ERROR,
+  chinese = false,
+  isEnglish = (text) => !/[\u3400-\u9fff\uff01-\uff60\u3000-\u303f]/u.test(text),
+} = {}) {
+  const message = typeof error?.message === "string" ? error.message.trim() : "";
+  const code = typeof error?.code === "string" ? error.code : "";
+  const byCode = SERVER_ERROR_COPY[code] ??
+    (code.endsWith("_RATE_LIMITED") ? SERVER_ERROR_COPY[GENERIC_RATE_LIMIT] : null);
+  if (chinese) return message || byCode || fallback;
+  if (message && isEnglish(message)) return message;
+  return byCode ?? fallback;
+}

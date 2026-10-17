@@ -1,0 +1,34 @@
+name: Check pull request
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Test rules, protocol, and SQLite runtime
+        run: npm test
+      - name: Build client
+        run: npm run build
+      - name: Validate Worker without deployment
+        run: npx wrangler deploy --dry-run --strict
+      - name: Audit all dependencies
+        run: npm audit --audit-level=moderate

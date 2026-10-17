@@ -1,0 +1,77 @@
+name: Release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer without the v prefix, for example 0.2.0-rc.1
+        required: true
+        type: string
+      confirm:
+        description: Type RELEASE to allow tag, deploy, and GitHub Release creation
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: 3d-baduk-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Test, tag, deploy, and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      RELEASE_SOURCE_BRANCH: ${{ github.ref_name }}
+
+    steps:
+      - name: Refuse default-branch and tag dispatches
+        env:
+          RELEASE_CONFIRMATION: ${{ inputs.confirm }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_CONFIRMATION" != "RELEASE" ]]; then
+            echo "Confirmation must be exactly RELEASE." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_REF_TYPE" != "branch" ]]; then
+            echo "Releases must be dispatched from a named feature/release branch." >&2
+            exit 1
+          fi
+          case "${RELEASE_SOURCE_BRANCH,,}" in
+            main|master)
+              echo "Direct releases from $RELEASE_SOURCE_BRANCH are forbidden." >&2
+              exit 1
+              ;;
+          esac
+          if [[ -z "$CLOUDFLARE_API_TOKEN" || -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
+            echo "Cloudflare production secrets are not configured." >&2
+            exit 1
+          fi
+
+      - name: Check out the selected release branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Publish verified release
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: npm run release:publish -- "$RELEASE_VERSION"

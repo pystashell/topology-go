@@ -1,0 +1,71 @@
+{
+  "measuredAt": "2026-09-30T19:42:54.422Z",
+  "node": "v24.14.0",
+  "method": "120 clone-plus-pass expansions; 40 retained clones after GC; deterministic torus positions. Not whole-AI throughput or peak memory.",
+  "results": [
+    {
+      "size": 19,
+      "moves": 140,
+      "historyPositions": 141,
+      "undoEntries": 32,
+      "previous": {
+        "stateBytes": 136593,
+        "msPerExpansion": 10.804,
+        "retainedHeapBytesPerClone": 157911
+      },
+      "search": {
+        "stateBytes": 56442,
+        "msPerExpansion": 0.825,
+        "retainedHeapBytesPerClone": 15407
+      }
+    },
+    {
+      "size": 19,
+      "moves": 240,
+      "historyPositions": 241,
+      "undoEntries": 32,
+      "previous": {
+        "stateBytes": 184678,
+        "msPerExpansion": 6.319,
+        "retainedHeapBytesPerClone": 158902
+      },
+      "search": {
+        "stateBytes": 94940,
+        "msPerExpansion": 1.32,
+        "retainedHeapBytesPerClone": 15735
+      }
+    },
+    {
+      "size": 25,
+      "moves": 240,
+      "historyPositions": 241,
+      "undoEntries": 32,
+      "previous": {
+        "stateBytes": 293739,
+        "msPerExpansion": 12.684,
+        "retainedHeapBytesPerClone": 242416
+      },
+      "search": {
+        "stateBytes": 161344,
+        "msPerExpansion": 4.883,
+        "retainedHeapBytesPerClone": 20681
+      }
+    },
+    {
+      "size": 25,
+      "moves": 400,
+      "historyPositions": 401,
+      "undoEntries": 32,
+      "previous": {
+        "stateBytes": 413505,
+        "msPerExpansion": 10.826,
+        "retainedHeapBytesPerClone": 248703
+      },
+      "search": {
+        "stateBytes": 266133,
+        "msPerExpansion": 4.593,
+        "retainedHeapBytesPerClone": 26998
+      }
+    }
+  ]
+}

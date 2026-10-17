@@ -94,6 +94,50 @@ test("KataGo runtime returns the move, model identity, enforced options, and hyb
   });
 });
 
+test("KataGo runtime bounds candidate and PV payloads before posting", async () => {
+  const scope = new FakeWorkerScope();
+  const longVariation = Array.from({ length: 20 }, (_, index) => ({
+    type: "play",
+    row: index,
+    col: index + 1,
+  }));
+  const rawCandidates = Array.from({ length: 30 }, (_, index) => ({
+    move: { type: "play", row: index, col: 0 },
+    visits: 100 - index,
+    winRate: 0.5,
+    ...((index < 4 || index === 6) ? { variation: longVariation } : {}),
+    unboundedDebugTree: { value: "must not cross the worker boundary" },
+  }));
+
+  attachKataGoWorkerRuntime(scope, {
+    async neuralPolicy() {
+      return neuralResult();
+    },
+    async chooseMove() {
+      return {
+        move: rawCandidates[0].move,
+        stats: { candidates: rawCandidates },
+      };
+    },
+  });
+
+  await scope.dispatch({ type: "think", id: 88, state: { turn: 1 } });
+  const candidates = scope.messages.at(-1).stats.candidates;
+  assert.equal(candidates.length, 25);
+  assert.deepEqual(candidates[0].variation[0], candidates[0].move);
+  assert.equal(candidates[0].variation.length, 8);
+  assert.ok(
+    candidates.filter((candidate) => Object.hasOwn(candidate, "variation")).length <= 5,
+  );
+  assert.ok(Object.hasOwn(candidates[6], "variation"));
+  assert.ok(!Object.hasOwn(candidates[4], "variation"));
+  assert.ok(!Object.hasOwn(candidates[5], "variation"));
+  assert.ok(candidates[6].variation.length <= 8);
+  assert.ok(
+    candidates.every((candidate) => !Object.hasOwn(candidate, "unboundedDebugTree")),
+  );
+});
+
 test("neural failure emits an error and never starts tactical search", async () => {
   const scope = new FakeWorkerScope();
   let searchCalls = 0;

@@ -2,10 +2,39 @@ import {
   mobiusPointFromCover,
   mobiusPointInCopy,
 } from "../game/mobiusTopology.js";
+import { formatGoColumn } from "../game/boardDimensions.js";
+import {
+  flatBoardLayout,
+  flatRowLabel,
+  mobiusRowLabelsForCopy,
+  mobiusWindowBands,
+  mobiusWindowCopies,
+} from "./flatBoardLayout.js";
+import {
+  applyBoardTouchAction,
+  boardTouchAction,
+  invalidatePendingTapOnAdditionalPointer,
+  pointerGestureRoles,
+  preventBoardContextMenu,
+} from "./pointerGestures.js";
+import { translateText } from "../i18n.js";
+import {
+  TERRITORY_MARKER_STYLES,
+  territoryPointsForPosition,
+} from "./territoryMarkers.js";
 
 const TAU = Math.PI * 2;
 const DRAG_THRESHOLD = 6;
-const COORDINATE_LETTERS = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
+const LABEL_COLOR = "rgba(235, 240, 237, 0.54)";
+const SEAM_ACCENT = "rgba(230, 185, 105, 0.95)";
+// Rows of a vertically flipped copy of the Mobius cover are labelled and
+// tinted in this colour so labels on either side of the flip seam are never
+// read against the wrong half of the board.
+const FLIP_ACCENT = "rgba(140, 186, 255, 0.95)";
+const FLIP_LABEL_COLOR = "rgba(150, 192, 255, 0.86)";
+const FLIP_TINT = "rgba(64, 104, 196, 0.13)";
+// Floating stage chrome the flat board keeps its labels and captions clear of.
+const BOARD_OVERLAY_SELECTOR = ".view-switch, .scene-toolbar, .gesture-hint";
 
 function mod(value, divisor) {
   return ((value % divisor) + divisor) % divisor;
@@ -34,13 +63,18 @@ function starIndices(size) {
 export class FlatBoard {
   constructor(
     container,
-    { size = 19, topology = "cylinder", onPoint, onHover, onPan } = {},
+    { size, width, height, topology = "cylinder", onPoint, onHover, onPan } = {},
   ) {
+    const fallbackDimension = size ?? width ?? height ?? 19;
+    const boardWidth = width ?? fallbackDimension;
+    const boardHeight = height ?? fallbackDimension;
     this.container = container;
     this.onPoint = onPoint;
     this.onHover = onHover;
     this.onPan = onPan;
-    this.size = size;
+    this.width = boardWidth;
+    this.height = boardHeight;
+    this.size = boardWidth === boardHeight ? boardWidth : undefined;
     this.topology = normalizeTopology(topology);
     this.wrapRows = this.topology === "torus";
     this.isMobius = this.topology === "mobius";
@@ -49,8 +83,11 @@ export class FlatBoard {
     this.phase = "play";
     this.lastMove = null;
     this.analysisMove = null;
+    this.analysisCandidates = [];
+    this.analysisVariation = [];
     this.referencePoint = null;
     this.deadKeys = new Set();
+    this.territoryPoints = [];
     this.hoveredPoint = null;
     this.offsetColumns = 0;
     this.offsetRows = 0;
@@ -63,7 +100,9 @@ export class FlatBoard {
     this.canvas = document.createElement("canvas");
     this.canvas.setAttribute(
       "aria-label",
-      "竹筒围棋的平面展开视图。左右两侧首尾相接，可横向拖动改变展开起点。",
+      translateText(
+        "竹筒围棋的平面展开视图。左键点击落子；右键或触屏单指横向拖动改变展开起点。",
+      ),
     );
     this.context = this.canvas.getContext("2d");
     this.container.appendChild(this.canvas);
@@ -72,6 +111,7 @@ export class FlatBoard {
     this.handlePointerMove = (event) => this.pointerMove(event);
     this.handlePointerUp = (event) => this.pointerUp(event);
     this.handlePointerCancel = (event) => this.pointerCancel(event);
+    this.handleContextMenu = (event) => preventBoardContextMenu(event);
     this.handlePointerLeave = () => {
       if (!this.pointerState) this.setHoveredPoint(null);
     };
@@ -81,33 +121,41 @@ export class FlatBoard {
     this.canvas.addEventListener("pointerup", this.handlePointerUp);
     this.canvas.addEventListener("pointercancel", this.handlePointerCancel);
     this.canvas.addEventListener("pointerleave", this.handlePointerLeave);
+    this.canvas.addEventListener("contextmenu", this.handleContextMenu);
 
+    this.observedOverlays = new WeakSet();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.container);
-    this.rebuild(size, this.topology);
+    this.rebuild(boardWidth, boardHeight, this.topology);
   }
 
-  rebuild(size, topology = this.topology) {
-    this.size = size;
+  rebuild(width, height = width, topology = this.topology) {
+    if (typeof height === "string") {
+      topology = height;
+      height = width;
+    }
+    this.width = width;
+    this.height = height;
+    this.size = width === height ? width : undefined;
     this.topology = normalizeTopology(topology);
     this.wrapRows = this.topology === "torus";
     this.isMobius = this.topology === "mobius";
     this.container.dataset.topology = this.topology;
-    this.canvas.setAttribute(
-      "aria-label",
-      this.wrapRows
-        ? "甜甜圈围棋的平面展开视图。上下、左右分别首尾相接，可向任意方向拖动改变展开起点。"
-        : this.isMobius
-          ? "莫比乌斯围棋的平面展开视图。左右反向相接，横向滑过一圈后棋盘会上下翻转。"
-        : "竹筒围棋的平面展开视图。左右两侧首尾相接，可横向拖动改变展开起点。",
+    applyBoardTouchAction(
+      [this.container, this.canvas],
+      boardTouchAction({ view: "flat", topology: this.topology }),
     );
-    this.board = Array.from({ length: size }, () => Array(size).fill(null));
+    this.updateAriaLabel();
+    this.board = Array.from({ length: height }, () => Array(width).fill(null));
     this.currentPlayer = "black";
     this.phase = "play";
     this.lastMove = null;
     this.analysisMove = null;
+    this.analysisCandidates = [];
+    this.analysisVariation = [];
     this.referencePoint = null;
     this.deadKeys.clear();
+    this.territoryPoints = [];
     this.offsetColumns = 0;
     this.offsetRows = 0;
     this.hoveredPoint = null;
@@ -118,30 +166,79 @@ export class FlatBoard {
     this.notifyPan();
   }
 
+  updateAriaLabel() {
+    this.canvas.setAttribute(
+      "aria-label",
+      translateText(
+        this.wrapRows
+          ? "甜甜圈围棋的平面展开视图。左键点击落子；右键或触屏单指向任意方向拖动改变展开起点。"
+          : this.isMobius
+            ? "莫比乌斯围棋的平面展开视图。左键点击落子；右键或触屏单指横向滑过一圈后棋盘会上下翻转。"
+            : "竹筒围棋的平面展开视图。左键点击落子；右键或触屏单指横向拖动改变展开起点。",
+      ),
+    );
+  }
+
+  refreshLanguage() {
+    this.updateAriaLabel();
+    if (!this.destroyed) this.draw();
+  }
+
   setPosition({
     board,
+    size,
+    width,
+    height,
+    topology,
     currentPlayer,
     phase,
     lastMove,
     deadStones = [],
+    territoryRegions = [],
     analysisMove = null,
+    analysisCandidates = [],
+    analysisVariation = [],
     referencePoint = null,
   }) {
+    const nextWidth = width ?? size ?? this.width;
+    const nextHeight = height ?? size ?? this.height;
+    const nextTopology = topology ?? this.topology;
+    if (
+      nextWidth !== this.width ||
+      nextHeight !== this.height ||
+      normalizeTopology(nextTopology) !== this.topology
+    ) {
+      this.rebuild(nextWidth, nextHeight, nextTopology);
+    }
     this.board = board;
     this.currentPlayer = currentPlayer;
     this.phase = phase;
     this.lastMove = lastMove;
     this.analysisMove = analysisMove?.type === "play" ? analysisMove : null;
+    this.analysisCandidates = Array.isArray(analysisCandidates)
+      ? analysisCandidates.slice(0, 5)
+      : [];
+    this.analysisVariation = Array.isArray(analysisVariation)
+      ? analysisVariation.slice(0, 8)
+      : [];
     this.referencePoint =
       Number.isInteger(referencePoint?.row) &&
       Number.isInteger(referencePoint?.col) &&
       referencePoint.row >= 0 &&
-      referencePoint.row < this.size &&
+      referencePoint.row < this.height &&
       referencePoint.col >= 0 &&
-      referencePoint.col < this.size
+      referencePoint.col < this.width
         ? { row: referencePoint.row, col: referencePoint.col }
         : null;
     this.deadKeys = new Set(deadStones.map(({ row, col }) => `${row},${col}`));
+    this.territoryPoints = territoryPointsForPosition({
+      territoryRegions,
+      phase,
+      width: this.width,
+      height: this.height,
+      board,
+      deadStones,
+    });
     this.draw();
   }
 
@@ -170,7 +267,7 @@ export class FlatBoard {
   }
 
   horizontalPeriod() {
-    return this.isMobius ? this.size * 2 : this.size;
+    return this.isMobius ? this.width * 2 : this.width;
   }
 
   focusPoint(point) {
@@ -178,18 +275,19 @@ export class FlatBoard {
       !Number.isInteger(point?.row) ||
       !Number.isInteger(point?.col) ||
       point.row < 0 ||
-      point.row >= this.size ||
+      point.row >= this.height ||
       point.col < 0 ||
-      point.col >= this.size
+      point.col >= this.width
     ) {
       return;
     }
-    const centeredOffset = (this.size - 1) / 2;
-    let targetColumns = centeredOffset - point.col;
+    const centeredColumnOffset = (this.width - 1) / 2;
+    const centeredRowOffset = (this.height - 1) / 2;
+    let targetColumns = centeredColumnOffset - point.col;
     if (this.isMobius) {
       const candidates = [];
       for (let copy = -2; copy <= 3; copy += 1) {
-        candidates.push(targetColumns + copy * this.size);
+        candidates.push(targetColumns + copy * this.width);
       }
       targetColumns = candidates.reduce((nearest, candidate) =>
         Math.abs(candidate - this.offsetColumns) <
@@ -200,7 +298,7 @@ export class FlatBoard {
     }
     this.animateOffsetTo(
       targetColumns,
-      this.wrapRows ? centeredOffset - point.row : 0,
+      this.wrapRows ? centeredRowOffset - point.row : 0,
     );
   }
 
@@ -209,8 +307,8 @@ export class FlatBoard {
     const width = Math.max(1, this.container.clientWidth);
     const height = Math.max(1, this.container.clientHeight);
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.width = width;
-    this.height = height;
+    this.viewportWidth = width;
+    this.viewportHeight = height;
     this.dpr = dpr;
     this.canvas.width = Math.round(width * dpr);
     this.canvas.height = Math.round(height * dpr);
@@ -218,31 +316,68 @@ export class FlatBoard {
     this.canvas.style.height = `${height}px`;
     this.context.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const sidePadding = width < 560 ? 36 : 72;
-    const verticalPadding = height < 620 ? 54 : 72;
-    this.cell = Math.max(
-      8,
-      Math.min(
-        (width - sidePadding * 2) / this.size,
-        (height - verticalPadding * 2) / this.size,
-      ),
-    );
-    this.boardPixels = this.cell * this.size;
-    this.frameX = (width - this.boardPixels) / 2;
-    this.frameY = (height - this.boardPixels) / 2;
+    this.layout = flatBoardLayout({
+      viewportWidth: width,
+      viewportHeight: height,
+      width: this.width,
+      height: this.height,
+      insets: this.measureOverlayInsets(height),
+      topSeamCaption: this.wrapRows,
+      bottomSeamCaption: this.wrapRows,
+      measureText: (text, fontSize) => {
+        this.context.font = `500 ${fontSize}px Inter, sans-serif`;
+        return this.context.measureText(text).width;
+      },
+    });
+    this.cell = this.layout.cell;
+    this.boardPixelsWidth = this.layout.boardWidth;
+    this.boardPixelsHeight = this.layout.boardHeight;
+    this.frameX = this.layout.frameX;
+    this.frameY = this.layout.frameY;
     this.draw();
+  }
+
+  /**
+   * Height of the floating stage controls (view switch, toolbar, gesture
+   * hint) over the top and bottom of this view, so labels can avoid them.
+   */
+  measureOverlayInsets(viewportHeight) {
+    const stage = this.container.parentElement;
+    if (!stage?.querySelectorAll) return { top: 0, bottom: 0 };
+    const origin = this.container.getBoundingClientRect();
+    let top = 0;
+    let bottom = 0;
+    for (const element of stage.querySelectorAll(BOARD_OVERLAY_SELECTOR)) {
+      // Re-observing an element re-fires the observer, so only do it once.
+      if (this.resizeObserver && !this.observedOverlays.has(element)) {
+        this.observedOverlays.add(element);
+        this.resizeObserver.observe(element);
+      }
+      if (element.closest("[hidden]")) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) continue;
+      const relativeTop = rect.top - origin.top;
+      const relativeBottom = rect.bottom - origin.top;
+      if (relativeBottom <= 0 || relativeTop >= viewportHeight) continue;
+      if (relativeTop + relativeBottom < viewportHeight) {
+        top = Math.max(top, relativeBottom);
+      } else {
+        bottom = Math.max(bottom, viewportHeight - relativeTop);
+      }
+    }
+    return { top, bottom };
   }
 
   pointX(col) {
     return (
       this.frameX +
-      mod(col + this.offsetColumns + 0.5, this.size) * this.cell
+      mod(col + this.offsetColumns + 0.5, this.width) * this.cell
     );
   }
 
   pointY(row) {
     const visualRow = this.wrapRows
-      ? mod(row + this.offsetRows + 0.5, this.size)
+      ? mod(row + this.offsetRows + 0.5, this.height)
       : row + 0.5;
     return this.frameY + visualRow * this.cell;
   }
@@ -259,13 +394,14 @@ export class FlatBoard {
     }
 
     const baseColumn = col + this.offsetColumns;
-    const firstCopy = Math.floor((-0.5 - baseColumn) / this.size) - 1;
+    const firstCopy = Math.floor((-0.5 - baseColumn) / this.width) - 1;
     for (let copyIndex = firstCopy; copyIndex <= firstCopy + 4; copyIndex += 1) {
       const image = mobiusPointInCopy(
         row,
         col,
         copyIndex,
-        this.size,
+        this.width,
+        this.height,
       );
       const x =
         this.frameX +
@@ -273,7 +409,7 @@ export class FlatBoard {
       const y = this.frameY + (image.row + 0.5) * this.cell;
       if (
         x + radius >= this.frameX &&
-        x - radius <= this.frameX + this.boardPixels
+        x - radius <= this.frameX + this.boardPixelsWidth
       ) {
         callback(x, y, copyIndex);
       }
@@ -286,9 +422,9 @@ export class FlatBoard {
     const y = clientY - rect.top;
     if (
       x < this.frameX ||
-      x > this.frameX + this.boardPixels ||
+      x > this.frameX + this.boardPixelsWidth ||
       y < this.frameY ||
-      y > this.frameY + this.boardPixels
+      y > this.frameY + this.boardPixelsHeight
     ) {
       return null;
     }
@@ -298,11 +434,12 @@ export class FlatBoard {
     if (this.isMobius) {
       const coverColumn = Math.round(visualColumn - this.offsetColumns);
       const roundedVisualRow = Math.round(visualRow);
-      if (roundedVisualRow < 0 || roundedVisualRow >= this.size) return null;
+      if (roundedVisualRow < 0 || roundedVisualRow >= this.height) return null;
       const point = mobiusPointFromCover(
         roundedVisualRow,
         coverColumn,
-        this.size,
+        this.width,
+        this.height,
       );
       const nearestX =
         this.frameX +
@@ -318,22 +455,22 @@ export class FlatBoard {
       return { row: point.row, col: point.col };
     }
     const logicalColumn = Math.round(visualColumn - this.offsetColumns);
-    const col = mod(logicalColumn, this.size);
+    const col = mod(logicalColumn, this.width);
     const logicalRow = Math.round(
       visualRow - (this.wrapRows ? this.offsetRows : 0),
     );
-    const row = this.wrapRows ? mod(logicalRow, this.size) : logicalRow;
-    if (!this.wrapRows && (row < 0 || row >= this.size)) return null;
+    const row = this.wrapRows ? mod(logicalRow, this.height) : logicalRow;
+    if (!this.wrapRows && (row < 0 || row >= this.height)) return null;
 
     const nearestX = this.pointX(col);
     const directDistance = Math.abs(x - nearestX);
     const xDistance = Math.min(
       directDistance,
-      this.boardPixels - directDistance,
+      this.boardPixelsWidth - directDistance,
     );
     const directYDistance = Math.abs(y - this.pointY(row));
     const yDistance = this.wrapRows
-      ? Math.min(directYDistance, this.boardPixels - directYDistance)
+      ? Math.min(directYDistance, this.boardPixelsHeight - directYDistance)
       : directYDistance;
     if (xDistance > this.cell * 0.48 || yDistance > this.cell * 0.48) {
       return null;
@@ -342,14 +479,20 @@ export class FlatBoard {
   }
 
   pointerDown(event) {
-    if (
-      !this.active ||
-      event.isPrimary === false ||
-      this.pointerState ||
-      (event.pointerType === "mouse" && event.button !== 0)
-    ) {
+    const guardedPointer = invalidatePendingTapOnAdditionalPointer(
+      this.pointerState,
+      event,
+    );
+    if (guardedPointer !== this.pointerState) {
+      this.pointerState = guardedPointer;
+      this.setHoveredPoint(null);
       return;
     }
+    const roles = pointerGestureRoles(event);
+    if (!this.active || !roles || this.pointerState) {
+      return;
+    }
+    if (event.pointerType === "mouse" && roles.canDrag) event.preventDefault();
     this.cancelSnap();
     this.pointerState = {
       id: event.pointerId,
@@ -357,6 +500,8 @@ export class FlatBoard {
       startY: event.clientY,
       startColumnOffset: this.offsetColumns,
       startRowOffset: this.offsetRows,
+      canDrag: roles.canDrag,
+      canPlace: roles.canPlace,
       moved: false,
       cancelClick: false,
     };
@@ -372,12 +517,12 @@ export class FlatBoard {
       if (Math.hypot(deltaX, deltaY) > DRAG_THRESHOLD) {
         pointer.cancelClick = true;
       }
-      if (
+      if (pointer.canDrag && (
         (this.wrapRows && Math.hypot(deltaX, deltaY) > DRAG_THRESHOLD) ||
         (!this.wrapRows &&
           Math.abs(deltaX) > DRAG_THRESHOLD &&
           Math.abs(deltaX) > Math.abs(deltaY))
-      ) {
+      )) {
         pointer.moved = true;
       }
       if (pointer.moved) {
@@ -389,7 +534,7 @@ export class FlatBoard {
         if (this.wrapRows) {
           this.offsetRows = mod(
             pointer.startRowOffset + deltaY / this.cell,
-            this.size,
+            this.height,
           );
         }
         this.setHoveredPoint(null);
@@ -409,7 +554,9 @@ export class FlatBoard {
     const crossedThreshold = Math.hypot(deltaX, deltaY) > DRAG_THRESHOLD;
     const horizontalDrag =
       Math.abs(deltaX) > DRAG_THRESHOLD && Math.abs(deltaX) > Math.abs(deltaY);
-    const moved = pointer.moved || (this.wrapRows ? crossedThreshold : horizontalDrag);
+    const moved = pointer.canDrag && (
+      pointer.moved || (this.wrapRows ? crossedThreshold : horizontalDrag)
+    );
     this.pointerState = null;
     this.container.classList.remove("dragging");
     if (this.canvas.hasPointerCapture?.(event.pointerId)) {
@@ -425,7 +572,7 @@ export class FlatBoard {
         if (this.wrapRows) {
           this.offsetRows = mod(
             pointer.startRowOffset + deltaY / this.cell,
-            this.size,
+            this.height,
           );
         }
         this.draw();
@@ -434,7 +581,7 @@ export class FlatBoard {
       this.snapToGrid();
       return;
     }
-    if (pointer.cancelClick || crossedThreshold) return;
+    if (!pointer.canPlace || pointer.cancelClick || crossedThreshold) return;
     const point = this.hitPoint(event.clientX, event.clientY);
     if (point && this.onPoint) this.onPoint(point);
   }
@@ -481,8 +628,8 @@ export class FlatBoard {
     while (adjustedColumns - startColumns < -horizontalPeriod / 2) {
       adjustedColumns += horizontalPeriod;
     }
-    while (adjustedRows - startRows > this.size / 2) adjustedRows -= this.size;
-    while (adjustedRows - startRows < -this.size / 2) adjustedRows += this.size;
+    while (adjustedRows - startRows > this.height / 2) adjustedRows -= this.height;
+    while (adjustedRows - startRows < -this.height / 2) adjustedRows += this.height;
     const startedAt = performance.now();
     const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches
       ? 0
@@ -502,7 +649,7 @@ export class FlatBoard {
         this.snapFrame = requestAnimationFrame(step);
       } else {
         this.offsetColumns = mod(adjustedColumns, horizontalPeriod);
-        this.offsetRows = this.wrapRows ? mod(adjustedRows, this.size) : 0;
+        this.offsetRows = this.wrapRows ? mod(adjustedRows, this.height) : 0;
         this.snapFrame = null;
         this.draw();
         this.notifyPan();
@@ -518,16 +665,17 @@ export class FlatBoard {
 
   notifyPan() {
     if (!this.onPan) return;
-    const startCol = mod(-Math.round(this.offsetColumns), this.size);
+    const startCol = mod(-Math.round(this.offsetColumns), this.width);
     const startRow = this.wrapRows
-      ? mod(-Math.round(this.offsetRows), this.size)
+      ? mod(-Math.round(this.offsetRows), this.height)
       : 0;
     const flipped = this.isMobius &&
       mod(
         mobiusPointFromCover(
           0,
           -Math.round(this.offsetColumns),
-          this.size,
+          this.width,
+          this.height,
         ).copyIndex,
         2,
       ) === 1;
@@ -543,14 +691,18 @@ export class FlatBoard {
   draw() {
     if (!this.active || !this.context || !this.cell) return;
     const context = this.context;
-    context.clearRect(0, 0, this.width, this.height);
+    context.clearRect(0, 0, this.viewportWidth, this.viewportHeight);
 
     this.drawBoardSurface(context);
+    this.drawMobiusFlipTint(context);
     this.drawGrid(context);
     this.drawStarPoints(context);
+    this.drawTerritory(context);
     this.drawStones(context);
     this.drawHover(context);
+    this.drawAnalysisCandidates(context);
     this.drawAnalysisMove(context);
+    this.drawAnalysisVariation(context);
     this.drawReferencePoint(context);
     this.drawSeam(context);
     this.drawColumnLabels(context);
@@ -564,26 +716,40 @@ export class FlatBoard {
     const gradient = context.createLinearGradient(
       this.frameX,
       this.frameY,
-      this.frameX + this.boardPixels,
-      this.frameY + this.boardPixels,
+      this.frameX + this.boardPixelsWidth,
+      this.frameY + this.boardPixelsHeight,
     );
     gradient.addColorStop(0, "#d19a56");
     gradient.addColorStop(0.5, "#b97c3b");
     gradient.addColorStop(1, "#9a5f2e");
     context.fillStyle = gradient;
-    context.fillRect(this.frameX, this.frameY, this.boardPixels, this.boardPixels);
+    context.fillRect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
     context.restore();
 
     context.save();
     context.beginPath();
-    context.rect(this.frameX, this.frameY, this.boardPixels, this.boardPixels);
+    context.rect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
     context.clip();
     context.globalAlpha = 0.1;
     context.lineWidth = 1;
-    for (let grain = -this.boardPixels; grain < this.boardPixels * 2; grain += 17) {
+    for (
+      let grain = -this.boardPixelsWidth;
+      grain < this.boardPixelsWidth * 2;
+      grain += 17
+    ) {
       context.beginPath();
       context.moveTo(this.frameX + grain, this.frameY);
-      for (let y = this.frameY; y <= this.frameY + this.boardPixels; y += 18) {
+      for (let y = this.frameY; y <= this.frameY + this.boardPixelsHeight; y += 18) {
         const wave = Math.sin((y + grain) * 0.035) * 5;
         context.lineTo(this.frameX + grain + wave + (y - this.frameY) * 0.2, y);
       }
@@ -596,28 +762,33 @@ export class FlatBoard {
   drawGrid(context) {
     context.save();
     context.beginPath();
-    context.rect(this.frameX, this.frameY, this.boardPixels, this.boardPixels);
+    context.rect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
     context.clip();
     context.strokeStyle = "rgba(39, 25, 17, 0.88)";
     context.lineWidth = clamp(this.cell * 0.035, 0.8, 1.45);
 
-    for (let row = 0; row < this.size; row += 1) {
+    for (let row = 0; row < this.height; row += 1) {
       const y = this.pointY(row);
       context.beginPath();
       context.moveTo(this.frameX, y);
-      context.lineTo(this.frameX + this.boardPixels, y);
+      context.lineTo(this.frameX + this.boardPixelsWidth, y);
       context.stroke();
     }
 
-    for (let col = 0; col < this.size; col += 1) {
+    for (let col = 0; col < this.width; col += 1) {
       const x = this.pointX(col);
       context.beginPath();
       context.moveTo(x, this.wrapRows ? this.frameY : this.pointY(0));
       context.lineTo(
         x,
         this.wrapRows
-          ? this.frameY + this.boardPixels
-          : this.pointY(this.size - 1),
+          ? this.frameY + this.boardPixelsHeight
+          : this.pointY(this.height - 1),
       );
       context.stroke();
     }
@@ -625,15 +796,21 @@ export class FlatBoard {
   }
 
   drawStarPoints(context) {
-    const stars = starIndices(this.size);
+    const rowStars = starIndices(this.height);
+    const columnStars = starIndices(this.width);
     context.save();
     context.beginPath();
-    context.rect(this.frameX, this.frameY, this.boardPixels, this.boardPixels);
+    context.rect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
     context.clip();
     context.fillStyle = "#28190f";
     const radius = clamp(this.cell * 0.105, 1.7, 4.2);
-    for (const row of stars) {
-      for (const col of stars) {
+    for (const row of rowStars) {
+      for (const col of columnStars) {
         this.forEachLogicalPoint(
           row,
           col,
@@ -650,10 +827,14 @@ export class FlatBoard {
   }
 
   forEachWrappedX(x, radius, callback) {
-    for (const shiftedX of [x - this.boardPixels, x, x + this.boardPixels]) {
+    for (const shiftedX of [
+      x - this.boardPixelsWidth,
+      x,
+      x + this.boardPixelsWidth,
+    ]) {
       if (
         shiftedX + radius >= this.frameX &&
-        shiftedX - radius <= this.frameX + this.boardPixels
+        shiftedX - radius <= this.frameX + this.boardPixelsWidth
       ) {
         callback(shiftedX);
       }
@@ -662,12 +843,16 @@ export class FlatBoard {
 
   forEachWrappedPoint(x, y, radius, callback) {
     const yOffsets = this.wrapRows
-      ? [-this.boardPixels, 0, this.boardPixels]
+      ? [-this.boardPixelsHeight, 0, this.boardPixelsHeight]
       : [0];
-    for (const shiftedX of [x - this.boardPixels, x, x + this.boardPixels]) {
+    for (const shiftedX of [
+      x - this.boardPixelsWidth,
+      x,
+      x + this.boardPixelsWidth,
+    ]) {
       if (
         shiftedX + radius < this.frameX ||
-        shiftedX - radius > this.frameX + this.boardPixels
+        shiftedX - radius > this.frameX + this.boardPixelsWidth
       ) {
         continue;
       }
@@ -676,7 +861,7 @@ export class FlatBoard {
         if (
           !this.wrapRows ||
           (shiftedY + radius >= this.frameY &&
-            shiftedY - radius <= this.frameY + this.boardPixels)
+            shiftedY - radius <= this.frameY + this.boardPixelsHeight)
         ) {
           callback(shiftedX, shiftedY);
         }
@@ -684,16 +869,53 @@ export class FlatBoard {
     }
   }
 
+  drawTerritory(context) {
+    if (this.territoryPoints.length === 0) return;
+    const radius = clamp(this.cell * 0.19, 2.6, 7.2);
+    context.save();
+    context.beginPath();
+    context.rect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
+    context.clip();
+    context.lineJoin = "round";
+
+    for (const { row, col, owner } of this.territoryPoints) {
+      const style = TERRITORY_MARKER_STYLES[owner];
+      this.forEachLogicalPoint(row, col, radius * 1.4, (x, y) => {
+        context.save();
+        context.translate(x, y);
+        context.rotate(Math.PI / 4);
+        context.strokeStyle = style.stroke;
+        context.lineWidth = clamp(this.cell * 0.16, 2.2, 5);
+        context.strokeRect(-radius, -radius, radius * 2, radius * 2);
+        context.strokeStyle = style.fill;
+        context.lineWidth = clamp(this.cell * 0.075, 1.2, 2.6);
+        context.strokeRect(-radius, -radius, radius * 2, radius * 2);
+        context.restore();
+      });
+    }
+    context.restore();
+  }
+
   drawStones(context) {
     if (!this.board?.length) return;
     const radius = this.cell * 0.41;
     context.save();
     context.beginPath();
-    context.rect(this.frameX, this.frameY, this.boardPixels, this.boardPixels);
+    context.rect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
     context.clip();
 
-    for (let row = 0; row < this.size; row += 1) {
-      for (let col = 0; col < this.size; col += 1) {
+    for (let row = 0; row < this.height; row += 1) {
+      for (let col = 0; col < this.width; col += 1) {
         const color = this.board[row]?.[col];
         if (!color) continue;
         const dead = this.deadKeys.has(`${row},${col}`);
@@ -766,15 +988,16 @@ export class FlatBoard {
   }
 
   drawAnalysisMove(context) {
+    if (this.analysisCandidates.length > 0) return;
     const move = this.analysisMove;
     if (
       move?.type !== "play" ||
       !Number.isInteger(move.row) ||
       !Number.isInteger(move.col) ||
       move.row < 0 ||
-      move.row >= this.size ||
+      move.row >= this.height ||
       move.col < 0 ||
-      move.col >= this.size ||
+      move.col >= this.width ||
       this.board?.[move.row]?.[move.col]
     ) {
       return;
@@ -783,7 +1006,12 @@ export class FlatBoard {
     const radius = clamp(this.cell * 0.29, 5, 14);
     context.save();
     context.beginPath();
-    context.rect(this.frameX, this.frameY, this.boardPixels, this.boardPixels);
+    context.rect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
     context.clip();
     this.forEachLogicalPoint(
       move.row,
@@ -816,15 +1044,94 @@ export class FlatBoard {
     context.restore();
   }
 
+  drawAnalysisCandidates(context) {
+    if (this.analysisCandidates.length === 0) return;
+    const palette = ["#3de0c1", "#72a8ff", "#b996ff", "#f0b96c", "#ef7f83"];
+    const radius = clamp(this.cell * 0.32, 6, 15);
+    context.save();
+    context.beginPath();
+    context.rect(this.frameX, this.frameY, this.boardPixelsWidth, this.boardPixelsHeight);
+    context.clip();
+    this.analysisCandidates.forEach((candidate, index) => {
+      const move = candidate?.move ?? candidate;
+      if (
+        move?.type !== "play" ||
+        !Number.isInteger(move.row) ||
+        !Number.isInteger(move.col) ||
+        move.row < 0 || move.row >= this.height ||
+        move.col < 0 || move.col >= this.width ||
+        this.board?.[move.row]?.[move.col]
+      ) return;
+      const rank = Number.isSafeInteger(candidate?.rank) ? candidate.rank : index + 1;
+      const color = palette[Math.min(index, palette.length - 1)];
+      this.forEachLogicalPoint(move.row, move.col, radius, (x, y) => {
+        context.save();
+        context.shadowColor = color;
+        context.shadowBlur = candidate?.active ? radius * 0.9 : radius * 0.38;
+        context.globalAlpha = candidate?.active ? 0.98 : 0.82;
+        context.fillStyle = color;
+        context.beginPath();
+        context.arc(x, y, candidate?.active ? radius : radius * 0.88, 0, TAU);
+        context.fill();
+        context.shadowBlur = 0;
+        context.globalAlpha = 1;
+        context.fillStyle = "#07110f";
+        context.font = `700 ${Math.max(9, radius * 1.05)}px system-ui, sans-serif`;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(String(rank), x, y + 0.5);
+        context.restore();
+      });
+    });
+    context.restore();
+  }
+
+  drawAnalysisVariation(context) {
+    if (this.analysisVariation.length === 0) return;
+    const radius = clamp(this.cell * 0.25, 5, 12);
+    context.save();
+    context.beginPath();
+    context.rect(this.frameX, this.frameY, this.boardPixelsWidth, this.boardPixelsHeight);
+    context.clip();
+    this.analysisVariation.forEach((entry, index) => {
+      const move = entry?.move ?? entry;
+      if (
+        move?.type !== "play" ||
+        !Number.isInteger(move.row) ||
+        !Number.isInteger(move.col) ||
+        move.row < 0 || move.row >= this.height ||
+        move.col < 0 || move.col >= this.width
+      ) return;
+      const number = Number.isSafeInteger(entry?.number) ? entry.number : index + 1;
+      this.forEachLogicalPoint(move.row, move.col, radius, (x, y) => {
+        context.save();
+        context.fillStyle = entry?.color === "white" ? "rgba(248, 246, 237, 0.92)" : "rgba(12, 18, 16, 0.9)";
+        context.strokeStyle = "#f3cf78";
+        context.lineWidth = Math.max(1.5, radius * 0.16);
+        context.beginPath();
+        context.arc(x, y, radius, 0, TAU);
+        context.fill();
+        context.stroke();
+        context.fillStyle = entry?.color === "white" ? "#151a18" : "#f7f2de";
+        context.font = `700 ${Math.max(8, radius * 1.02)}px system-ui, sans-serif`;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(String(number), x, y + 0.5);
+        context.restore();
+      });
+    });
+    context.restore();
+  }
+
   drawReferencePoint(context) {
     const point = this.referencePoint;
     if (
       !Number.isInteger(point?.row) ||
       !Number.isInteger(point?.col) ||
       point.row < 0 ||
-      point.row >= this.size ||
+      point.row >= this.height ||
       point.col < 0 ||
-      point.col >= this.size
+      point.col >= this.width
     ) {
       return;
     }
@@ -832,7 +1139,12 @@ export class FlatBoard {
     const radius = clamp(this.cell * 0.34, 6, 17);
     context.save();
     context.beginPath();
-    context.rect(this.frameX, this.frameY, this.boardPixels, this.boardPixels);
+    context.rect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
     context.clip();
     this.forEachLogicalPoint(
       point.row,
@@ -884,7 +1196,12 @@ export class FlatBoard {
     const radius = this.cell * 0.4;
     context.save();
     context.beginPath();
-    context.rect(this.frameX, this.frameY, this.boardPixels, this.boardPixels);
+    context.rect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
     context.clip();
     context.globalAlpha = 0.48;
     this.forEachLogicalPoint(
@@ -915,24 +1232,23 @@ export class FlatBoard {
       return;
     }
     const left = this.frameX;
-    const right = this.frameX + this.boardPixels;
+    const right = this.frameX + this.boardPixelsWidth;
     const top = this.frameY;
-    const bottom = this.frameY + this.boardPixels;
-    const accent = "rgba(230, 185, 105, 0.95)";
+    const bottom = this.frameY + this.boardPixelsHeight;
 
     context.save();
     const leftGlow = context.createLinearGradient(left, 0, left + 18, 0);
     leftGlow.addColorStop(0, "rgba(230, 185, 105, 0.22)");
     leftGlow.addColorStop(1, "rgba(230, 185, 105, 0)");
     context.fillStyle = leftGlow;
-    context.fillRect(left, top, 18, this.boardPixels);
+    context.fillRect(left, top, 18, this.boardPixelsHeight);
     const rightGlow = context.createLinearGradient(right - 18, 0, right, 0);
     rightGlow.addColorStop(0, "rgba(230, 185, 105, 0)");
     rightGlow.addColorStop(1, "rgba(230, 185, 105, 0.22)");
     context.fillStyle = rightGlow;
-    context.fillRect(right - 18, top, 18, this.boardPixels);
+    context.fillRect(right - 18, top, 18, this.boardPixelsHeight);
 
-    context.strokeStyle = accent;
+    context.strokeStyle = SEAM_ACCENT;
     context.lineWidth = 2;
     context.setLineDash([6, 6]);
     for (const x of [left, right]) {
@@ -943,31 +1259,11 @@ export class FlatBoard {
     }
     context.setLineDash([]);
 
-    const labelSize = clamp(this.cell * 0.3, 10, 13);
-    context.font = `500 ${labelSize}px Inter, "Microsoft YaHei", sans-serif`;
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillStyle = "rgba(228, 233, 229, 0.82)";
-    if (this.width >= 560) {
-      context.fillText(
-        "← 左右首尾相接 · 拖动改变展开起点 →",
-        (left + right) / 2,
-        top - 30,
-      );
-    }
-
-    context.fillStyle = accent;
-    context.font = `500 ${clamp(labelSize * 0.9, 9, 11)}px Inter, "Microsoft YaHei", sans-serif`;
-    context.save();
-    context.translate(left - 20, (top + bottom) / 2);
-    context.rotate(-Math.PI / 2);
-    context.fillText("与右侧相接", 0, 0);
-    context.restore();
-    context.save();
-    context.translate(right + 20, (top + bottom) / 2);
-    context.rotate(Math.PI / 2);
-    context.fillText("与左侧相接", 0, 0);
-    context.restore();
+    this.drawTopCaption(
+      context,
+      "← 左右首尾相接 · 右键/触摸拖动改变展开起点 →",
+    );
+    this.drawSideCaptions(context, "与右侧相接", "与左侧相接");
 
     context.strokeStyle = "rgba(50, 30, 18, 0.82)";
     context.lineWidth = 1.5;
@@ -980,11 +1276,137 @@ export class FlatBoard {
     context.restore();
   }
 
+  /** Long explanatory caption above the column labels (wide screens only). */
+  drawTopCaption(context, text) {
+    if (!Number.isFinite(this.layout?.captionY)) return;
+    context.save();
+    context.font = `500 ${this.layout.fonts.caption}px Inter, "Microsoft YaHei", sans-serif`;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillStyle = "rgba(228, 233, 229, 0.84)";
+    context.fillText(
+      translateText(text),
+      this.frameX + this.boardPixelsWidth / 2,
+      this.layout.captionY,
+    );
+    context.restore();
+  }
+
+  /** Rotated seam captions outside the row labels on both sides. */
+  drawSideCaptions(context, leftText, rightText) {
+    const layout = this.layout;
+    if (!Number.isFinite(layout?.leftSideCaptionX)) return;
+    const middle = this.frameY + this.boardPixelsHeight / 2;
+    context.save();
+    context.fillStyle = SEAM_ACCENT;
+    context.font = `500 ${layout.fonts.seamCaption}px Inter, "Microsoft YaHei", sans-serif`;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.save();
+    context.translate(layout.leftSideCaptionX, middle);
+    context.rotate(-Math.PI / 2);
+    context.fillText(translateText(leftText), 0, 0);
+    context.restore();
+    context.save();
+    context.translate(layout.rightSideCaptionX, middle);
+    context.rotate(Math.PI / 2);
+    context.fillText(translateText(rightText), 0, 0);
+    context.restore();
+    context.restore();
+  }
+
+  /** Tint the parts of the window that show a vertically flipped copy. */
+  drawMobiusFlipTint(context) {
+    if (!this.isMobius) return;
+    context.save();
+    context.fillStyle = FLIP_TINT;
+    for (const band of mobiusWindowBands({
+      offsetColumns: this.offsetColumns,
+      width: this.width,
+    })) {
+      if (!band.flipped) continue;
+      context.fillRect(
+        this.frameX + band.start * this.cell,
+        this.frameY,
+        (band.end - band.start) * this.cell,
+        this.boardPixelsHeight,
+      );
+    }
+    context.restore();
+  }
+
+  /**
+   * Inside the window the cover is continuous, but row numbers reverse where
+   * one copy of the board meets the next. Mark that flip seam explicitly.
+   */
+  drawMobiusFlipSeams(context) {
+    const bands = mobiusWindowBands({
+      offsetColumns: this.offsetColumns,
+      width: this.width,
+    });
+    const top = this.frameY;
+    const bottom = this.frameY + this.boardPixelsHeight;
+    for (const band of bands.slice(1)) {
+      const x = this.frameX + band.start * this.cell;
+      context.save();
+      const glow = context.createLinearGradient(x - 10, 0, x + 10, 0);
+      glow.addColorStop(0, "rgba(140, 186, 255, 0)");
+      glow.addColorStop(0.5, "rgba(140, 186, 255, 0.3)");
+      glow.addColorStop(1, "rgba(140, 186, 255, 0)");
+      context.fillStyle = glow;
+      context.fillRect(x - 10, top, 20, this.boardPixelsHeight);
+      context.strokeStyle = FLIP_ACCENT;
+      context.lineWidth = 2;
+      context.setLineDash([10, 4, 2, 4]);
+      context.beginPath();
+      context.moveTo(x, top - 3);
+      context.lineTo(x, bottom + 3);
+      context.stroke();
+      context.setLineDash([]);
+      // Badges sit between two column labels, so only draw them when there
+      // is room; the line, tint and label colours carry the meaning anyway.
+      if (this.cell >= 22) {
+        for (const y of [this.layout.topLabelY, this.layout.bottomLabelY]) {
+          this.drawFlipBadge(context, x, y, Math.min(8, this.cell * 0.3));
+        }
+      }
+      context.restore();
+    }
+  }
+
+  drawFlipBadge(context, x, y, radius) {
+    context.save();
+    context.fillStyle = "rgba(14, 24, 38, 0.92)";
+    context.strokeStyle = FLIP_ACCENT;
+    context.lineWidth = 1.2;
+    context.beginPath();
+    context.arc(x, y, radius, 0, TAU);
+    context.fill();
+    context.stroke();
+    // Two opposing arrows: rows run the other way across this seam.
+    const arm = radius * 0.55;
+    const head = radius * 0.32;
+    context.lineWidth = 1.3;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.beginPath();
+    for (const [dx, direction] of [[-radius * 0.3, -1], [radius * 0.3, 1]]) {
+      const tipY = y + direction * arm;
+      context.moveTo(x + dx, y - direction * arm);
+      context.lineTo(x + dx, tipY);
+      context.moveTo(x + dx - head, tipY - direction * head);
+      context.lineTo(x + dx, tipY);
+      context.lineTo(x + dx + head, tipY - direction * head);
+    }
+    context.stroke();
+    context.restore();
+  }
+
   drawMobiusSeam(context) {
     const left = this.frameX;
-    const right = this.frameX + this.boardPixels;
+    const right = this.frameX + this.boardPixelsWidth;
     const top = this.frameY;
-    const bottom = this.frameY + this.boardPixels;
+    const bottom = this.frameY + this.boardPixelsHeight;
     const accent = "rgba(230, 185, 105, 0.98)";
 
     context.save();
@@ -992,12 +1414,12 @@ export class FlatBoard {
     leftGlow.addColorStop(0, "rgba(230, 185, 105, 0.28)");
     leftGlow.addColorStop(1, "rgba(230, 185, 105, 0)");
     context.fillStyle = leftGlow;
-    context.fillRect(left, top, 20, this.boardPixels);
+    context.fillRect(left, top, 20, this.boardPixelsHeight);
     const rightGlow = context.createLinearGradient(right - 20, 0, right, 0);
     rightGlow.addColorStop(0, "rgba(230, 185, 105, 0)");
     rightGlow.addColorStop(1, "rgba(230, 185, 105, 0.28)");
     context.fillStyle = rightGlow;
-    context.fillRect(right - 20, top, 20, this.boardPixels);
+    context.fillRect(right - 20, top, 20, this.boardPixelsHeight);
 
     context.strokeStyle = accent;
     context.lineWidth = 2;
@@ -1033,41 +1455,18 @@ export class FlatBoard {
     context.moveTo(left, bottom);
     context.lineTo(right, bottom);
     context.stroke();
+    context.restore();
 
-    const labelSize = clamp(this.cell * 0.3, 10, 13);
-    context.font = `500 ${labelSize}px Inter, "Microsoft YaHei", sans-serif`;
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillStyle = "rgba(228, 233, 229, 0.86)";
-    if (this.width >= 560) {
-      context.fillText(
-        "↕ 左右反向相接 · 横向一圈后上下翻转",
-        (left + right) / 2,
-        top - 30,
-      );
-    }
-
-    context.fillStyle = accent;
-    context.font = `500 ${clamp(labelSize * 0.9, 9, 11)}px Inter, "Microsoft YaHei", sans-serif`;
-    context.save();
-    context.translate(left - 20, (top + bottom) / 2);
-    context.rotate(-Math.PI / 2);
-    context.fillText("与右侧倒序相接", 0, 0);
-    context.restore();
-    context.save();
-    context.translate(right + 20, (top + bottom) / 2);
-    context.rotate(Math.PI / 2);
-    context.fillText("与左侧倒序相接", 0, 0);
-    context.restore();
-    context.restore();
+    this.drawMobiusFlipSeams(context);
+    this.drawTopCaption(context, "↕ 左右反向相接 · 横向一圈后上下翻转");
+    this.drawSideCaptions(context, "与右侧倒序相接", "与左侧倒序相接");
   }
 
   drawTorusSeam(context) {
     const left = this.frameX;
-    const right = this.frameX + this.boardPixels;
+    const right = this.frameX + this.boardPixelsWidth;
     const top = this.frameY;
-    const bottom = this.frameY + this.boardPixels;
-    const accent = "rgba(230, 185, 105, 0.95)";
+    const bottom = this.frameY + this.boardPixelsHeight;
 
     context.save();
     const horizontalGlow = 18;
@@ -1076,117 +1475,121 @@ export class FlatBoard {
     leftGlow.addColorStop(0, "rgba(230, 185, 105, 0.24)");
     leftGlow.addColorStop(1, "rgba(230, 185, 105, 0)");
     context.fillStyle = leftGlow;
-    context.fillRect(left, top, horizontalGlow, this.boardPixels);
+    context.fillRect(left, top, horizontalGlow, this.boardPixelsHeight);
 
     const rightGlow = context.createLinearGradient(right - horizontalGlow, 0, right, 0);
     rightGlow.addColorStop(0, "rgba(230, 185, 105, 0)");
     rightGlow.addColorStop(1, "rgba(230, 185, 105, 0.24)");
     context.fillStyle = rightGlow;
-    context.fillRect(right - horizontalGlow, top, horizontalGlow, this.boardPixels);
+    context.fillRect(
+      right - horizontalGlow,
+      top,
+      horizontalGlow,
+      this.boardPixelsHeight,
+    );
 
     const topGlow = context.createLinearGradient(0, top, 0, top + verticalGlow);
     topGlow.addColorStop(0, "rgba(230, 185, 105, 0.24)");
     topGlow.addColorStop(1, "rgba(230, 185, 105, 0)");
     context.fillStyle = topGlow;
-    context.fillRect(left, top, this.boardPixels, verticalGlow);
+    context.fillRect(left, top, this.boardPixelsWidth, verticalGlow);
 
     const bottomGlow = context.createLinearGradient(0, bottom - verticalGlow, 0, bottom);
     bottomGlow.addColorStop(0, "rgba(230, 185, 105, 0)");
     bottomGlow.addColorStop(1, "rgba(230, 185, 105, 0.24)");
     context.fillStyle = bottomGlow;
-    context.fillRect(left, bottom - verticalGlow, this.boardPixels, verticalGlow);
+    context.fillRect(
+      left,
+      bottom - verticalGlow,
+      this.boardPixelsWidth,
+      verticalGlow,
+    );
 
-    context.strokeStyle = accent;
+    context.strokeStyle = SEAM_ACCENT;
     context.lineWidth = 2;
     context.setLineDash([6, 6]);
-    context.strokeRect(left, top, this.boardPixels, this.boardPixels);
+    context.strokeRect(left, top, this.boardPixelsWidth, this.boardPixelsHeight);
     context.setLineDash([]);
 
-    const labelSize = clamp(this.cell * 0.3, 10, 13);
-    context.font = `500 ${labelSize}px Inter, "Microsoft YaHei", sans-serif`;
+    this.drawTopCaption(
+      context,
+      "↔ 左右相接 · ↕ 上下相接 · 右键/触摸任意方向拖动",
+    );
+    this.drawSideCaptions(context, "与右侧相接", "与左侧相接");
+
+    // Top and bottom seam captions sit outside the column labels so they
+    // never cover stones on the first or last row.
+    context.fillStyle = SEAM_ACCENT;
+    context.font = `500 ${this.layout.fonts.seamCaption}px Inter, "Microsoft YaHei", sans-serif`;
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.fillStyle = "rgba(228, 233, 229, 0.84)";
-    if (this.width >= 560) {
-      context.fillText(
-        "↔ 左右相接 · ↕ 上下相接 · 任意方向拖动",
-        (left + right) / 2,
-        top - 30,
-      );
-    }
-
-    context.fillStyle = accent;
-    context.font = `500 ${clamp(labelSize * 0.9, 9, 11)}px Inter, "Microsoft YaHei", sans-serif`;
-    context.save();
-    context.translate(left - 20, (top + bottom) / 2);
-    context.rotate(-Math.PI / 2);
-    context.fillText("与右侧相接", 0, 0);
-    context.restore();
-    context.save();
-    context.translate(right + 20, (top + bottom) / 2);
-    context.rotate(Math.PI / 2);
-    context.fillText("与左侧相接", 0, 0);
-    context.restore();
-    context.fillText("与下侧相接", (left + right) / 2, top + 12);
-    context.fillText("与上侧相接", (left + right) / 2, bottom - 12);
+    context.fillText(
+      translateText("与下侧相接"),
+      (left + right) / 2,
+      this.layout.topSeamCaptionY,
+    );
+    context.fillText(
+      translateText("与上侧相接"),
+      (left + right) / 2,
+      this.layout.bottomSeamCaptionY,
+    );
     context.restore();
   }
 
   drawColumnLabels(context) {
     if (this.cell < 10) return;
-    const labelSize = clamp(this.cell * 0.24, 8, 11);
     context.save();
-    context.font = `500 ${labelSize}px Inter, sans-serif`;
+    context.font = `500 ${this.layout.fonts.label}px Inter, sans-serif`;
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.fillStyle = "rgba(235, 240, 237, 0.54)";
-    for (let col = 0; col < this.size; col += 1) {
+    context.fillStyle = LABEL_COLOR;
+    for (let col = 0; col < this.width; col += 1) {
       const x = this.pointX(col);
-      const label = COORDINATE_LETTERS[col] || String(col + 1);
-      context.fillText(label, x, this.frameY - 10);
-      context.fillText(label, x, this.frameY + this.boardPixels + 11);
+      const label = formatGoColumn(col) || String(col + 1);
+      context.fillText(label, x, this.layout.topLabelY);
+      context.fillText(label, x, this.layout.bottomLabelY);
     }
-    if (this.wrapRows) {
-      for (let row = 0; row < this.size; row += 1) {
-        const y = this.pointY(row);
-        const label = String(this.size - row);
-        context.textAlign = "right";
-        context.fillText(label, this.frameX - 9, y);
-        context.textAlign = "left";
-        context.fillText(label, this.frameX + this.boardPixels + 9, y);
-      }
-    } else if (this.isMobius) {
-      const leftCoverColumn = Math.round(-this.offsetColumns);
-      const rightCoverColumn = Math.round(
-        this.size - 1 - this.offsetColumns,
-      );
-      for (let visualRow = 0; visualRow < this.size; visualRow += 1) {
-        const y = this.frameY + (visualRow + 0.5) * this.cell;
-        const leftPoint = mobiusPointFromCover(
-          visualRow,
-          leftCoverColumn,
-          this.size,
-        );
-        const rightPoint = mobiusPointFromCover(
-          visualRow,
-          rightCoverColumn,
-          this.size,
-        );
-        context.textAlign = "right";
-        context.fillText(
-          String(this.size - leftPoint.row),
-          this.frameX - 9,
-          y,
-        );
-        context.textAlign = "left";
-        context.fillText(
-          String(this.size - rightPoint.row),
-          this.frameX + this.boardPixels + 9,
-          y,
-        );
-      }
-    }
+    this.drawRowLabels(context);
     context.restore();
+  }
+
+  drawRowLabels(context) {
+    const leftX = this.layout.leftRowLabelX;
+    const rightX = this.layout.rightRowLabelX;
+    const drawPair = (y, leftLabel, rightLabel, leftColor, rightColor) => {
+      context.textAlign = "right";
+      context.fillStyle = leftColor;
+      context.fillText(leftLabel, leftX, y);
+      context.textAlign = "left";
+      context.fillStyle = rightColor;
+      context.fillText(rightLabel, rightX, y);
+    };
+
+    if (this.isMobius) {
+      // Each side is labelled for the copy of the board at that edge; a
+      // flipped copy is shown in the flip colour to match its tint and seam.
+      const copies = mobiusWindowCopies({
+        offsetColumns: this.offsetColumns,
+        width: this.width,
+      });
+      const leftLabels = mobiusRowLabelsForCopy(copies.leftCopy, this.height);
+      const rightLabels = mobiusRowLabelsForCopy(copies.rightCopy, this.height);
+      for (let visualRow = 0; visualRow < this.height; visualRow += 1) {
+        drawPair(
+          this.frameY + (visualRow + 0.5) * this.cell,
+          leftLabels[visualRow],
+          rightLabels[visualRow],
+          copies.leftFlipped ? FLIP_LABEL_COLOR : LABEL_COLOR,
+          copies.rightFlipped ? FLIP_LABEL_COLOR : LABEL_COLOR,
+        );
+      }
+      return;
+    }
+
+    for (let row = 0; row < this.height; row += 1) {
+      const label = flatRowLabel(row, this.height);
+      drawPair(this.pointY(row), label, label, LABEL_COLOR, LABEL_COLOR);
+    }
   }
 
   destroy() {
@@ -1199,6 +1602,7 @@ export class FlatBoard {
     this.canvas.removeEventListener("pointerup", this.handlePointerUp);
     this.canvas.removeEventListener("pointercancel", this.handlePointerCancel);
     this.canvas.removeEventListener("pointerleave", this.handlePointerLeave);
+    this.canvas.removeEventListener("contextmenu", this.handleContextMenu);
     this.canvas.remove();
   }
 }

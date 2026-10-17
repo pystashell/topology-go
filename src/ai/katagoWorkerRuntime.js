@@ -1,3 +1,5 @@
+import { boundSearchStats } from "./searchStats.js";
+
 function abortError() {
   const error = new Error("AI search was cancelled");
   error.name = "AbortError";
@@ -68,13 +70,14 @@ export function attachKataGoWorkerRuntime(
       });
       throwIfAborted(controller.signal);
       if (jobs.get(message.id) !== controller) return;
+      const boundedStats = boundSearchStats(result.stats);
 
       scope.postMessage({
         type: "result",
         id: message.id,
         move: result.move,
         stats: {
-          ...result.stats,
+          ...boundedStats,
           engine: "katago-hybrid",
           modelId: neural.modelId,
           modelName: neural.modelName,

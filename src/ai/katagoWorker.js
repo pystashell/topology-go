@@ -10,6 +10,7 @@ import {
 } from "./mcts.js";
 import { attachKataGoWorkerRuntime } from "./katagoWorkerRuntime.js";
 import { getAIModel } from "./modelCatalog.js";
+import { loadModelPart, openModelCache, purgeModel } from "./modelCache.js";
 import {
   buildCylinderFeatures,
   policyPriorsFromLogits,
@@ -49,13 +50,22 @@ async function initializeBackend(model) {
   return tf.getBackend();
 }
 
-async function downloadModel(model, postStatus) {
+function invalidModelData(message) {
+  const error = new Error(message);
+  error.invalidModelData = true;
+  return error;
+}
+
+async function downloadModel(model, postStatus, cache, source = {}) {
+  // Model parts come from Cache Storage when present (see modelCache.js),
+  // otherwise from the network, which also refills the cache.
+  const loadPart = async (part, label) => {
+    const { bytes, cached } = await loadModelPart(model, part, { cache, label });
+    if (cached) source.fromCache = true;
+    return bytes;
+  };
   if (model.parts.length === 1) {
-    const response = await fetch(model.parts[0], { cache: "force-cache" });
-    if (!response.ok) {
-      throw new Error(`KataGo model download failed (${response.status})`);
-    }
-    const downloaded = new Uint8Array(await response.arrayBuffer());
+    const downloaded = await loadPart(model.parts[0], "KataGo model");
     postStatus("loading_model", {
       modelId: model.id,
       loadedBytes: downloaded.byteLength,
@@ -69,15 +79,12 @@ async function downloadModel(model, postStatus) {
   const downloaded = new Uint8Array(model.compressedBytes);
   let offset = 0;
   for (let index = 0; index < model.parts.length; index += 1) {
-    const response = await fetch(model.parts[index], { cache: "force-cache" });
-    if (!response.ok) {
-      throw new Error(
-        `KataGo ${model.shortLabel} model part ${index + 1} download failed (${response.status})`,
-      );
-    }
-    const chunk = new Uint8Array(await response.arrayBuffer());
+    const chunk = await loadPart(
+      model.parts[index],
+      `KataGo ${model.shortLabel} model part ${index + 1}`,
+    );
     if (offset + chunk.byteLength > downloaded.byteLength) {
-      throw new Error(`KataGo ${model.shortLabel} model parts exceed the expected size`);
+      throw invalidModelData(`KataGo ${model.shortLabel} model parts exceed the expected size`);
     }
     downloaded.set(chunk, offset);
     offset += chunk.byteLength;
@@ -90,11 +97,40 @@ async function downloadModel(model, postStatus) {
     });
   }
   if (offset !== downloaded.byteLength) {
-    throw new Error(
+    throw invalidModelData(
       `KataGo ${model.shortLabel} model is incomplete (${offset}/${downloaded.byteLength} bytes)`,
     );
   }
   return downloaded;
+}
+
+function decodeModel(downloaded) {
+  // Some static servers treat the .gz suffix as HTTP Content-Encoding and
+  // transparently decompress the response before fetch exposes it. Other
+  // hosts return the gzip bytes unchanged. Accept both behaviours.
+  const isGzip = downloaded[0] === 0x1f && downloaded[1] === 0x8b;
+  try {
+    const raw = isGzip ? pako.ungzip(downloaded) : downloaded;
+    return parseKataGoModelV8(raw);
+  } catch (error) {
+    throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+      invalidModelData: true,
+    });
+  }
+}
+
+async function loadModelData(modelSpec, postStatus) {
+  const cache = await openModelCache();
+  const source = { fromCache: false };
+  try {
+    return decodeModel(await downloadModel(modelSpec, postStatus, cache, source));
+  } catch (error) {
+    // A corrupt or truncated cached copy must not wedge every later load:
+    // drop it and fetch the model once more from the network.
+    if (!error?.invalidModelData || !source.fromCache) throw error;
+    await purgeModel(cache, modelSpec);
+    return decodeModel(await downloadModel(modelSpec, postStatus, cache));
+  }
 }
 
 async function loadModel(scope, id, modelId, postStatus) {
@@ -120,13 +156,7 @@ async function loadModel(scope, id, modelId, postStatus) {
       productionModeEnabled = true;
     }
 
-    const downloaded = await downloadModel(modelSpec, postStatus);
-    // Some static servers treat the .gz suffix as HTTP Content-Encoding and
-    // transparently decompress the response before fetch exposes it. Other
-    // hosts return the gzip bytes unchanged. Accept both behaviours.
-    const isGzip = downloaded[0] === 0x1f && downloaded[1] === 0x8b;
-    const raw = isGzip ? pako.ungzip(downloaded) : downloaded;
-    const parsed = parseKataGoModelV8(raw);
+    const parsed = await loadModelData(modelSpec, postStatus);
     const model = new KataGoModelV8Tf(parsed);
     return {
       model,
@@ -151,8 +181,8 @@ async function neuralPolicy({ scope, id, modelId, state, signal, postStatus }) {
   const startedAt = performance.now();
   const spatial = tf.tensor4d(features.spatial, [
     1,
-    features.size,
-    features.size,
+    features.height,
+    features.width,
     22,
   ]);
   const global = tf.tensor2d(features.global, [1, 19]);

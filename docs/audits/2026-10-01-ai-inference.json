@@ -1,0 +1,75 @@
+{
+  "testedAt": "2026-09-30T20:18:52.374Z",
+  "method": "Actual production Worker bundle and local model files in headless Chrome using WebGPU. 8 search iterations, 300ms search limit. Latency is a smoke observation, not a strength or performance benchmark.",
+  "results": [
+    {
+      "modelId": "b10",
+      "size": 9,
+      "moves": 12,
+      "topology": "cylinder",
+      "backend": "webgpu",
+      "modelName": "g170-b10c128-s1141046784-d204142634",
+      "inferenceMs": 1069.2000000029802,
+      "totalMs": 2099,
+      "legalMove": {
+        "type": "play",
+        "row": 3,
+        "col": 5
+      },
+      "stages": [
+        "loading_model",
+        "loading_model",
+        "neural_inference",
+        "searching"
+      ],
+      "pageErrors": []
+    },
+    {
+      "modelId": "b10",
+      "size": 19,
+      "moves": 140,
+      "topology": "torus",
+      "backend": "webgpu",
+      "modelName": "g170-b10c128-s1141046784-d204142634",
+      "inferenceMs": 1133.2999999970198,
+      "totalMs": 2486,
+      "legalMove": {
+        "type": "play",
+        "row": 5,
+        "col": 17
+      },
+      "stages": [
+        "loading_model",
+        "loading_model",
+        "neural_inference",
+        "searching"
+      ],
+      "pageErrors": []
+    },
+    {
+      "modelId": "b18",
+      "size": 9,
+      "moves": 12,
+      "topology": "mobius",
+      "backend": "webgpu",
+      "modelName": "kata1-b18c384nbt-s9996604416-d4316597426",
+      "inferenceMs": 1164.2000000029802,
+      "totalMs": 6261,
+      "legalMove": {
+        "type": "play",
+        "row": 3,
+        "col": 5
+      },
+      "stages": [
+        "loading_model",
+        "loading_model",
+        "loading_model",
+        "loading_model",
+        "loading_model",
+        "neural_inference",
+        "searching"
+      ],
+      "pageErrors": []
+    }
+  ]
+}

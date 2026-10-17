@@ -1,0 +1,16 @@
+{
+  "testedAt": "2026-09-30T20:20:48.704Z",
+  "engine": "Headless Chrome, 390x844 touch/mobile emulation; not physical iOS Safari",
+  "localStonePassScore": true,
+  "lobbyCreateRoom": true,
+  "gameLayout": {
+    "viewport": 390,
+    "width": 390,
+    "canvasCount": 2
+  },
+  "lobbyLayout": {
+    "viewport": 390,
+    "width": 390
+  },
+  "pageErrors": []
+}

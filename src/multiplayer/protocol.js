@@ -7,6 +7,15 @@ export const ROOM_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{6}$/;
 export const ROOM_ACTIONS = Object.freeze([
   "play",
   "pass",
+  "resign",
+  "attach_ai",
+  "detach_ai",
+  "ai_play",
+  "ai_pass",
+  "set_ai_autoplay_paused",
+  "direct_undo_ai_round",
+  "direct_undo_ai_move",
+  "direct_undo_local_round",
   "toggle_dead",
   "finish_scoring",
   "resume_play",
@@ -14,6 +23,11 @@ export const ROOM_ACTIONS = Object.freeze([
   "respond_undo",
   "cancel_undo",
   "chat",
+  "request_game",
+  "respond_game",
+  "cancel_game_request",
+  "claim_seat",
+  "release_seat",
   "new_game",
   "leave",
   "sync",
@@ -29,6 +43,25 @@ export function sanitizeRoomCode(value) {
     .toUpperCase()
     .replace(/[^A-HJ-NP-Z2-9]/g, "")
     .slice(0, 6);
+}
+
+// Bidi embeddings/overrides/isolates, zero-width and joiner characters,
+// line/paragraph separators and the BOM can disguise or reorder text shown to
+// other people. C0/C1 controls never belong in it either.
+const UNSAFE_NAME_CHARACTERS =
+  /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/gu;
+// Message text keeps tabs and line feeds (carriage returns are normalized to
+// line feeds first) and the zero-width (non-)joiners that emoji sequences and
+// some scripts need, but drops the other hidden characters.
+const UNSAFE_TEXT_CHARACTERS =
+  /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/gu;
+
+export function stripUnsafeNameCharacters(value) {
+  return value.replace(UNSAFE_NAME_CHARACTERS, "");
+}
+
+export function stripUnsafeTextCharacters(value) {
+  return value.replace(UNSAFE_TEXT_CHARACTERS, "");
 }
 
 export function isRecord(value) {

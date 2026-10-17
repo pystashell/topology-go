@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "bamboo-baduk",
+  "name": "topology-go",
   "main": "./worker/index.js",
   "compatibility_date": "2026-07-01",
   "workers_dev": true,
@@ -15,6 +15,10 @@
       {
         "name": "BADUK_ROOMS",
         "class_name": "BadukRoom"
+      },
+      {
+        "name": "BADUK_ROOM_INDEX",
+        "class_name": "BadukLobby"
       }
     ]
   },
@@ -22,6 +26,39 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["BadukRoom"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["BadukLobby"]
+    }
+  ],
+  // Per-IP budgets (Workers Rate Limiting; period must be 10 or 60 s). Room
+  // creation allocates a Durable Object and a lobby code, so it is the
+  // tightest: 10/min covers retries after rare code collisions. HTTP joins
+  // (30/min) include lobby clicks, spectating and credential retries;
+  // WebSocket upgrades (60/min) cover several tabs plus the client's capped
+  // exponential reconnect; lobby reads (120/min) are manual refreshes. The
+  // namespace IDs must be unique within the Cloudflare account.
+  "ratelimits": [
+    {
+      "name": "ROOM_CREATE_RATE_LIMITER",
+      "namespace_id": "71001",
+      "simple": { "limit": 10, "period": 60 }
+    },
+    {
+      "name": "ROOM_JOIN_RATE_LIMITER",
+      "namespace_id": "71002",
+      "simple": { "limit": 30, "period": 60 }
+    },
+    {
+      "name": "ROOM_SOCKET_RATE_LIMITER",
+      "namespace_id": "71003",
+      "simple": { "limit": 60, "period": 60 }
+    },
+    {
+      "name": "LOBBY_RATE_LIMITER",
+      "namespace_id": "71004",
+      "simple": { "limit": 120, "period": 60 }
     }
   ],
   "observability": {
