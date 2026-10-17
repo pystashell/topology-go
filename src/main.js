@@ -4171,6 +4171,19 @@ function updateRoomUI() {
   syncChatUI();
   syncMovePreviewAvailability();
   syncClockUI();
+  syncPlayDock();
+}
+
+/**
+ * On phones the board fills the first screen, which pushed the move status
+ * and Pass/Undo below the fold. While this viewer is playing, styles.css
+ * docks them to the bottom of the viewport (only at phone widths).
+ */
+function syncPlayDock() {
+  const docked = !isReplaying() && !isNextGameSetup() &&
+    !elements.playControls.hidden && !elements.passButton.hidden &&
+    !(hasOnlineSession() && !isOnlinePlayer());
+  elements.gameScreen.classList.toggle("play-docked", docked);
 }
 
 function rememberOfflineGame() {

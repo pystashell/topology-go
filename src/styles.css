@@ -2996,6 +2996,66 @@ select:disabled {
     min-height: 50px;
   }
 
+  /* Compact play bar: keep the move status and Pass/Undo/Resign on the
+     first screen during a game instead of ~250 px below the fold. */
+  .play-docked .control-panel {
+    padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+    /* A backdrop filter would make the panel the containing block of the
+       fixed bar below; the stacked phone layout does not need the blur. */
+    backdrop-filter: none;
+  }
+
+  .play-docked #message {
+    position: fixed;
+    z-index: 31;
+    left: 0;
+    right: 0;
+    bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+    min-height: 0;
+    margin: 0;
+    padding: 7px 14px;
+    border-top: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    background: rgba(17, 26, 23, 0.97);
+    backdrop-filter: blur(14px);
+    font-size: 11px;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+
+  .play-docked .score-strip {
+    margin-top: 14px;
+  }
+
+  .play-docked #message.error {
+    border-left-color: var(--danger);
+    background: rgba(48, 22, 19, 0.97);
+  }
+
+  .play-docked #play-controls {
+    position: fixed;
+    z-index: 31;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin: 0;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+    grid-template-columns: none;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+    gap: 8px;
+    background: rgba(12, 18, 16, 0.97);
+    backdrop-filter: blur(14px);
+  }
+
+  .play-docked #play-controls button {
+    min-height: 44px;
+    padding: 8px 6px;
+  }
+
   .replay-panel {
     padding: 12px;
   }
