@@ -414,17 +414,42 @@ function publicReplay(game, timeControl, resignationOutcome) {
   return replay;
 }
 
-function fingerprint(prefix, value) {
-  const bytes = new TextEncoder().encode(JSON.stringify(value));
-  let hash = 0xcbf29ce484222325n;
-  for (const byte of bytes) {
-    hash ^= BigInt(byte);
-    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+const textEncoder = new TextEncoder();
+
+function hexLimb(value) {
+  return value.toString(16).padStart(4, "0");
+}
+
+/**
+ * FNV-1a 64 over bytes, as a 16-digit lowercase hex string. The 64-bit state
+ * is kept in four 16-bit limbs so the per-byte loop uses small-integer math
+ * instead of allocating BigInts; the output is identical to the BigInt form.
+ */
+export function fnv1a64Hex(bytes) {
+  let h0 = 0x2325;
+  let h1 = 0x8422;
+  let h2 = 0x9ce4;
+  let h3 = 0xcbf2;
+  for (let index = 0; index < bytes.length; index += 1) {
+    h0 ^= bytes[index];
+    // hash * 0x100000001b3 mod 2^64 = hash * 0x1b3 + (hash << 40).
+    const t0 = h0 * 0x1b3;
+    const t1 = h1 * 0x1b3 + (t0 >>> 16);
+    const t2 = h2 * 0x1b3 + (h0 << 8) + (t1 >>> 16);
+    h3 = (h3 * 0x1b3 + (h1 << 8) + (t2 >>> 16)) & 0xffff;
+    h0 = t0 & 0xffff;
+    h1 = t1 & 0xffff;
+    h2 = t2 & 0xffff;
   }
+  return hexLimb(h3) + hexLimb(h2) + hexLimb(h1) + hexLimb(h0);
+}
+
+function fingerprint(prefix, value) {
+  const bytes = textEncoder.encode(JSON.stringify(value));
   return [
     prefix,
     "v1",
-    hash.toString(16).padStart(16, "0"),
+    fnv1a64Hex(bytes),
     bytes.length.toString(36),
   ].join("-");
 }
@@ -2670,8 +2695,11 @@ export class RoomEngine {
     return clone(receipt);
   }
 
-  advance(nowInput) {
+  advance(nowInput, { includeRoom = true } = {}) {
     const now = readNow(nowInput);
+    // Internal callers only need the flags; building a full snapshot hashes
+    // the whole position history, so they opt out of the returned room.
+    const room = () => (includeRoom ? this.snapshot(now) : null);
     if (this.state.expiredAt !== null) {
       return {
         changed: false,
@@ -2714,7 +2742,7 @@ export class RoomEngine {
         expired: false,
         timedOut: true,
         revision: this.state.revision,
-        room: this.snapshot(now),
+        room: room(),
         nextDueAt: this.nextDueAt(),
       };
     }
@@ -2730,7 +2758,7 @@ export class RoomEngine {
         ...(evictedSpectators > 0 ? { evictedSpectators } : {}),
         ...(evictedPlayers > 0 ? { evictedPlayers } : {}),
         revision: this.state.revision,
-        room: this.snapshot(now),
+        room: room(),
         nextDueAt: this.nextDueAt(),
       };
     }
@@ -2738,7 +2766,7 @@ export class RoomEngine {
       changed: false,
       expired: false,
       revision: this.state.revision,
-      room: this.snapshot(now),
+      room: room(),
       nextDueAt: this.nextDueAt(),
     };
   }
@@ -3463,7 +3491,7 @@ export class RoomEngine {
   }
 
   prepare(now) {
-    if (this.advance(now).expired) {
+    if (this.advance(now, { includeRoom: false }).expired) {
       throw new RoomEngineError(
         "没有找到这个房间，可能已经过期了。",
         404,

@@ -89,7 +89,7 @@ export class BadukRoom {
         }
       }
 
-      const advanced = this.engine.advance(now);
+      const advanced = this.engine.advance(now, { includeRoom: false });
       if (advanced.expired) {
         await this.retireRoom();
         return;
@@ -234,7 +234,7 @@ export class BadukRoom {
   async alarm() {
     await this.enqueue(async () => {
       if (!this.engine) return;
-      const result = this.engine.advance(Date.now());
+      const result = this.engine.advance(Date.now(), { includeRoom: false });
       if (result.expired) {
         await this.retireRoom();
         return;
@@ -802,12 +802,21 @@ export class BadukRoom {
     }
   }
 
-  roomForSocket(socket, fallback = null) {
+  roomForSocket(socket, fallback = null, snapshotsByRole = null) {
     const attachment = this.readAttachment(socket);
     if (!this.engine || !attachment.identity?.playerId) return fallback;
     try {
       if (typeof this.engine.snapshotFor === "function") {
-        return this.engine.snapshotFor(attachment.identity.playerId);
+        const role = snapshotsByRole && typeof this.engine.member === "function"
+          ? this.engine.member(attachment.identity.playerId)?.role
+          : undefined;
+        if (!role) return this.engine.snapshotFor(attachment.identity.playerId);
+        // snapshotFor() varies only by the viewer's role (chat channels), so
+        // a broadcast builds at most one player and one spectator snapshot.
+        if (!snapshotsByRole.has(role)) {
+          snapshotsByRole.set(role, this.engine.snapshotFor(attachment.identity.playerId));
+        }
+        return snapshotsByRole.get(role);
       }
       if (typeof this.engine.snapshot === "function") return this.engine.snapshot();
     } catch {
@@ -828,9 +837,9 @@ export class BadukRoom {
     });
   }
 
-  sendState(socket, room = null) {
+  sendState(socket, room = null, snapshotsByRole = null) {
     const attachment = this.readAttachment(socket);
-    const safeRoom = this.roomForSocket(socket, room);
+    const safeRoom = this.roomForSocket(socket, room, snapshotsByRole);
     if (!safeRoom) return;
     this.safeSend(socket, {
       ...makeStateMessage(safeRoom),
@@ -841,7 +850,10 @@ export class BadukRoom {
 
   broadcastState(excluded) {
     if (!this.engine) return;
-    for (const socket of this.joinedSockets(excluded)) this.sendState(socket);
+    const snapshotsByRole = new Map();
+    for (const socket of this.joinedSockets(excluded)) {
+      this.sendState(socket, null, snapshotsByRole);
+    }
   }
 
   broadcastPresence(excluded) {
