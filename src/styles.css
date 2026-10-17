@@ -535,6 +535,7 @@ summary:focus-visible {
   background-size: auto, 42px 42px, 42px 42px;
 }
 
+/* Each view sets its own touch-action (see boardTouchAction). */
 .view-surface {
   position: absolute;
   inset: 0;
@@ -549,11 +550,6 @@ summary:focus-visible {
 
 #flat-scene {
   cursor: grab;
-  touch-action: pan-y;
-}
-
-.board-stage[data-topology="torus"] #flat-scene {
-  touch-action: none;
 }
 
 #flat-scene.dragging {
@@ -606,6 +602,7 @@ summary:focus-visible {
   display: block;
   grid-row: 1;
   grid-column: 1 / span 2;
+  box-sizing: border-box;
   min-height: 34px;
   padding: 7px 16px 7px 11px;
   visibility: hidden;

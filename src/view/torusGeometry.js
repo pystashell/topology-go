@@ -1,5 +1,15 @@
 export const TAU = Math.PI * 2;
 
+/**
+ * Flattened-sphere stones: tangential radius, half thickness along the
+ * surface normal, and height of their centre above the surface.
+ */
+export const TORUS_STONE_RADIUS = 0.38;
+export const TORUS_STONE_HALF_THICKNESS = 0.12;
+export const TORUS_STONE_LIFT = 0.125;
+/** Stones on the inner equator keep this multiple of their radius apart. */
+const INNER_RING_CLEARANCE = 1.08;
+
 export function mod(value, divisor) {
   return ((value % divisor) + divisor) % divisor;
 }
@@ -76,4 +86,46 @@ export function torusGridPointFromCartesian(
   const col = mod(Math.round((u * width) / TAU), width);
   const row = mod(Math.round((v * height) / TAU), height);
   return { row, col };
+}
+
+/**
+ * Radii for a width x height torus board with unit grid spacing along the
+ * tube. Square boards keep their established proportions. Boards that are
+ * narrow relative to their height would otherwise pinch the inner equator,
+ * where neighbouring stones sit on a circle of radius R - r - lift: widen the
+ * major radius until their tangent discs keep a small gap there.
+ */
+export function torusRadii({ width, height, cell = 1 }) {
+  const minorRadius = (height * cell) / TAU;
+  const proportionalRadius = Math.max(
+    (width * cell * 2.1) / TAU,
+    minorRadius * 1.15,
+  );
+  const innerRingRadius =
+    minorRadius +
+    (TORUS_STONE_LIFT + TORUS_STONE_HALF_THICKNESS) * cell +
+    (TORUS_STONE_RADIUS * cell * INNER_RING_CLEARANCE) /
+      Math.tan(Math.PI / width);
+  return {
+    minorRadius,
+    majorRadius: Math.max(proportionalRadius, innerRingRadius),
+  };
+}
+
+/**
+ * Conservative clearance between two neighbouring stones on the inner
+ * equator (negative when they may overlap). Each stone is bounded by a
+ * radius x half-thickness box tangent to the ring; the gap is measured
+ * between the inner corners of neighbouring boxes.
+ */
+export function torusInnerRingStoneGap({
+  width,
+  majorRadius,
+  minorRadius,
+  stoneRadius = TORUS_STONE_RADIUS,
+  halfThickness = TORUS_STONE_HALF_THICKNESS,
+  lift = TORUS_STONE_LIFT,
+}) {
+  const innerFaceRadius = majorRadius - minorRadius - lift - halfThickness;
+  return 2 * (innerFaceRadius * Math.tan(Math.PI / width) - stoneRadius);
 }

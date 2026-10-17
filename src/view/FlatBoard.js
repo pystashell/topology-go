@@ -4,6 +4,15 @@ import {
 } from "../game/mobiusTopology.js";
 import { formatGoColumn } from "../game/boardDimensions.js";
 import {
+  flatBoardLayout,
+  flatRowLabel,
+  mobiusRowLabelsForCopy,
+  mobiusWindowBands,
+  mobiusWindowCopies,
+} from "./flatBoardLayout.js";
+import {
+  applyBoardTouchAction,
+  boardTouchAction,
   invalidatePendingTapOnAdditionalPointer,
   pointerGestureRoles,
   preventBoardContextMenu,
@@ -16,6 +25,16 @@ import {
 
 const TAU = Math.PI * 2;
 const DRAG_THRESHOLD = 6;
+const LABEL_COLOR = "rgba(235, 240, 237, 0.54)";
+const SEAM_ACCENT = "rgba(230, 185, 105, 0.95)";
+// Rows of a vertically flipped copy of the Mobius cover are labelled and
+// tinted in this colour so labels on either side of the flip seam are never
+// read against the wrong half of the board.
+const FLIP_ACCENT = "rgba(140, 186, 255, 0.95)";
+const FLIP_LABEL_COLOR = "rgba(150, 192, 255, 0.86)";
+const FLIP_TINT = "rgba(64, 104, 196, 0.13)";
+// Floating stage chrome the flat board keeps its labels and captions clear of.
+const BOARD_OVERLAY_SELECTOR = ".view-switch, .scene-toolbar, .gesture-hint";
 
 function mod(value, divisor) {
   return ((value % divisor) + divisor) % divisor;
@@ -104,6 +123,7 @@ export class FlatBoard {
     this.canvas.addEventListener("pointerleave", this.handlePointerLeave);
     this.canvas.addEventListener("contextmenu", this.handleContextMenu);
 
+    this.observedOverlays = new WeakSet();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.container);
     this.rebuild(boardWidth, boardHeight, this.topology);
@@ -121,6 +141,10 @@ export class FlatBoard {
     this.wrapRows = this.topology === "torus";
     this.isMobius = this.topology === "mobius";
     this.container.dataset.topology = this.topology;
+    applyBoardTouchAction(
+      [this.container, this.canvas],
+      boardTouchAction({ view: "flat", topology: this.topology }),
+    );
     this.updateAriaLabel();
     this.board = Array.from({ length: height }, () => Array(width).fill(null));
     this.currentPlayer = "black";
@@ -292,20 +316,56 @@ export class FlatBoard {
     this.canvas.style.height = `${height}px`;
     this.context.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const sidePadding = width < 560 ? 36 : 72;
-    const verticalPadding = height < 620 ? 54 : 72;
-    this.cell = Math.max(
-      8,
-      Math.min(
-        (width - sidePadding * 2) / this.width,
-        (height - verticalPadding * 2) / this.height,
-      ),
-    );
-    this.boardPixelsWidth = this.cell * this.width;
-    this.boardPixelsHeight = this.cell * this.height;
-    this.frameX = (width - this.boardPixelsWidth) / 2;
-    this.frameY = (height - this.boardPixelsHeight) / 2;
+    this.layout = flatBoardLayout({
+      viewportWidth: width,
+      viewportHeight: height,
+      width: this.width,
+      height: this.height,
+      insets: this.measureOverlayInsets(height),
+      topSeamCaption: this.wrapRows,
+      bottomSeamCaption: this.wrapRows,
+      measureText: (text, fontSize) => {
+        this.context.font = `500 ${fontSize}px Inter, sans-serif`;
+        return this.context.measureText(text).width;
+      },
+    });
+    this.cell = this.layout.cell;
+    this.boardPixelsWidth = this.layout.boardWidth;
+    this.boardPixelsHeight = this.layout.boardHeight;
+    this.frameX = this.layout.frameX;
+    this.frameY = this.layout.frameY;
     this.draw();
+  }
+
+  /**
+   * Height of the floating stage controls (view switch, toolbar, gesture
+   * hint) over the top and bottom of this view, so labels can avoid them.
+   */
+  measureOverlayInsets(viewportHeight) {
+    const stage = this.container.parentElement;
+    if (!stage?.querySelectorAll) return { top: 0, bottom: 0 };
+    const origin = this.container.getBoundingClientRect();
+    let top = 0;
+    let bottom = 0;
+    for (const element of stage.querySelectorAll(BOARD_OVERLAY_SELECTOR)) {
+      // Re-observing an element re-fires the observer, so only do it once.
+      if (this.resizeObserver && !this.observedOverlays.has(element)) {
+        this.observedOverlays.add(element);
+        this.resizeObserver.observe(element);
+      }
+      if (element.closest("[hidden]")) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) continue;
+      const relativeTop = rect.top - origin.top;
+      const relativeBottom = rect.bottom - origin.top;
+      if (relativeBottom <= 0 || relativeTop >= viewportHeight) continue;
+      if (relativeTop + relativeBottom < viewportHeight) {
+        top = Math.max(top, relativeBottom);
+      } else {
+        bottom = Math.max(bottom, viewportHeight - relativeTop);
+      }
+    }
+    return { top, bottom };
   }
 
   pointX(col) {
@@ -634,6 +694,7 @@ export class FlatBoard {
     context.clearRect(0, 0, this.viewportWidth, this.viewportHeight);
 
     this.drawBoardSurface(context);
+    this.drawMobiusFlipTint(context);
     this.drawGrid(context);
     this.drawStarPoints(context);
     this.drawTerritory(context);
@@ -1174,7 +1235,6 @@ export class FlatBoard {
     const right = this.frameX + this.boardPixelsWidth;
     const top = this.frameY;
     const bottom = this.frameY + this.boardPixelsHeight;
-    const accent = "rgba(230, 185, 105, 0.95)";
 
     context.save();
     const leftGlow = context.createLinearGradient(left, 0, left + 18, 0);
@@ -1188,7 +1248,7 @@ export class FlatBoard {
     context.fillStyle = rightGlow;
     context.fillRect(right - 18, top, 18, this.boardPixelsHeight);
 
-    context.strokeStyle = accent;
+    context.strokeStyle = SEAM_ACCENT;
     context.lineWidth = 2;
     context.setLineDash([6, 6]);
     for (const x of [left, right]) {
@@ -1199,31 +1259,11 @@ export class FlatBoard {
     }
     context.setLineDash([]);
 
-    const labelSize = clamp(this.cell * 0.3, 10, 13);
-    context.font = `500 ${labelSize}px Inter, "Microsoft YaHei", sans-serif`;
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillStyle = "rgba(228, 233, 229, 0.82)";
-    if (this.viewportWidth >= 560) {
-      context.fillText(
-        translateText("← 左右首尾相接 · 右键/触摸拖动改变展开起点 →"),
-        (left + right) / 2,
-        top - 30,
-      );
-    }
-
-    context.fillStyle = accent;
-    context.font = `500 ${clamp(labelSize * 0.9, 9, 11)}px Inter, "Microsoft YaHei", sans-serif`;
-    context.save();
-    context.translate(left - 20, (top + bottom) / 2);
-    context.rotate(-Math.PI / 2);
-    context.fillText(translateText("与右侧相接"), 0, 0);
-    context.restore();
-    context.save();
-    context.translate(right + 20, (top + bottom) / 2);
-    context.rotate(Math.PI / 2);
-    context.fillText(translateText("与左侧相接"), 0, 0);
-    context.restore();
+    this.drawTopCaption(
+      context,
+      "← 左右首尾相接 · 右键/触摸拖动改变展开起点 →",
+    );
+    this.drawSideCaptions(context, "与右侧相接", "与左侧相接");
 
     context.strokeStyle = "rgba(50, 30, 18, 0.82)";
     context.lineWidth = 1.5;
@@ -1232,6 +1272,132 @@ export class FlatBoard {
     context.lineTo(right, top);
     context.moveTo(left, bottom);
     context.lineTo(right, bottom);
+    context.stroke();
+    context.restore();
+  }
+
+  /** Long explanatory caption above the column labels (wide screens only). */
+  drawTopCaption(context, text) {
+    if (!Number.isFinite(this.layout?.captionY)) return;
+    context.save();
+    context.font = `500 ${this.layout.fonts.caption}px Inter, "Microsoft YaHei", sans-serif`;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillStyle = "rgba(228, 233, 229, 0.84)";
+    context.fillText(
+      translateText(text),
+      this.frameX + this.boardPixelsWidth / 2,
+      this.layout.captionY,
+    );
+    context.restore();
+  }
+
+  /** Rotated seam captions outside the row labels on both sides. */
+  drawSideCaptions(context, leftText, rightText) {
+    const layout = this.layout;
+    if (!Number.isFinite(layout?.leftSideCaptionX)) return;
+    const middle = this.frameY + this.boardPixelsHeight / 2;
+    context.save();
+    context.fillStyle = SEAM_ACCENT;
+    context.font = `500 ${layout.fonts.seamCaption}px Inter, "Microsoft YaHei", sans-serif`;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.save();
+    context.translate(layout.leftSideCaptionX, middle);
+    context.rotate(-Math.PI / 2);
+    context.fillText(translateText(leftText), 0, 0);
+    context.restore();
+    context.save();
+    context.translate(layout.rightSideCaptionX, middle);
+    context.rotate(Math.PI / 2);
+    context.fillText(translateText(rightText), 0, 0);
+    context.restore();
+    context.restore();
+  }
+
+  /** Tint the parts of the window that show a vertically flipped copy. */
+  drawMobiusFlipTint(context) {
+    if (!this.isMobius) return;
+    context.save();
+    context.fillStyle = FLIP_TINT;
+    for (const band of mobiusWindowBands({
+      offsetColumns: this.offsetColumns,
+      width: this.width,
+    })) {
+      if (!band.flipped) continue;
+      context.fillRect(
+        this.frameX + band.start * this.cell,
+        this.frameY,
+        (band.end - band.start) * this.cell,
+        this.boardPixelsHeight,
+      );
+    }
+    context.restore();
+  }
+
+  /**
+   * Inside the window the cover is continuous, but row numbers reverse where
+   * one copy of the board meets the next. Mark that flip seam explicitly.
+   */
+  drawMobiusFlipSeams(context) {
+    const bands = mobiusWindowBands({
+      offsetColumns: this.offsetColumns,
+      width: this.width,
+    });
+    const top = this.frameY;
+    const bottom = this.frameY + this.boardPixelsHeight;
+    for (const band of bands.slice(1)) {
+      const x = this.frameX + band.start * this.cell;
+      context.save();
+      const glow = context.createLinearGradient(x - 10, 0, x + 10, 0);
+      glow.addColorStop(0, "rgba(140, 186, 255, 0)");
+      glow.addColorStop(0.5, "rgba(140, 186, 255, 0.3)");
+      glow.addColorStop(1, "rgba(140, 186, 255, 0)");
+      context.fillStyle = glow;
+      context.fillRect(x - 10, top, 20, this.boardPixelsHeight);
+      context.strokeStyle = FLIP_ACCENT;
+      context.lineWidth = 2;
+      context.setLineDash([10, 4, 2, 4]);
+      context.beginPath();
+      context.moveTo(x, top - 3);
+      context.lineTo(x, bottom + 3);
+      context.stroke();
+      context.setLineDash([]);
+      // Badges sit between two column labels, so only draw them when there
+      // is room; the line, tint and label colours carry the meaning anyway.
+      if (this.cell >= 22) {
+        for (const y of [this.layout.topLabelY, this.layout.bottomLabelY]) {
+          this.drawFlipBadge(context, x, y, Math.min(8, this.cell * 0.3));
+        }
+      }
+      context.restore();
+    }
+  }
+
+  drawFlipBadge(context, x, y, radius) {
+    context.save();
+    context.fillStyle = "rgba(14, 24, 38, 0.92)";
+    context.strokeStyle = FLIP_ACCENT;
+    context.lineWidth = 1.2;
+    context.beginPath();
+    context.arc(x, y, radius, 0, TAU);
+    context.fill();
+    context.stroke();
+    // Two opposing arrows: rows run the other way across this seam.
+    const arm = radius * 0.55;
+    const head = radius * 0.32;
+    context.lineWidth = 1.3;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.beginPath();
+    for (const [dx, direction] of [[-radius * 0.3, -1], [radius * 0.3, 1]]) {
+      const tipY = y + direction * arm;
+      context.moveTo(x + dx, y - direction * arm);
+      context.lineTo(x + dx, tipY);
+      context.moveTo(x + dx - head, tipY - direction * head);
+      context.lineTo(x + dx, tipY);
+      context.lineTo(x + dx + head, tipY - direction * head);
+    }
     context.stroke();
     context.restore();
   }
@@ -1289,33 +1455,11 @@ export class FlatBoard {
     context.moveTo(left, bottom);
     context.lineTo(right, bottom);
     context.stroke();
+    context.restore();
 
-    const labelSize = clamp(this.cell * 0.3, 10, 13);
-    context.font = `500 ${labelSize}px Inter, "Microsoft YaHei", sans-serif`;
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillStyle = "rgba(228, 233, 229, 0.86)";
-    if (this.viewportWidth >= 560) {
-      context.fillText(
-        translateText("↕ 左右反向相接 · 横向一圈后上下翻转"),
-        (left + right) / 2,
-        top - 30,
-      );
-    }
-
-    context.fillStyle = accent;
-    context.font = `500 ${clamp(labelSize * 0.9, 9, 11)}px Inter, "Microsoft YaHei", sans-serif`;
-    context.save();
-    context.translate(left - 20, (top + bottom) / 2);
-    context.rotate(-Math.PI / 2);
-    context.fillText(translateText("与右侧倒序相接"), 0, 0);
-    context.restore();
-    context.save();
-    context.translate(right + 20, (top + bottom) / 2);
-    context.rotate(Math.PI / 2);
-    context.fillText(translateText("与左侧倒序相接"), 0, 0);
-    context.restore();
-    context.restore();
+    this.drawMobiusFlipSeams(context);
+    this.drawTopCaption(context, "↕ 左右反向相接 · 横向一圈后上下翻转");
+    this.drawSideCaptions(context, "与右侧倒序相接", "与左侧倒序相接");
   }
 
   drawTorusSeam(context) {
@@ -1323,7 +1467,6 @@ export class FlatBoard {
     const right = this.frameX + this.boardPixelsWidth;
     const top = this.frameY;
     const bottom = this.frameY + this.boardPixelsHeight;
-    const accent = "rgba(230, 185, 105, 0.95)";
 
     context.save();
     const horizontalGlow = 18;
@@ -1362,107 +1505,91 @@ export class FlatBoard {
       verticalGlow,
     );
 
-    context.strokeStyle = accent;
+    context.strokeStyle = SEAM_ACCENT;
     context.lineWidth = 2;
     context.setLineDash([6, 6]);
     context.strokeRect(left, top, this.boardPixelsWidth, this.boardPixelsHeight);
     context.setLineDash([]);
 
-    const labelSize = clamp(this.cell * 0.3, 10, 13);
-    context.font = `500 ${labelSize}px Inter, "Microsoft YaHei", sans-serif`;
+    this.drawTopCaption(
+      context,
+      "↔ 左右相接 · ↕ 上下相接 · 右键/触摸任意方向拖动",
+    );
+    this.drawSideCaptions(context, "与右侧相接", "与左侧相接");
+
+    // Top and bottom seam captions sit outside the column labels so they
+    // never cover stones on the first or last row.
+    context.fillStyle = SEAM_ACCENT;
+    context.font = `500 ${this.layout.fonts.seamCaption}px Inter, "Microsoft YaHei", sans-serif`;
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.fillStyle = "rgba(228, 233, 229, 0.84)";
-    if (this.viewportWidth >= 560) {
-      context.fillText(
-        translateText("↔ 左右相接 · ↕ 上下相接 · 右键/触摸任意方向拖动"),
-        (left + right) / 2,
-        top - 30,
-      );
-    }
-
-    context.fillStyle = accent;
-    context.font = `500 ${clamp(labelSize * 0.9, 9, 11)}px Inter, "Microsoft YaHei", sans-serif`;
-    context.save();
-    context.translate(left - 20, (top + bottom) / 2);
-    context.rotate(-Math.PI / 2);
-    context.fillText(translateText("与右侧相接"), 0, 0);
-    context.restore();
-    context.save();
-    context.translate(right + 20, (top + bottom) / 2);
-    context.rotate(Math.PI / 2);
-    context.fillText(translateText("与左侧相接"), 0, 0);
-    context.restore();
     context.fillText(
       translateText("与下侧相接"),
       (left + right) / 2,
-      top + 12,
+      this.layout.topSeamCaptionY,
     );
     context.fillText(
       translateText("与上侧相接"),
       (left + right) / 2,
-      bottom - 12,
+      this.layout.bottomSeamCaptionY,
     );
     context.restore();
   }
 
   drawColumnLabels(context) {
     if (this.cell < 10) return;
-    const labelSize = clamp(this.cell * 0.24, 8, 11);
     context.save();
-    context.font = `500 ${labelSize}px Inter, sans-serif`;
+    context.font = `500 ${this.layout.fonts.label}px Inter, sans-serif`;
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.fillStyle = "rgba(235, 240, 237, 0.54)";
+    context.fillStyle = LABEL_COLOR;
     for (let col = 0; col < this.width; col += 1) {
       const x = this.pointX(col);
       const label = formatGoColumn(col) || String(col + 1);
-      context.fillText(label, x, this.frameY - 10);
-      context.fillText(label, x, this.frameY + this.boardPixelsHeight + 11);
+      context.fillText(label, x, this.layout.topLabelY);
+      context.fillText(label, x, this.layout.bottomLabelY);
     }
-    if (this.wrapRows) {
-      for (let row = 0; row < this.height; row += 1) {
-        const y = this.pointY(row);
-        const label = String(this.height - row);
-        context.textAlign = "right";
-        context.fillText(label, this.frameX - 9, y);
-        context.textAlign = "left";
-        context.fillText(label, this.frameX + this.boardPixelsWidth + 9, y);
-      }
-    } else if (this.isMobius) {
-      const leftCoverColumn = Math.round(-this.offsetColumns);
-      const rightCoverColumn = Math.round(
-        this.width - 1 - this.offsetColumns,
-      );
-      for (let visualRow = 0; visualRow < this.height; visualRow += 1) {
-        const y = this.frameY + (visualRow + 0.5) * this.cell;
-        const leftPoint = mobiusPointFromCover(
-          visualRow,
-          leftCoverColumn,
-          this.width,
-          this.height,
-        );
-        const rightPoint = mobiusPointFromCover(
-          visualRow,
-          rightCoverColumn,
-          this.width,
-          this.height,
-        );
-        context.textAlign = "right";
-        context.fillText(
-          String(this.height - leftPoint.row),
-          this.frameX - 9,
-          y,
-        );
-        context.textAlign = "left";
-        context.fillText(
-          String(this.height - rightPoint.row),
-          this.frameX + this.boardPixelsWidth + 9,
-          y,
-        );
-      }
-    }
+    this.drawRowLabels(context);
     context.restore();
+  }
+
+  drawRowLabels(context) {
+    const leftX = this.layout.leftRowLabelX;
+    const rightX = this.layout.rightRowLabelX;
+    const drawPair = (y, leftLabel, rightLabel, leftColor, rightColor) => {
+      context.textAlign = "right";
+      context.fillStyle = leftColor;
+      context.fillText(leftLabel, leftX, y);
+      context.textAlign = "left";
+      context.fillStyle = rightColor;
+      context.fillText(rightLabel, rightX, y);
+    };
+
+    if (this.isMobius) {
+      // Each side is labelled for the copy of the board at that edge; a
+      // flipped copy is shown in the flip colour to match its tint and seam.
+      const copies = mobiusWindowCopies({
+        offsetColumns: this.offsetColumns,
+        width: this.width,
+      });
+      const leftLabels = mobiusRowLabelsForCopy(copies.leftCopy, this.height);
+      const rightLabels = mobiusRowLabelsForCopy(copies.rightCopy, this.height);
+      for (let visualRow = 0; visualRow < this.height; visualRow += 1) {
+        drawPair(
+          this.frameY + (visualRow + 0.5) * this.cell,
+          leftLabels[visualRow],
+          rightLabels[visualRow],
+          copies.leftFlipped ? FLIP_LABEL_COLOR : LABEL_COLOR,
+          copies.rightFlipped ? FLIP_LABEL_COLOR : LABEL_COLOR,
+        );
+      }
+      return;
+    }
+
+    for (let row = 0; row < this.height; row += 1) {
+      const label = flatRowLabel(row, this.height);
+      drawPair(this.pointY(row), label, label, LABEL_COLOR, LABEL_COLOR);
+    }
   }
 
   destroy() {

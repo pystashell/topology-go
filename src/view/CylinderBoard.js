@@ -1,11 +1,14 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
+  applyBoardTouchAction,
+  boardTouchAction,
   invalidatePendingTapOnAdditionalPointer,
   pointerGestureRoles,
   preventBoardContextMenu,
 } from "./pointerGestures.js";
 import { translateText } from "../i18n.js";
+import { createRenderScheduler } from "./renderScheduler.js";
 import {
   createAnalysisVariationMarker,
   placeAnalysisVariationMarker,
@@ -111,7 +114,7 @@ export class CylinderBoard {
     this.movePreviewEnabled = true;
     this.active = true;
     this.destroyed = false;
-    this.animationFrame = null;
+    this.renderScheduler = createRenderScheduler(() => this.renderFrame());
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 240);
@@ -145,6 +148,12 @@ export class CylinderBoard {
     this.controls.autoRotateSpeed = 0.72;
     this.controls.mouseButtons.LEFT = -1;
     this.controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
+    this.onControlsChange = () => this.requestRender();
+    this.controls.addEventListener("change", this.onControlsChange);
+    applyBoardTouchAction(
+      [this.container, this.renderer.domElement],
+      boardTouchAction({ view: "3d", topology: "cylinder" }),
+    );
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
@@ -188,7 +197,7 @@ export class CylinderBoard {
     canvas.addEventListener("contextmenu", this.onContextMenu);
 
     this.rebuild(boardWidth, boardHeight);
-    this.animate();
+    this.requestRender();
   }
 
   refreshLanguage() {
@@ -529,6 +538,7 @@ export class CylinderBoard {
       );
     }
     this.refreshHover();
+    this.requestRender();
   }
 
   syncTerritoryMarkers(territoryRegions, deadStones) {
@@ -751,6 +761,7 @@ export class CylinderBoard {
     const point = this.hoveredPoint;
     const empty = point && !this.board?.[point.row]?.[point.col];
     if (!this.movePreviewEnabled || this.phase !== "play" || !empty) {
+      if (this.hoverStone.visible) this.requestRender();
       this.hoverStone.visible = false;
       return;
     }
@@ -758,6 +769,7 @@ export class CylinderBoard {
       this.currentPlayer === "black" ? this.hoverBlackMaterial : this.hoverWhiteMaterial;
     this.positionStone(this.hoverStone, point.row, point.col);
     this.hoverStone.visible = true;
+    this.requestRender();
   }
 
   setMovePreviewEnabled(enabled) {
@@ -769,6 +781,9 @@ export class CylinderBoard {
 
   setAutoRotate(enabled) {
     this.controls.autoRotate = enabled;
+    // While auto-rotating, every controls update moves the camera and emits
+    // "change", which keeps requesting frames.
+    this.requestRender();
   }
 
   setActive(active) {
@@ -777,10 +792,9 @@ export class CylinderBoard {
     this.controls.enabled = active;
     if (active) {
       this.resize();
-      if (this.animationFrame === null) this.animate();
-    } else if (this.animationFrame !== null) {
-      cancelAnimationFrame(this.animationFrame);
-      this.animationFrame = null;
+      this.requestRender();
+    } else {
+      this.renderScheduler.cancel();
       this.setHoveredPoint(null);
     }
   }
@@ -790,6 +804,7 @@ export class CylinderBoard {
     this.camera.position.set(0, 0, distance);
     this.controls.target.set(0, 0, 0);
     this.controls.update();
+    this.requestRender();
   }
 
   focusPoint(point) {
@@ -827,6 +842,7 @@ export class CylinderBoard {
     );
     this.camera.up.set(0, 1, 0);
     this.controls.update();
+    this.requestRender();
   }
 
   resize() {
@@ -836,14 +852,18 @@ export class CylinderBoard {
     this.camera.updateProjectionMatrix();
     this.renderer.setPixelRatio(clampPixelRatio());
     this.renderer.setSize(width, height, false);
+    this.requestRender();
   }
 
-  animate() {
-    if (!this.active || this.destroyed) {
-      this.animationFrame = null;
-      return;
-    }
-    this.animationFrame = requestAnimationFrame(() => this.animate());
+  requestRender() {
+    if (!this.active || this.destroyed) return;
+    this.renderScheduler.request();
+  }
+
+  renderFrame() {
+    if (!this.active || this.destroyed) return;
+    // Damping and auto-rotation move the camera inside update(); it then
+    // emits "change", which requests the next frame until the camera rests.
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
@@ -851,9 +871,9 @@ export class CylinderBoard {
   destroy() {
     this.destroyed = true;
     this.active = false;
-    if (this.animationFrame !== null) cancelAnimationFrame(this.animationFrame);
-    this.animationFrame = null;
+    this.renderScheduler.cancel();
     this.resizeObserver.disconnect();
+    this.controls.removeEventListener("change", this.onControlsChange);
     const canvas = this.renderer.domElement;
     canvas.removeEventListener("pointerdown", this.onPointerDown);
     canvas.removeEventListener("pointermove", this.onPointerMove);

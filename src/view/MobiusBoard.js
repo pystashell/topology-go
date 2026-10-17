@@ -16,6 +16,7 @@ import {
   mobiusBoardLayout,
   mobiusGridFrame,
   mobiusGridPointFromUv,
+  mobiusStoneRadius,
 } from "./mobiusGeometry.js";
 
 const LOCAL_UP = new THREE.Vector3(0, 1, 0);
@@ -57,6 +58,16 @@ export class MobiusBoard extends TorusBoard {
     );
   }
 
+  boardRadii(width, height) {
+    // The Mobius band sizes its strip from the major radius alone (see
+    // mobiusBoardLayout); keep its established proportions.
+    const minorRadius = height / MOBIUS_TAU;
+    return {
+      minorRadius,
+      majorRadius: Math.max((width * 2.1) / MOBIUS_TAU, minorRadius * 1.15),
+    };
+  }
+
   createSurface() {
     // Keep the standard circular embedding free of self-intersections. Grid
     // rows sit slightly inside the physical edge so stones on the boundary are
@@ -78,13 +89,7 @@ export class MobiusBoard extends TorusBoard {
       majorRadius: this.majorRadius,
       halfWidth: this.gridHalfWidth,
     });
-    this.mobiusStoneRadius = Math.max(
-      0.07,
-      Math.min(
-        0.36,
-        this.mobiusNeighborSpacing * 0.34,
-      ),
-    );
+    this.mobiusStoneRadius = mobiusStoneRadius(this.mobiusNeighborSpacing);
     this.mobiusStoneThickness = Math.max(0.035, this.mobiusStoneRadius * 0.34);
 
     const geometry = createMobiusSurfaceGeometry({
@@ -408,6 +413,7 @@ export class MobiusBoard extends TorusBoard {
     this.camera.up.copy(frame.tangentV).normalize();
     this.controls.update();
     this.needsFit = false;
+    this.requestRender();
   }
 }
 

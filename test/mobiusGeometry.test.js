@@ -9,6 +9,7 @@ import {
   mobiusGridFrame,
   mobiusGridPointFromUv,
   mobiusPoint,
+  mobiusStoneRadius,
 } from "../src/view/mobiusGeometry.js";
 
 function assertVectorClose(actual, expected, tolerance = 1e-9) {
@@ -142,4 +143,25 @@ test("Mobius UV picking mirrors rows only across the twisted seam", () => {
     mobiusGridPointFromUv({ u: 0.5, v: 0.5, width: 20, height: 30 }),
     { row: 15, col: 10 },
   );
+});
+
+test("Mobius stones fill most of the tightest spacing but never touch", () => {
+  for (const [width, height] of [[5, 5], [9, 9], [13, 13], [19, 19], [25, 9], [7, 15], [9, 13], [30, 30]]) {
+    // Same radii as MobiusBoard.boardRadii.
+    const minorRadius = height / MOBIUS_TAU;
+    const majorRadius = Math.max((width * 2.1) / MOBIUS_TAU, minorRadius * 1.15);
+    const { gridHalfWidth } = mobiusBoardLayout({ width, height, majorRadius });
+    const spacing = minimumMobiusNeighborDistance({
+      width,
+      height,
+      majorRadius,
+      halfWidth: gridHalfWidth,
+    });
+    const radius = mobiusStoneRadius(spacing);
+    assert.ok(radius * 2 <= spacing * 0.9 + 1e-9, `${width}x${height}`);
+    if (radius < 0.36) {
+      // 19x19 stones used to be 0.34 of the spacing and read as specks.
+      assert.ok(radius >= spacing * 0.44, `${width}x${height}`);
+    }
+  }
 });
