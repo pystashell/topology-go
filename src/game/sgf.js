@@ -706,14 +706,23 @@ function parseSize(value, limits) {
   };
 }
 
-function decodeSetupValue(value, width, height) {
+function decodeSetupValue(value, width, height, budget) {
   const parts = String(value).split(":");
-  if (parts.length === 1) return [decodeSgfPoint(parts[0], width, height)];
-  if (parts.length !== 2) {
+  if (parts.length > 2) {
     throw new SgfError(`Invalid compressed point '${value}'`, "INVALID_POINT");
   }
   const start = decodeSgfPoint(parts[0], width, height);
-  const end = decodeSgfPoint(parts[1], width, height);
+  const end = parts.length === 1 ? start : decodeSgfPoint(parts[1], width, height);
+  // Each value may name the whole board, so bound the total expansion before
+  // materializing it rather than trusting the per-file value-count limit.
+  budget.remaining -=
+    (Math.abs(end.row - start.row) + 1) * (Math.abs(end.col - start.col) + 1);
+  if (budget.remaining < 0) {
+    throw new SgfError(
+      "Setup properties list more than twice the board's points",
+      "SGF_TOO_LARGE",
+    );
+  }
   const points = [];
   for (let row = Math.min(start.row, end.row); row <= Math.max(start.row, end.row); row += 1) {
     for (let col = Math.min(start.col, end.col); col <= Math.max(start.col, end.col); col += 1) {
@@ -723,13 +732,38 @@ function decodeSetupValue(value, width, height) {
   return points;
 }
 
-function setSetupStones(board, values, color, width, height) {
+function setSetupStones(board, values, color, width, height, budget) {
   for (const value of values) {
-    for (const { row, col } of decodeSetupValue(value, width, height)) {
+    for (const { row, col } of decodeSetupValue(value, width, height, budget)) {
       if (board[row][col] !== EMPTY && board[row][col] !== color) {
         throw new SgfError(`Setup stones overlap at '${value}'`, "OVERLAPPING_SETUP");
       }
       board[row][col] = color;
+    }
+  }
+}
+
+// Setup is a position, not a sequence of moves, so nothing would capture
+// stones placed without liberties; they would then count in area scoring.
+// Play never reaches such a position, so no exported record contains one.
+function rejectSetupWithoutLiberties(board, width, height, topology) {
+  // Larger boards are only inspected as metadata and cannot be replayed.
+  if (width > MAX_BOARD_DIMENSION || height > MAX_BOARD_DIMENSION) return;
+  const game = new GoEngine({ width, height, topology, komi: 0, initialBoard: board });
+  const seen = new Set();
+  for (let row = 0; row < height; row += 1) {
+    for (let col = 0; col < width; col += 1) {
+      if (board[row][col] === EMPTY || seen.has(`${row},${col}`)) continue;
+      const group = game.getGroup(row, col);
+      for (const stone of group.stones) seen.add(`${stone.row},${stone.col}`);
+      if (group.liberties.length === 0) {
+        const point = encodeSgfPoint(row, col, width, height);
+        throw new SgfError(
+          `Setup stones at '${point}' have no liberties`,
+          "INVALID_SETUP",
+          { point },
+        );
+      }
     }
   }
 }
@@ -989,8 +1023,10 @@ export function importSgf(input, options = {}) {
   }
 
   const board = Array.from({ length: height }, () => Array(width).fill(EMPTY));
-  setSetupStones(board, propertyValues(root, "AB"), BLACK, width, height);
-  setSetupStones(board, propertyValues(root, "AW"), WHITE, width, height);
+  const setupBudget = { remaining: 2 * width * height };
+  setSetupStones(board, propertyValues(root, "AB"), BLACK, width, height, setupBudget);
+  setSetupStones(board, propertyValues(root, "AW"), WHITE, width, height, setupBudget);
+  rejectSetupWithoutLiberties(board, width, height, topology);
 
   let firstMoveColor = null;
   for (const node of nodes) {

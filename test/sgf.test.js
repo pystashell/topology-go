@@ -528,3 +528,44 @@ test("non-alternating SGF moves import as replayable passes for the skipped colo
   assert.equal(last.phase, "play");
   assert.equal(last.board[1][1], "white");
 });
+
+test("setup stones without liberties are rejected on the record's topology", () => {
+  // aa touches ba, ab and, through the cylinder seam, ea.
+  const surrounded = "AB[aa]AW[ba][ea][ab];W[cc])";
+  assert.throws(
+    () => importSgf(`(;FF[4]GM[1]SZ[5]XTOP[cylinder]${surrounded}`),
+    (error) => error instanceof SgfError &&
+      error.code === "INVALID_SETUP" && error.point === "aa",
+  );
+  // On a torus aa also touches ae, so the same setup is a legal position.
+  const torus = importSgf(`(;FF[4]GM[1]SZ[5]XTOP[torus]${surrounded}`);
+  const last = buildReplayFrames(torus.replay).frames.at(-1);
+  assert.equal(last.board[0][0], "black");
+  assert.equal(last.board[2][2], "white");
+
+  assert.throws(() => importSgf("(;FF[4]GM[1]SZ[3]AB[aa:cc])"), {
+    code: "INVALID_SETUP",
+  });
+  assert.throws(
+    () => importSgf("(;FF[4]GM[1]SZ[5]XTOP[cylinder]AW[ac][bc]AB[ab][bb][ad][bd][cc][ec])"),
+    { code: "INVALID_SETUP" },
+  );
+});
+
+test("compressed setup ranges are capped at twice the board's points", () => {
+  const started = performance.now();
+  assert.throws(
+    () => importSgf(`(;FF[4]GM[1]SZ[30]AB${"[aa:DD]".repeat(19_990)})`),
+    { code: "SGF_TOO_LARGE" },
+  );
+  assert.ok(performance.now() - started < 500, "rejected before expanding millions of points");
+
+  // Repeating a range is tolerated up to the cap of 2 * 81 points.
+  const repeated = importSgf("(;FF[4]GM[1]SZ[9]AB[aa:ie][aa:ie]AW[ag:ii])");
+  assert.equal(repeated.replay.base.board[4][8], "black");
+  assert.equal(repeated.replay.base.board[8][0], "white");
+  assert.throws(
+    () => importSgf("(;FF[4]GM[1]SZ[9]AB[aa:ii][aa:ii]AW[ii])"),
+    { code: "SGF_TOO_LARGE" },
+  );
+});
