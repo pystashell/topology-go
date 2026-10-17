@@ -67,6 +67,12 @@ export const MATCH_MODE_HUMAN_AI = "human-ai";
 export const MATCH_MODE_AI_AI = "ai-ai";
 export const MATCH_MODE_LOCAL = "local";
 export const MAX_ROUND_ARCHIVE = 24;
+// Archived replays live in the room's single stored value, which Cloudflare
+// caps at 2 MiB. Keep only the newest rounds that fit this budget: a 900-move
+// 30x30 live game (~1.1 MiB), both full chat histories and all receipts take
+// ~1.3 MiB, leaving the value near 1.6 MiB. Typical 19x19 rounds (~15 KiB)
+// still keep all 24.
+export const MAX_ROUND_ARCHIVE_BYTES = 384 * 1024;
 
 const VALID_MATCH_STATUSES = new Set([
   MATCH_STATUS_SETUP,
@@ -449,6 +455,22 @@ export function fnv1a64Hex(bytes) {
     h2 = t2 & 0xffff;
   }
   return hexLimb(h3) + hexLimb(h2) + hexLimb(h1) + hexLimb(h0);
+}
+
+function jsonByteLength(value) {
+  return textEncoder.encode(JSON.stringify(value)).byteLength;
+}
+
+function trimRoundArchive(archive) {
+  const kept = [];
+  let bytes = 0;
+  for (let index = archive.length - 1; index >= 0; index -= 1) {
+    if (kept.length >= MAX_ROUND_ARCHIVE) break;
+    bytes += jsonByteLength(archive[index]);
+    if (bytes > MAX_ROUND_ARCHIVE_BYTES) break;
+    kept.unshift(archive[index]);
+  }
+  return kept;
 }
 
 function fingerprint(prefix, value) {
@@ -1077,7 +1099,7 @@ export class RoomEngine {
     state.scoreConfirmations ??= [];
     state.undoRequest ??= null;
     state.resignationOutcome ??= null;
-    state.roundArchive ??= [];
+    state.roundArchive = trimRoundArchive(state.roundArchive ?? []);
     state.allowLegacyNewGame ??= false;
     state.match.aiAutoplayPaused ??= false;
     state.timeControl = persistedRoomTimeControl(state.timeControl);
@@ -1326,7 +1348,8 @@ export class RoomEngine {
       positionToken: positionToken(this.game, this.state),
       scoringToken: this.scoringToken(),
       match: clone(this.state.match),
-      roundArchive: clone(this.state.roundArchive),
+      // Full archived replays stay in storage; every state message carries
+      // only their summaries (no client reads the replays).
       rounds: this.state.roundArchive.map((round) => ({
         roundId: round.roundId,
         startedAt: round.startedAt,
@@ -3135,7 +3158,7 @@ export class RoomEngine {
       moveCount: this.state.moveCount,
       replay,
     });
-    this.state.roundArchive = this.state.roundArchive.slice(-MAX_ROUND_ARCHIVE);
+    this.state.roundArchive = trimRoundArchive(this.state.roundArchive);
   }
 
   startRound({ settings, mode, controllers, now }) {

@@ -344,9 +344,10 @@ test("an AI or local host leaving archives the round and frees a fresh setup", (
     assert.equal(after.game.board[0][0], null);
     assert.equal(after.timeControl.running, false);
     assert.notEqual(after.positionToken, oldPositionToken);
-    assert.equal(after.roundArchive.length, 1);
-    assert.equal(after.roundArchive[0].mode, mode);
-    assert.equal(after.roundArchive[0].moveCount, 1);
+    assert.equal(after.rounds.length, 1);
+    assert.equal(after.rounds[0].mode, mode);
+    assert.equal(after.rounds[0].moveCount, 1);
+    assert.equal(room.state.roundArchive[0].replay.events.length, 1);
     assert.equal(room.nextOpenColor(), "black");
 
     for (const nextId of ["same-person-new-identity", "other-person"]) {
@@ -361,7 +362,8 @@ test("an AI or local host leaving archives the round and frees a fresh setup", (
       assert.equal(joined.identity.color, "black");
       assert.equal(joined.room.match.status, MATCH_STATUS_SETUP);
       assert.equal(joined.room.match.controllers.black.operatorId, nextId);
-      assert.equal(joined.room.roundArchive.length, 1);
+      assert.equal(joined.room.rounds.length, 1);
+      assert.equal(restored.state.roundArchive.length, 1);
     }
   }
 });
@@ -754,13 +756,14 @@ test("starting the next round preserves a full bounded archive for replay and lo
     height: 9,
   }, 1_400).room;
   assert.equal(next.match.status, MATCH_STATUS_PLAYING);
-  assert.equal(next.roundArchive.length, 1);
-  assert.equal(next.roundArchive[0].mode, MATCH_MODE_LOCAL);
-  assert.equal(next.roundArchive[0].result.reason, "resign");
-  assert.equal(next.roundArchive[0].settings.width, 9);
-  assert.equal(next.roundArchive[0].replay.complete, true);
-  assert.equal(next.roundArchive[0].replay.events[0].row, 2);
-  assert.equal(next.roundArchive[0].replay.events[0].col, 3);
+  assert.equal(next.rounds.length, 1);
+  assert.equal(next.rounds[0].mode, MATCH_MODE_LOCAL);
+  assert.equal(next.rounds[0].result.reason, "resign");
+  assert.equal(next.rounds[0].settings.width, 9);
+  const [archived] = room.state.roundArchive;
+  assert.equal(archived.replay.complete, true);
+  assert.equal(archived.replay.events[0].row, 2);
+  assert.equal(archived.replay.events[0].col, 3);
 });
 
 test("scoring, resignation, and timeout archives replay the public terminal frame", () => {
@@ -806,7 +809,8 @@ test("scoring, resignation, and timeout archives replay the public terminal fram
     request(room, { mode: MATCH_MODE_LOCAL }, 1_100);
     const finished = scenario.finish(room);
     assert.equal(finished.match.status, MATCH_STATUS_FINISHED, scenario.name);
-    const archive = request(room, { mode: MATCH_MODE_LOCAL }, 4_300).room.roundArchive.at(-1);
+    request(room, { mode: MATCH_MODE_LOCAL }, 4_300);
+    const archive = room.state.roundArchive.at(-1);
     assert.equal(archive.moveCount, finished.moveCount, scenario.name);
     assert.equal(
       buildReplayFrames(archive.replay).steps.length,
@@ -819,7 +823,7 @@ test("scoring, resignation, and timeout archives replay the public terminal fram
       scenario.name,
     );
     assert.deepEqual(
-      RoomEngine.restore(room.serialize()).snapshot(4_301).roundArchive.at(-1).replay,
+      RoomEngine.restore(room.serialize()).state.roundArchive.at(-1).replay,
       archive.replay,
       scenario.name,
     );
@@ -847,7 +851,7 @@ test("v1 rooms migrate to persistent match controllers and protocol accepts nego
   assert.equal(migrated.match.mode, MATCH_MODE_FRIEND);
   assert.equal(migrated.match.controllers.black.operatorId, "host");
   assert.equal(migrated.match.controllers.white.operatorId, "friend");
-  assert.deepEqual(migrated.roundArchive, []);
+  assert.deepEqual(migrated.rounds, []);
 
   for (const action of ["request_game", "respond_game", "cancel_game_request"]) {
     assert.equal(normalizeCommandMessage({
