@@ -44,6 +44,13 @@ export const SPECTATOR_COMMAND_MEMBER_BURST = 3;
 export const SPECTATOR_COMMAND_MEMBER_REFILL_MS = 3 * 1_000;
 export const SPECTATOR_COMMAND_ROOM_BURST = 8;
 export const SPECTATOR_COMMAND_ROOM_REFILL_MS = 1 * 1_000;
+// Seated players send one command per acknowledged round trip, and AI moves
+// wait for a network evaluation, so 8/s sustained with a 40-command burst
+// leaves real play (including local and AI self-play) far from the limit.
+export const PLAYER_COMMAND_BURST = 40;
+export const PLAYER_COMMAND_REFILL_MS = 125;
+// Dead-stone marks per scoring session, as a multiple of board points.
+export const DEAD_STONE_TOGGLES_PER_POINT = 4;
 export const MAX_COMMAND_RECEIPTS = 256;
 export const CHAT_MEMBER_BURST = 5;
 export const CHAT_MEMBER_REFILL_MS = 1_200;
@@ -1598,6 +1605,9 @@ export class RoomEngine {
     );
     this.connections.set(normalizedConnectionId, identity.playerId);
     const member = this.requireMember(identity.playerId);
+    // A null marker is a reservation that expires unless this connection is
+    // recorded; the caller must persist it.
+    const firstConnection = member.lastConnectedAt === null;
     if (
       member.role === "spectator" ||
       (member.role === "player" &&
@@ -1609,6 +1619,7 @@ export class RoomEngine {
       identity,
       connectionId: normalizedConnectionId,
       revision: this.state.revision,
+      firstConnection,
       room: this.snapshotFor(member.playerId, now),
     };
   }
@@ -1639,10 +1650,9 @@ export class RoomEngine {
     const playerId = this.connections.get(connectionId);
     this.connections.delete(connectionId);
     const member = playerId ? this.member(playerId) : null;
-    if (
-      member?.role === "spectator" &&
-      !this.isOnline(member.playerId)
-    ) {
+    const spectatorOffline = member?.role === "spectator" &&
+      !this.isOnline(member.playerId);
+    if (spectatorOffline) {
       // Start the reconnect grace from the actual disconnect, rather than the
       // last command the observer happened to send while watching.
       member.lastSeenAt = now;
@@ -1650,7 +1660,8 @@ export class RoomEngine {
     return {
       changed: false,
       revision: this.state.revision,
-      room: this.snapshot(now),
+      // The grace start must be stored; nothing else here is durable.
+      spectatorOffline,
     };
   }
 
@@ -2311,6 +2322,15 @@ export class RoomEngine {
       move = this.recordResignation(loser, now);
     } else if (action === "toggle_dead") {
       this.assertAnyController(member);
+      // Every mark is a replay event; bound a scoring session's growth.
+      if (this.deadStoneTogglesThisScoring() >=
+          DEAD_STONE_TOGGLES_PER_POINT * this.game.width * this.game.height) {
+        throw new RoomEngineError(
+          "本次点目的死子标记次数已达上限，请确认结果或继续对局。",
+          409,
+          "SCORING_TOGGLE_LIMIT",
+        );
+      }
       const row = validateCoordinate(payload.row, "行");
       const col = validateCoordinate(payload.col, "列");
       move = this.game.toggleDead(row, col);
@@ -2691,6 +2711,30 @@ export class RoomEngine {
     this.state.spectatorCommandBucket = roomSpend.bucket;
   }
 
+  enforcePlayerCommandRateLimit({ playerId, action, now: nowInput }) {
+    const now = readNow(nowInput);
+    const member = this.requireMember(normalizePlayerId(playerId));
+    // Chat has its own buckets and leaving must always be possible.
+    if (member.role !== "player" || action === "chat" || action === "leave") return;
+    const spend = spendChatToken(
+      restoredChatBucket(member.commandBucket, PLAYER_COMMAND_BURST, member.lastSeenAt ?? now),
+      PLAYER_COMMAND_BURST,
+      PLAYER_COMMAND_REFILL_MS,
+      now,
+    );
+    if (!spend.ok) {
+      throw new RoomEngineError(
+        "操作太频繁了，请稍等一下再试。",
+        429,
+        "COMMAND_RATE_LIMITED",
+        true,
+      );
+    }
+    // Kept in memory and saved with the next write: an evicted instance can
+    // only restore a fuller bucket after the idle time that refills it anyway.
+    member.commandBucket = spend.bucket;
+  }
+
   recordCommand({ playerId, id, sequence = null, now: nowInput, error }) {
     const now = readNow(nowInput);
     const decision = this.inspectCommand(playerId, id, sequence);
@@ -2994,6 +3038,17 @@ export class RoomEngine {
       this.state.moveCount > 0 &&
       this.game.phase !== PHASE_FINISHED &&
       !this.currentRoundResult();
+  }
+
+  deadStoneTogglesThisScoring() {
+    // A scoring session starts after a pass and ends with resume/finish, so
+    // its marks are exactly the trailing toggle events of the replay.
+    const events = this.game.replay?.events ?? [];
+    let count = 0;
+    while (count < events.length && events[events.length - 1 - count].type === "toggle_dead") {
+      count += 1;
+    }
+    return count;
   }
 
   assertSeatsUnlocked() {

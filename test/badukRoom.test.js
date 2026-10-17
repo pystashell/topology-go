@@ -51,6 +51,7 @@ test("stale spectator commands persist their rate-limit token before replying", 
     enforceSpectatorCommandRateLimit(request) {
       rateLimitCalls.push(request);
     },
+    enforcePlayerCommandRateLimit() {},
     serialize() {
       return { persistedRateLimit: true };
     },
@@ -105,6 +106,7 @@ test("stale player commands do not add an unnecessary persistence write", async 
       return { kind: "stale", previousSequence: 3 };
     },
     enforceSpectatorCommandRateLimit() {},
+    enforcePlayerCommandRateLimit() {},
     snapshot() {
       return {
         code: "ABC123",

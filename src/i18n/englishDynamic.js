@@ -508,6 +508,8 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "这条消息包含的字符过大，请缩短后再发送。": "This message contains oversized characters. Shorten it and try again.",
   "请求过于频繁，请稍后再试。": "Too many requests. Please wait a minute and try again.",
   "本局进行中，不能更换座位；请等本局结束后再操作。": "Seats cannot change while this game is in progress. Try again after it ends.",
+  "操作太频繁了，请稍等一下再试。": "You're doing that too often. Wait a moment and try again.",
+  "本次点目的死子标记次数已达上限，请确认结果或继续对局。": "This scoring session has reached its dead-stone marking limit. Confirm the result or resume play.",
   "导出 SGF": "Export SGF",
   "导入 SGF": "Import SGF",
   "有待确认的建房请求": "Pending room creation",

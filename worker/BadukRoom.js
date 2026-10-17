@@ -21,6 +21,10 @@ const STORAGE_KEY = "room";
 // The lobby mirrors the room's expiry. Refresh an otherwise unchanged entry
 // once the room's TTL has slid this far past the last published one.
 export const LOBBY_EXPIRY_REFRESH_MS = 30 * 60 * 1_000;
+// Reconnecting sockets only refresh presence and TTL, so record a member's
+// connection at most once per interval (a reservation's first connection
+// is always recorded).
+export const CONNECTION_WRITE_INTERVAL_MS = 60 * 1_000;
 const MAX_SOCKET_CONNECTIONS = 64;
 const MAX_CLIENT_MESSAGE_BYTES = 8 * 1024;
 const POSITION_BOUND_ACTIONS = new Set([
@@ -61,6 +65,8 @@ export class BadukRoom {
     // Last lobby publication from this instance: { key, expiresAt }. Null
     // until one succeeds, and reset when the latest one fails.
     this.indexPublication = null;
+    // playerId -> when this instance last persisted that member's connection.
+    this.connectionWrites = new Map();
 
     if (typeof ctx.setWebSocketAutoResponse === "function") {
       ctx.setWebSocketAutoResponse(
@@ -478,7 +484,14 @@ export class BadukRoom {
       server.serializeAttachment(attachment);
       this.ctx.acceptWebSocket(server, ["bamboo-baduk-room"]);
 
-      await this.persist();
+      const connectedAt = Date.now();
+      const playerId = connected.identity.playerId;
+      const lastWrite = this.connectionWrites?.get(playerId);
+      if (connected.firstConnection !== false || lastWrite === undefined ||
+          connectedAt - lastWrite >= CONNECTION_WRITE_INTERVAL_MS) {
+        await this.persist();
+        this.connectionWrites?.set(playerId, connectedAt);
+      }
       await this.scheduleAlarmAfterCommit();
       this.sendWelcome(server, connected.identity, connected.room);
       this.sendState(server, connected.room);
@@ -525,6 +538,12 @@ export class BadukRoom {
         playerId,
         action: command.action,
       });
+      // Seated players get a generous per-member budget for everything but
+      // chat (separately limited). A rejection here writes nothing.
+      this.engine.enforcePlayerCommandRateLimit({
+        playerId,
+        action: command.action,
+      });
     } catch (error) {
       this.sendNormalizedError(socket, error, command.id);
       return;
@@ -553,6 +572,7 @@ export class BadukRoom {
     }
 
     let result;
+    const revisionBefore = this.engine.state?.revision;
     try {
       if (
         POSITION_BOUND_ACTIONS.has(command.action) &&
@@ -619,6 +639,12 @@ export class BadukRoom {
       return;
     }
 
+    // A player's sync only reads. Its receipt can stay in memory unless the
+    // room itself advanced (a clock or reservation expiry) while preparing.
+    // Spectator syncs still persist the shared rate-limit spend.
+    const readOnly = command.action === "sync" &&
+      this.engine.member(playerId)?.role === "player" &&
+      this.engine.state?.revision === revisionBefore;
     try {
       if (command.action !== "leave") {
         this.engine.recordCommand({
@@ -627,7 +653,7 @@ export class BadukRoom {
           sequence: command.sequence,
         });
       }
-      await this.persist();
+      if (!readOnly) await this.persist();
     } catch (error) {
       if (!this.unavailableError) this.markUnavailable("ROOM_COMMIT_FAILED", error);
       this.sendNormalizedError(socket, this.unavailableError, command.id);
@@ -664,8 +690,12 @@ export class BadukRoom {
     const attachment = this.readAttachment(socket);
     if (!attachment.identity) return;
     try {
-      this.engine.disconnect({ connectionId: attachment.connectionId });
-      await this.persist();
+      const disconnected = this.engine.disconnect({
+        connectionId: attachment.connectionId,
+      });
+      // Only a spectator's reconnect grace starts here and must survive a
+      // restart; presence alone is not worth rewriting the room.
+      if (disconnected?.spectatorOffline !== false) await this.persist();
       await this.scheduleAlarm();
       this.broadcastState(socket);
       this.broadcastPresence(socket);
