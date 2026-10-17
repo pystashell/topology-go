@@ -1,6 +1,7 @@
 import {
   BLACK,
   GoEngine,
+  PHASE_PLAY,
   SCORING_CHINESE,
   WHITE,
 } from "../../game/goEngine.js";
@@ -113,33 +114,45 @@ export function buildCylinderFeatures(gameOrState) {
 }
 
 /**
- * Return one exact GoEngine legality flag per point plus pass.
- *
- * KataGo was trained for a different topology, and its policy head does not
- * know this game's positional-superko history. Clone the complete state for
- * every probe so the same topology-aware capture, suicide and repetition rules
- * used by actual play remain authoritative without mutating the live game.
+ * Validate a snapshot once. Features and masks only read the position, so
+ * every probe below can share this one engine.
  */
-export function buildLegalPolicyMask(gameOrState) {
-  const game =
+function searchPosition(gameOrState) {
+  return GoEngine.fromSearchState(
     gameOrState instanceof GoEngine
-      ? GoEngine.fromSearchState(gameOrState.exportSearchState())
-      : GoEngine.fromSearchState(gameOrState);
-  const state = game.exportSearchState();
+      ? gameOrState.exportSearchState()
+      : gameOrState,
+  );
+}
+
+/**
+ * Probe every point of one position. GoEngine.checkPlay() applies the same
+ * topology-aware capture, suicide and positional-superko rules as play()
+ * without mutating or cloning the game, so the live game is never changed.
+ */
+function legalMaskFor(game) {
   const pointCount = game.width * game.height;
   const mask = new Uint8Array(pointCount + 1);
-
   for (let row = 0; row < game.height; row += 1) {
     for (let col = 0; col < game.width; col += 1) {
       if (game.get(row, col) !== null) continue;
-      const trial = GoEngine.fromSearchState(state);
-      if (trial.play(row, col).ok) mask[row * game.width + col] = 1;
+      if (game.checkPlay(row, col).ok) mask[row * game.width + col] = 1;
     }
   }
-
-  const passTrial = GoEngine.fromSearchState(state);
-  if (passTrial.pass().ok) mask[pointCount] = 1;
+  // Passing is legal exactly when play is.
+  if (game.phase === PHASE_PLAY) mask[pointCount] = 1;
   return mask;
+}
+
+/**
+ * Return one exact GoEngine legality flag per point plus pass.
+ *
+ * KataGo was trained for a different topology, and its policy head does not
+ * know this game's positional-superko history, so GoEngine's own rules remain
+ * authoritative for every point.
+ */
+export function buildLegalPolicyMask(gameOrState) {
+  return legalMaskFor(searchPosition(gameOrState));
 }
 
 /**
@@ -155,10 +168,7 @@ export function policyPriorsFromLogits({
   gameOrState,
   policyChannels,
 }) {
-  const game =
-    gameOrState instanceof GoEngine
-      ? GoEngine.fromSearchState(gameOrState.exportSearchState())
-      : GoEngine.fromSearchState(gameOrState);
+  const game = searchPosition(gameOrState);
   const { width, height } = game;
   const pointCount = width * height;
   if (!Number.isInteger(policyChannels) || policyChannels < 1) {
@@ -171,7 +181,7 @@ export function policyPriorsFromLogits({
     throw new RangeError("pass tensor has no policy channel");
   }
 
-  const mask = buildLegalPolicyMask(game);
+  const mask = legalMaskFor(game);
   const logits = new Float64Array(pointCount + 1);
   let maximum = -Infinity;
   for (let index = 0; index < pointCount; index += 1) {

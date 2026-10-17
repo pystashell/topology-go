@@ -92,16 +92,16 @@ function boardDimensions(value) {
   return { width, height };
 }
 
-function normalizeState(gameOrState) {
-  if (gameOrState instanceof GoEngine) {
-    return gameOrState.exportSearchState();
-  }
+/**
+ * Validate external input once and return a private search engine. Search
+ * nodes then branch with cloneForSearch(), which skips re-validating the
+ * superko history that this trusted engine already guarantees.
+ */
+function searchGame(gameOrState) {
   if (gameOrState && typeof gameOrState.exportSearchState === "function") {
-    return GoEngine.fromSearchState(
-      gameOrState.exportSearchState(),
-    ).exportSearchState();
+    return GoEngine.fromSearchState(gameOrState.exportSearchState());
   }
-  return GoEngine.fromSearchState(gameOrState).exportSearchState();
+  return GoEngine.fromSearchState(gameOrState);
 }
 
 function normalizeDifficulty(value = "easy") {
@@ -404,7 +404,7 @@ function refineFragileTactic(game, analysis) {
     return analysis;
   }
 
-  const trial = GoEngine.fromSearchState(game.exportSearchState());
+  const trial = game.cloneForSearch();
   const played = trial.play(analysis.move.row, analysis.move.col);
   if (!played.ok) return analysis;
 
@@ -568,18 +568,17 @@ function cancellationCheck(settings) {
 
 /** Return all exact GoEngine-legal moves without modifying the supplied game. */
 export function listLegalMoves(gameOrState, { includePass = true } = {}) {
-  const state = normalizeState(gameOrState);
-  if (state.phase !== PHASE_PLAY) return [];
+  const game = searchGame(gameOrState);
+  if (game.phase !== PHASE_PLAY) return [];
   const moves = [];
 
-  for (const move of emptyPointMoves(state)) {
-    const trial = GoEngine.fromSearchState(state);
-    if (applyMove(trial, move).ok) moves.push(copyMove(move));
+  // checkPlay() runs play()'s capture, suicide and superko rules on one
+  // position, so no per-point clone is needed.
+  for (const move of emptyPointMoves(game)) {
+    if (game.checkPlay(move.row, move.col).ok) moves.push(copyMove(move));
   }
-  if (includePass) {
-    const trial = GoEngine.fromSearchState(state);
-    if (trial.pass().ok) moves.push({ type: "pass" });
-  }
+  // Passing is always legal while play is active.
+  if (includePass) moves.push({ type: "pass" });
   return moves;
 }
 
@@ -638,7 +637,9 @@ function expand(node, settings) {
   );
   if (node.children.length >= allowedChildren) return null;
 
-  const game = GoEngine.fromSearchState(node.state);
+  // Illegal moves leave the clone unchanged, so one clone serves every
+  // attempt and becomes the child's own position on success.
+  const game = node.state.cloneForSearch();
   while (node.untriedMoves.length > 0) {
     cancellationCheck(settings);
     const analysis = node.untriedMoves.shift();
@@ -646,7 +647,7 @@ function expand(node, settings) {
     if (!result.ok) continue;
 
     const child = createNode(
-      game.exportSearchState(),
+      game,
       copyMove(analysis.move),
       analysis,
     );
@@ -830,7 +831,7 @@ function evaluate(game, rootPlayer) {
 }
 
 function rollout(state, rootPlayer, settings) {
-  const game = GoEngine.fromSearchState(state);
+  const game = state.cloneForSearch();
   for (let ply = 0; ply < settings.rolloutLimit; ply += 1) {
     cancellationCheck(settings);
     if (game.phase !== PHASE_PLAY) break;
@@ -870,7 +871,7 @@ function runIteration(root, rootPlayer, settings) {
 }
 
 function fallbackMove(state, settings) {
-  const game = GoEngine.fromSearchState(state);
+  const game = state.cloneForSearch();
   const ranked = rankedMoveEntries(
     game,
     settings,
@@ -981,7 +982,7 @@ function variationRootChildren(ranked, selected) {
 }
 
 function createSearch(gameOrState, options) {
-  const state = normalizeState(gameOrState);
+  const state = searchGame(gameOrState);
   if (state.phase !== PHASE_PLAY) {
     throw new RangeError("The AI can only choose a move while play is active");
   }
