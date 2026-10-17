@@ -451,6 +451,8 @@ let aiGameModelIds = {
 let aiThinking = false;
 let aiWorker = null;
 let aiWorkerModelId = null;
+let aiWorkerBusy = false;
+let aiWorkerIdleTimer = null;
 let aiRequestId = 0;
 let aiWorkerContext = null;
 let aiFailedPositionToken = null;
@@ -546,6 +548,10 @@ aiGameModelIds = {
 };
 liveAnalysis.modelId = preferredAIModelId;
 const gameSounds = createGameSounds({ enabled: soundEnabled });
+
+// An idle AI worker keeps its decoded model so the next game starts without
+// fetching and decompressing it again; free it after a long idle stretch.
+const AI_WORKER_IDLE_RELEASE_MS = 10 * 60_000;
 
 const KATAGO_AI = Object.freeze({
   timeMs: 1_400,
@@ -2116,7 +2122,8 @@ function enterReplay(sourceOverride = null, options = {}) {
   }
 
   try {
-    if (aiThinking || aiWorker) cancelAIThinking();
+    // Replay analysis loads its own copy of the model; do not hold two.
+    cancelAIThinking({ terminate: true });
     cancelReplayAIReview({ terminate: true });
     const replay = buildReplayFrames(cloneSerializable(source));
     if (!Array.isArray(replay.frames) || replay.frames.length < 2) {
@@ -2532,11 +2539,43 @@ function syncAIMatchModePresentation() {
     : isAIMode() ? "按新设置重开" : "开始对局";
 }
 
-function cancelAIThinking() {
-  aiRequestId += 1;
+function clearAIWorkerIdleRelease() {
+  if (aiWorkerIdleTimer !== null) window.clearTimeout(aiWorkerIdleTimer);
+  aiWorkerIdleTimer = null;
+}
+
+function terminateAIWorker() {
+  clearAIWorkerIdleRelease();
   aiWorker?.terminate();
   aiWorker = null;
   aiWorkerModelId = null;
+  aiWorkerBusy = false;
+}
+
+function scheduleAIWorkerIdleRelease() {
+  clearAIWorkerIdleRelease();
+  if (!aiWorker) return;
+  aiWorkerIdleTimer = window.setTimeout(() => {
+    aiWorkerIdleTimer = null;
+    // Keep the model while an AI game (local or online seat) still uses it.
+    if (aiWorkerBusy || isAIMode() || isOnlineAIController()) {
+      scheduleAIWorkerIdleRelease();
+      return;
+    }
+    terminateAIWorker();
+  }, AI_WORKER_IDLE_RELEASE_MS);
+}
+
+/**
+ * Stop any AI turn in progress. A cooperative cancel cannot interrupt a model
+ * download or a WebGPU dispatch, so a worker that is busy is terminated; an
+ * idle worker is reused by the next game with the same model (replies to
+ * older request ids are ignored). Pass terminate to always release it.
+ */
+function cancelAIThinking({ terminate = false } = {}) {
+  aiRequestId += 1;
+  if (terminate || aiWorkerBusy) terminateAIWorker();
+  else scheduleAIWorkerIdleRelease();
   aiThinking = false;
   aiWorkerContext = null;
   elements.boardStage?.removeAttribute("aria-busy");
@@ -2627,7 +2666,7 @@ function recoverFromAIError(message) {
   const onlineContext = aiWorkerContext?.kind === MATCH_TRANSPORT_ONLINE;
   if (!isAITurn() && !onlineContext) return;
   const failedToken = onlineContext ? aiWorkerContext?.positionToken : null;
-  cancelAIThinking();
+  cancelAIThinking({ terminate: true });
   if (onlineContext) {
     aiFailedPositionToken = failedToken;
     setMessage(
@@ -2666,11 +2705,9 @@ function handleAIWorkerMessage(event) {
   }
 
   const context = aiWorkerContext;
-  const keepWorker = message.type === "result";
-  if (!keepWorker) {
-    aiWorker?.terminate();
-    aiWorker = null;
-  }
+  aiWorkerBusy = false;
+  if (message.type === "result") scheduleAIWorkerIdleRelease();
+  else terminateAIWorker();
   aiThinking = false;
   elements.boardStage.removeAttribute("aria-busy");
   if (message.type === "result") {
@@ -2685,9 +2722,12 @@ function handleAIWorkerMessage(event) {
 }
 
 function handleAIWorkerError(event) {
-  if (!aiThinking) return;
-  aiWorker?.terminate();
-  aiWorker = null;
+  if (!aiThinking) {
+    // A kept idle worker that broke must not be reused by the next game.
+    terminateAIWorker();
+    return;
+  }
+  terminateAIWorker();
   aiThinking = false;
   elements.boardStage.removeAttribute("aria-busy");
   recoverFromAIError(localizedErrorMessage(event, "AI 思考线程没有正常启动。"));
@@ -2721,8 +2761,9 @@ function maybeStartAITurn() {
     recoverFromAIError(`${getAIModel(modelId).name} 需要 WebGPU，当前浏览器无法运行。`);
     return;
   }
+  // A worker holds one model; switching models needs a fresh worker.
   if (aiWorker && aiWorkerModelId && aiWorkerModelId !== modelId) {
-    cancelAIThinking();
+    cancelAIThinking({ terminate: true });
   }
 
   aiThinking = true;
@@ -2768,6 +2809,8 @@ function maybeStartAITurn() {
     }
     const level = KATAGO_AI;
     aiWorkerModelId = modelId;
+    aiWorkerBusy = true;
+    clearAIWorkerIdleRelease();
     worker.postMessage({
       type: "think",
       id: requestId,
@@ -7151,7 +7194,7 @@ window.addEventListener("keydown", unlockGameSounds, { capture: true, once: true
 window.addEventListener(
   "beforeunload",
   () => {
-    cancelAIThinking();
+    cancelAIThinking({ terminate: true });
     cancelReplayAIReview({ terminate: true });
     cancelLobbyRequest();
     if (clockTimer !== null) window.clearInterval(clockTimer);
