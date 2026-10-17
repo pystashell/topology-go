@@ -2572,6 +2572,15 @@ export class RoomEngine {
           "FORBIDDEN",
         );
       }
+      // The pre-negotiation restart may replace a finished or untouched
+      // board, but never a game that is under way.
+      if (this.roundInProgress()) {
+        throw new RoomEngineError(
+          "Finish the current game before proposing another one.",
+          409,
+          "GAME_IN_PROGRESS",
+        );
+      }
       const legacyMode = normalizeMatchMode(
         payload.mode ??
           (this.automatedPlayer() ? MATCH_MODE_HUMAN_AI : this.state.match?.mode),
@@ -3056,8 +3065,11 @@ export class RoomEngine {
    * with an immediately playing round joinable.
    */
   friendRoundInProgress() {
+    return this.state.match?.mode === MATCH_MODE_FRIEND && this.roundInProgress();
+  }
+
+  roundInProgress() {
     return this.state.match?.status === MATCH_STATUS_PLAYING &&
-      this.state.match.mode === MATCH_MODE_FRIEND &&
       this.state.moveCount > 0 &&
       this.game.phase !== PHASE_FINISHED &&
       !this.currentRoundResult();
