@@ -52,6 +52,7 @@ function joinHarness({ prior = [], fail }) {
     cancelReplayAIReview: noop, rememberPlayerName: noop,
     restoreOfflineGame: noop, updateUI: noop, maybeStartAITurn: noop,
     setOnlineBusy: noop,
+    localizedErrorMessage: (error, fallback) => error?.message || fallback,
     showOnlineError: (message = "") => { errorMessage = message; },
   };
   const join = vm.runInNewContext(`${renderSource}\n${joinSource}\njoinOnlineRoom`, context);

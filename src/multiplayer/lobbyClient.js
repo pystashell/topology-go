@@ -5,6 +5,8 @@ export class LobbyClientError extends Error {
     super(message, options.cause ? { cause: options.cause } : undefined);
     this.name = "LobbyClientError";
     this.code = options.code ?? "LOBBY_ERROR";
+    this.status = options.status ?? null;
+    this.retryAfterSeconds = options.retryAfterSeconds ?? null;
   }
 }
 
@@ -32,9 +34,16 @@ export async function fetchLobbyRooms({
   }
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
+    // Keep the server's code (e.g. RATE_LIMITED) so the UI can translate it
+    // and back off instead of retrying immediately.
+    const retryAfter = Number(response.headers?.get?.("Retry-After"));
     throw new LobbyClientError(
       typeof payload?.error === "string" ? payload.error : "在线大厅暂时不可用。",
-      { code: "LOBBY_REJECTED" },
+      {
+        code: typeof payload?.code === "string" ? payload.code : "LOBBY_REJECTED",
+        status: response.status,
+        retryAfterSeconds: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
+      },
     );
   }
   const rooms = Array.isArray(payload?.rooms)

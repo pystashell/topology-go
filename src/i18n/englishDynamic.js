@@ -287,6 +287,30 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "等待服务器确认超时。": "Timed out waiting for server confirmation.",
   "发送房间命令失败。": "Failed to send the room command.",
   "房间连接已关闭。": "The room connection is closed.",
+  "当前环境无法安全生成房间凭证。": "This browser cannot generate secure room credentials.",
+  "无法生成有效的房间号。": "Could not generate a valid room code.",
+  "无法保存建房凭据，请检查浏览器存储设置后重试。":
+    "Could not save the room-creation credentials. Check browser storage settings and try again.",
+  "没有可重试的建房请求。": "There is no room creation to retry.",
+  "无法移除已冲突的建房凭据，请检查浏览器存储设置。":
+    "Could not remove conflicting room-creation credentials. Check browser storage settings.",
+  "服务器返回的建房身份与请求不一致。": "The server returned a host identity that does not match the request.",
+  "暂时无法分配房间码，请重试。": "Could not allocate a room code right now. Try again.",
+  "没有可恢复的加入请求。": "There is no join request to recover.",
+  "无法保存加入凭据，请检查浏览器存储设置后重试。":
+    "Could not save the join credentials. Check browser storage settings and try again.",
+  "服务器返回的加入身份与请求不一致。": "The server returned an identity that does not match the join request.",
+  "无法保存房间会话，请检查浏览器存储设置后重试。":
+    "Could not save the room session. Check browser storage settings and try again.",
+  "尚未取得可确认的棋局局面，请等待房间同步。": "The current position is not confirmed yet. Wait for the room to sync.",
+  "无法保存联机命令序号，请检查浏览器存储设置后重试。":
+    "Could not save the online command sequence. Check browser storage settings and try again.",
+  "无法删除当前房间身份的本地凭据；请检查浏览器存储设置。":
+    "Could not delete this room identity's local credentials. Check browser storage settings.",
+  "当前环境无法连接在线大厅。": "This browser cannot reach the online lobby.",
+  "暂时无法连接在线大厅。": "Cannot reach the online lobby right now.",
+  "在线大厅暂时不可用。": "The online lobby is unavailable right now.",
+  "AI 模型已切换，请重新启动分析线程。": "The AI model changed. Restart the analysis worker.",
   "正在创建…": "Creating…",
   "创建房间": "Create room",
   "正在加入…": "Joining…",

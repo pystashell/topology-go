@@ -109,6 +109,7 @@ import {
   applyDocumentTranslations,
   getLocale,
   initializeI18n,
+  localizedErrorMessage,
   setLocale,
   subscribeLocale,
   translateText,
@@ -1107,7 +1108,7 @@ function exportCurrentSgf() {
     setMessage(`已导出 ${filename}。${topologyNote}${scoringNote}`);
   } catch (error) {
     console.error("Unable to export SGF", error);
-    setMessage(`导出 SGF 失败：${error.message || "棋谱格式无法生成"}`, true);
+    setMessage(`导出 SGF 失败：${localizedErrorMessage(error, "棋谱格式无法生成")}`, true);
   }
 }
 
@@ -1144,7 +1145,9 @@ async function importSgfFile(file) {
     );
   } catch (error) {
     console.error("Unable to import SGF", error);
-    const reason = error instanceof SgfError ? error.message : "文件不是可识别的 SGF 棋谱";
+    const reason = error instanceof SgfError
+      ? localizedErrorMessage(error, "文件不是可识别的 SGF 棋谱")
+      : "文件不是可识别的 SGF 棋谱";
     setMessage(`导入 SGF 失败：${reason}`, true);
     maybeStartAITurn();
   } finally {
@@ -1505,7 +1508,7 @@ async function sendChatPayload(payload, { clearText = false } = {}) {
     closeChatPickers();
     setChatStatus("");
   } catch (error) {
-    setChatStatus(error.message || "消息发送失败，请稍后重试。", true);
+    setChatStatus(localizedErrorMessage(error, "消息发送失败，请稍后重试。"), true);
   } finally {
     chatSending = false;
     syncChatUI();
@@ -1744,14 +1747,14 @@ function handleReviewWorkerMessage(event) {
   }
 
   if (completed.context === "live") {
-    liveAnalysis.message = `AI 局势分析暂时失败：${message.message || "分析线程返回错误"}`;
+    liveAnalysis.message = `AI 局势分析暂时失败：${localizedErrorMessage(message, "分析线程返回错误")}`;
     liveAnalysis.error = true;
     syncAIReviewUI();
     return;
   }
   if (!replaySession) return;
   replaySession.analysisBatch = null;
-  replaySession.analysisMessage = `AI 复盘暂时失败：${message.message || "分析线程返回错误"}`;
+  replaySession.analysisMessage = `AI 复盘暂时失败：${localizedErrorMessage(message, "分析线程返回错误")}`;
   replaySession.analysisError = true;
   syncAIReviewUI();
 }
@@ -1762,14 +1765,14 @@ function handleReviewWorkerError(event) {
   reviewActive = null;
   terminateReviewWorker();
   if (failed.context === "live") {
-    liveAnalysis.message = `AI 局势分析线程没有正常启动：${event.message || "未知错误"}`;
+    liveAnalysis.message = `AI 局势分析线程没有正常启动：${localizedErrorMessage(event, "未知错误")}`;
     liveAnalysis.error = true;
     syncAIReviewUI();
     return;
   }
   if (!replaySession) return;
   replaySession.analysisBatch = null;
-  replaySession.analysisMessage = `AI 复盘线程没有正常启动：${event.message || "未知错误"}`;
+  replaySession.analysisMessage = `AI 复盘线程没有正常启动：${localizedErrorMessage(event, "未知错误")}`;
   replaySession.analysisError = true;
   syncAIReviewUI();
 }
@@ -1828,7 +1831,7 @@ function startReviewAtStep(step, mode) {
     worker = ensureReviewWorker();
   } catch (error) {
     replaySession.analysisBatch = null;
-    replaySession.analysisMessage = `无法重建第 ${step} 手：${error.message}`;
+    replaySession.analysisMessage = `无法重建第 ${step} 手：${localizedErrorMessage(error, "未知错误")}`;
     replaySession.analysisError = true;
     syncAIReviewUI();
     return false;
@@ -1927,7 +1930,7 @@ function analyzeCurrentLivePosition() {
     });
     worker = ensureReviewWorker();
   } catch (error) {
-    liveAnalysis.message = `无法复制当前局面：${error.message}`;
+    liveAnalysis.message = `无法复制当前局面：${localizedErrorMessage(error, "未知错误")}`;
     liveAnalysis.error = true;
     syncAIReviewUI();
     return;
@@ -2665,7 +2668,7 @@ function handleAIWorkerMessage(event) {
       applyAIMove(message.move, message.stats);
     }
   } else if (message.code !== "AI_SEARCH_CANCELLED") {
-    recoverFromAIError(message.message || "AI 思考时发生错误。");
+    recoverFromAIError(localizedErrorMessage(message, "AI 思考时发生错误。"));
   }
 }
 
@@ -2675,7 +2678,7 @@ function handleAIWorkerError(event) {
   aiWorker = null;
   aiThinking = false;
   elements.boardStage.removeAttribute("aria-busy");
-  recoverFromAIError(event.message || "AI 思考线程没有正常启动。");
+  recoverFromAIError(localizedErrorMessage(event, "AI 思考线程没有正常启动。"));
 }
 
 function ensureAIWorker() {
@@ -2748,7 +2751,7 @@ function maybeStartAITurn() {
     } catch (error) {
       aiThinking = false;
       elements.boardStage.removeAttribute("aria-busy");
-      recoverFromAIError(error.message || "AI 无法读取当前棋局。");
+      recoverFromAIError(localizedErrorMessage(error, "AI 无法读取当前棋局。"));
       return;
     }
     const level = KATAGO_AI;
@@ -3238,7 +3241,7 @@ async function refreshLobby({ announce = false } = {}) {
     elements.lobbyStatus.textContent = `共 ${lobbyRooms.length} 个公开房间`;
   } catch (error) {
     if (error?.cause?.name === "AbortError") return;
-    elements.lobbyStatus.textContent = error?.message || "暂时无法读取在线大厅。";
+    elements.lobbyStatus.textContent = localizedErrorMessage(error, "暂时无法读取在线大厅。");
     elements.lobbyStatus.classList.add("error");
     await renderLobbyRooms();
   } finally {
@@ -4460,7 +4463,7 @@ async function sendOnlineCommand(action, payload = {}, { onError } = {}) {
     onlineCommandPending = false;
     onlineCommandRevision = null;
     onError?.(error);
-    setMessage(error.message || "房间拒绝了这个操作。", true);
+    setMessage(localizedErrorMessage(error, "房间拒绝了这个操作。"), true);
     updateRoomUI();
     return false;
   } finally {
@@ -5855,7 +5858,7 @@ function handleBoardPoint({ row, col }) {
         liveAnalysis.error = false;
         syncAIReviewUI();
       } catch (error) {
-        liveAnalysis.message = `无法建立本地分析分支：${error.message}`;
+        liveAnalysis.message = `无法建立本地分析分支：${localizedErrorMessage(error, "未知错误")}`;
         liveAnalysis.error = true;
         syncAIReviewUI();
       }
@@ -6484,8 +6487,8 @@ async function createOnlineRoom({ pendingPlayerId = "" } = {}) {
     maybeStartAITurn();
     const pending = roomClient.pendingCreateCode;
     showOnlineError(pending
-      ? `${error.message || "创建房间失败"} 已保留房间 ${pending} 的建房凭据；可点击“核对并恢复”重试原请求。若要修改设置，请先放弃所选恢复凭据。`
-      : error.message || "创建房间失败，请稍后重试。");
+      ? `${localizedErrorMessage(error, "创建房间失败，请稍后重试。")} 已保留房间 ${pending} 的建房凭据；可点击“核对并恢复”重试原请求。若要修改设置，请先放弃所选恢复凭据。`
+      : localizedErrorMessage(error, "创建房间失败，请稍后重试。"));
   } finally {
     if (onlineEntryController === request) {
       onlineEntryController = null;
@@ -6566,10 +6569,10 @@ async function joinOnlineRoom(role = "player", pendingPlayerId = "") {
       : pending.some((entry) => !pendingBefore.has(entry.playerId));
     if (pending.length) elements.roomCodeInput.value = code;
     showOnlineError(currentPending
-      ? `${error.message || "加入房间失败。"} 已保留本次加入凭据；请使用下方“核对并恢复”重试原身份。`
+      ? `${localizedErrorMessage(error, "加入房间失败。")} 已保留本次加入凭据；请使用下方“核对并恢复”重试原身份。`
       : pending.length
-        ? `${error.message || "加入房间失败。"} 此房间仍有其他可恢复的加入请求，请核对身份后再恢复。`
-        : error.message || "加入房间失败，请检查房间号。");
+        ? `${localizedErrorMessage(error, "加入房间失败。")} 此房间仍有其他可恢复的加入请求，请核对身份后再恢复。`
+        : localizedErrorMessage(error, "加入房间失败，请检查房间号。"));
   } finally {
     if (onlineEntryController === request) {
       onlineEntryController = null;
@@ -6606,7 +6609,7 @@ function resumeStoredOnlineRoom() {
   } catch (error) {
     restoreOfflineGame();
     updateUI();
-    showOnlineError(error.message || "恢复房间身份失败。");
+    showOnlineError(localizedErrorMessage(error, "恢复房间身份失败。"));
   }
 }
 
@@ -6688,7 +6691,7 @@ async function leaveOnlineRoom() {
   } catch (error) {
     setOnlineBusy(false);
     setMessage(
-      error.message || "没有收到服务器的退出确认，座位仍然保留，请重试。",
+      localizedErrorMessage(error, "没有收到服务器的退出确认，座位仍然保留，请重试。"),
       true,
     );
     updateRoomUI();
@@ -6958,9 +6961,11 @@ roomClient.on("presence", ({ presence }) => {
   updateRoomUI();
 });
 roomClient.on("error", (error) => {
-  if (elements.onlineDialog.open) showOnlineError(error.message);
+  // Server errors arrive in Chinese; show them by code in other languages.
+  const message = localizedErrorMessage(error);
+  if (elements.onlineDialog.open) showOnlineError(message);
   if (!["SOCKET_ERROR", "COMMAND_SEND_ERROR"].includes(error.code)) {
-    setMessage(error.message, true);
+    setMessage(message, true);
   }
   updateRoomUI();
 });
