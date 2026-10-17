@@ -586,6 +586,14 @@ function capturedTerm(value) {
   return ENGLISH_DYNAMIC[value] ?? value;
 }
 
+function clockCopy(clock) {
+  const byoYomi = /^(\d+) 分钟 \+ (\d+)×(\d+) 秒$/u.exec(clock);
+  if (byoYomi) return `${byoYomi[1]} min + ${byoYomi[2]}×${byoYomi[3]} sec`;
+  const absolute = /^(\d+) 分钟$/u.exec(clock);
+  if (absolute) return `${absolute[1]} min`;
+  return capturedTerm(clock);
+}
+
 function capturedPhrase(value) {
   const exact = capturedTerm(value);
   if (exact !== value) return exact;
@@ -605,19 +613,13 @@ function capturedPhrase(value) {
 
 export const ENGLISH_PATTERNS = Object.freeze([
   {
-    pattern: /^(\d+) × (\d+) · (竹筒|甜甜圈|莫比乌斯) · (中国规则|简化领地计分) · (.+)$/u,
-    replace: (_, width, height, topology, rule, clock) => {
-      const clockMatch = /^(\d+) 分钟 \+ (\d+)×(\d+) 秒$/u.exec(clock);
-      const translatedClock = clockMatch
-        ? `${clockMatch[1]} min + ${clockMatch[2]}×${clockMatch[3]} sec`
-        : capturedTerm(clock);
-      return `${width} × ${height} · ${capturedTerm(topology)} · ${capturedTerm(rule)} · ${translatedClock}`;
+    pattern: /^(\d+) × (\d+) · (竹筒|甜甜圈|莫比乌斯) · (中国规则|简化领地计分)(?: · 贴目 ([\d.]+))?(?: · (.+))?$/u,
+    replace: (_, width, height, topology, rule, komi, clock) => {
+      const komiCopy = komi ? ` · Komi ${komi}` : "";
+      return `${width} × ${height} · ${capturedTerm(topology)} · ${capturedTerm(rule)}${komiCopy}${
+        clock ? ` · ${clockCopy(clock)}` : ""
+      }`;
     },
-  },
-  {
-    pattern: /^(\d+) × (\d+) · (竹筒|甜甜圈|莫比乌斯) · (中国规则|简化领地计分)$/u,
-    replace: (_, width, height, topology, rule) =>
-      `${width} × ${height} · ${capturedTerm(topology)} · ${capturedTerm(rule)}`,
   },
   {
     pattern: /^(\d+) 分钟前$/u,

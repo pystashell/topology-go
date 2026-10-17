@@ -478,6 +478,7 @@ const CHAT_EMOJIS = Object.freeze([
 const PLAYER_NAME_KEY = "bamboo-baduk-player-name";
 const SOUND_ENABLED_KEY = "3d-baduk-sound-enabled";
 const AI_MODEL_KEY = "3d-baduk-ai-model";
+const LOBBY_BOARD_SETTINGS_KEY = "3d-baduk-lobby-board-settings-v1";
 const roomClient = new RoomClient();
 
 function savedSoundEnabled() {
@@ -3357,6 +3358,47 @@ function renderStoredIdentityPanels() {
   elements.pendingJoinPanel.hidden = !entering || joins.length === 0;
 }
 
+function rememberLobbyBoardSettings() {
+  try {
+    window.sessionStorage.setItem(
+      LOBBY_BOARD_SETTINGS_KEY,
+      JSON.stringify(getNewGameOptions()),
+    );
+  } catch {
+    // Without tab storage the lobby simply starts from the default board.
+  }
+}
+
+/** Apply board settings carried from /single into the lobby's create flow. */
+function restoreLobbyBoardSettings() {
+  let saved = null;
+  try {
+    saved = JSON.parse(window.sessionStorage.getItem(LOBBY_BOARD_SETTINGS_KEY) ?? "null");
+  } catch {
+    return;
+  }
+  if (!saved || typeof saved !== "object") return;
+  const komi = Number(saved.komi);
+  const clockNumber = (value, max) => {
+    const numeric = Math.round(Number(value) || 0);
+    return Math.max(0, Math.min(max, numeric));
+  };
+  const options = {
+    width: normalizeBoardDimension(saved.width),
+    height: normalizeBoardDimension(saved.height),
+    topology: [TOPOLOGY_CYLINDER, TOPOLOGY_TORUS, TOPOLOGY_MOBIUS].includes(saved.topology)
+      ? saved.topology
+      : TOPOLOGY_CYLINDER,
+    scoringRule: saved.scoringRule === "japanese" ? "japanese" : SCORING_CHINESE,
+    komi: Number.isFinite(komi) && komi >= 0 && komi <= 20 ? komi : 7.5,
+    mainTimeSeconds: clockNumber(saved.mainTimeSeconds, 180 * 60),
+    byoYomiPeriods: clockNumber(saved.byoYomiPeriods, 20),
+    byoYomiSeconds: clockNumber(saved.byoYomiSeconds, 300),
+  };
+  reflectGameOptions(options);
+  resetLobbyPreview();
+}
+
 function savedPlayerName() {
   try {
     return window.localStorage.getItem(PLAYER_NAME_KEY) ?? "";
@@ -3373,15 +3415,46 @@ function rememberPlayerName(name) {
   }
 }
 
+function clockSettingsLabel(settings) {
+  const mainTimeSeconds = Math.max(0, Number(settings?.mainTimeSeconds) || 0);
+  const periods = Math.max(0, Math.round(Number(settings?.byoYomiPeriods) || 0));
+  const periodSeconds = Math.max(0, Math.round(Number(settings?.byoYomiSeconds) || 0));
+  const byoYomi = periods > 0 && periodSeconds > 0;
+  if (mainTimeSeconds <= 0 && !byoYomi) return "不计时";
+  const minutes = Math.round(mainTimeSeconds / 60);
+  return byoYomi
+    ? `${minutes} 分钟 + ${periods}×${periodSeconds} 秒`
+    : `${minutes} 分钟`;
+}
+
+/**
+ * One line describing a game's settings. The invite dialog, the create-room
+ * dialog and a received invitation all use it, so a guest sees the same
+ * clock and komi the host chose.
+ */
+function boardSettingsSummary(settings) {
+  const width = normalizeBoardDimension(settings?.width ?? settings?.size);
+  const height = normalizeBoardDimension(settings?.height ?? settings?.size);
+  const rule = settings?.scoringRule === "japanese" ? "简化领地计分" : "中国规则";
+  const komi = Number(settings?.komi);
+  const komiLabel = Number.isFinite(komi) ? ` · 贴目 ${formatScore(komi)}` : "";
+  return `${width} × ${height} · ${topologySurfaceName(settings?.topology)} · ${rule}${komiLabel} · ${
+    clockSettingsLabel(settings)
+  }`;
+}
+
 function onlineBoardSummaryText() {
-  const width = normalizeBoardDimension(elements.customWidth.value);
-  const height = normalizeBoardDimension(elements.customHeight.value);
-  const rule = elements.scoringRule.value === "japanese" ? "简化领地计分" : "中国规则";
   const clock = selectedTimeControlConfig();
-  const clockLabel = clock
-    ? `${Math.round(clock.mainTimeSeconds / 60)} 分钟 + ${clock.byoYomiPeriods}×${clock.byoYomiSeconds} 秒`
-    : "不计时";
-  return `${width} × ${height} · ${topologySurfaceName(pendingTopology)} · ${rule} · ${clockLabel}`;
+  return boardSettingsSummary({
+    width: elements.customWidth.value,
+    height: elements.customHeight.value,
+    topology: pendingTopology,
+    scoringRule: elements.scoringRule.value,
+    komi: Number(elements.komi.value) || 0,
+    mainTimeSeconds: clock?.mainTimeSeconds ?? 0,
+    byoYomiPeriods: clock?.byoYomiPeriods ?? 0,
+    byoYomiSeconds: clock?.byoYomiSeconds ?? 0,
+  });
 }
 
 function syncLobbySettingsSummary() {
@@ -3445,7 +3518,10 @@ function showOnlineDialog(roomCode = "", { intent = "all" } = {}) {
       : playerOnly
         ? "大厅确认该房间有空位；服务器仍会在进入时再次核验座位。"
         : "输入房间号后，可以申请对手席位，也可以只进入观战。";
-  elements.onlineBoardSummarySection.hidden = intent !== "all";
+  // Creating a room uses the board settings configured on this page, so show
+  // them. The lobby has no settings panel to jump back to.
+  elements.onlineBoardSummarySection.hidden = !["all", "create"].includes(intent);
+  elements.onlineModifySettings.hidden = appRouteMode === "lobby";
   elements.createRoom.hidden = entering;
   elements.onlineJoinDivider.hidden = intent !== "all";
   elements.onlineRoomCodeField.hidden = creating;
@@ -3539,10 +3615,7 @@ function onlineWhiteSeatIsOpen() {
 
 function onlineInvitationSummary(request = onlineRoom?.match?.request) {
   if (!request?.settings) return "等待被邀请方回应。";
-  const settings = request.settings;
-  return `${settings.width} × ${settings.height} · ${topologySurfaceName(settings.topology)} · ${
-    settings.scoringRule === "japanese" ? "简化领地计分" : "中国规则"
-  }`;
+  return boardSettingsSummary(request.settings);
 }
 
 function updateRoomUI() {
@@ -6625,7 +6698,10 @@ async function leaveOnlineRoom() {
 for (const button of elements.openInviteButtons) {
   button.addEventListener("click", showInviteDialog);
 }
-elements.joinInvitation.addEventListener("click", () => navigateAppPath("/lobby"));
+elements.joinInvitation.addEventListener("click", () => {
+  rememberLobbyBoardSettings();
+  navigateAppPath("/lobby");
+});
 elements.cancelInvite.addEventListener("click", closeInviteDialog);
 elements.inviteModifySettings.addEventListener("click", () => {
   closeInviteDialog();
@@ -6646,7 +6722,9 @@ elements.inviteSelfPlay.addEventListener("click", () => {
 });
 elements.inviteFriend.addEventListener("click", () => {
   closeInviteDialog();
-  navigateAppPath("/lobby");
+  // Create the room from this page: the configured board, rules, komi and
+  // clock live here in memory and a navigation would reset them.
+  showOnlineDialog("", { intent: "create" });
 });
 elements.inviteLocal.addEventListener("click", () => void startLocalTwoPlayerGame());
 for (const button of elements.languageButtons) {
@@ -6945,6 +7023,7 @@ if (initialRoute.mode === "root") {
   replaceAppPath("/single");
 }
 
+if (initialRoute.mode === "lobby") restoreLobbyBoardSettings();
 showAppScreen(initialRoute.mode);
 if (initialRoute.mode === "online" && initialRoute.roomCode.length === 6) {
   const sharedRoomCode = initialRoute.roomCode;

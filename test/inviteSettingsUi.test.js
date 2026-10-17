@@ -1,0 +1,99 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import vm from "node:vm";
+
+import { translateText } from "../src/i18n.js";
+
+const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+const slice = (from, to) => {
+  const start = main.indexOf(from);
+  const end = main.indexOf(to, start);
+  assert.ok(start >= 0 && end > start, `expected main.js to contain ${from}`);
+  return main.slice(start, end);
+};
+
+function summaryHarness() {
+  const source = [
+    slice("function isTorusTopology(", "function formatResult("),
+    slice("function normalizeBoardDimension(", "function setPendingDimensions("),
+    slice("function clockSettingsLabel(", "function syncLobbySettingsSummary()"),
+    slice("function onlineInvitationSummary(", "function updateRoomUI()"),
+    "({ boardSettingsSummary, onlineInvitationSummary })",
+  ].join("\n");
+  return vm.runInNewContext(source, {
+    TOPOLOGY_TORUS: "torus",
+    TOPOLOGY_MOBIUS: "mobius",
+    PUBLIC_MIN_BOARD_DIMENSION: 5,
+    MAX_BOARD_DIMENSION: 30,
+    displayedTopology: () => "cylinder",
+    selectedTimeControlConfig: () => null,
+    elements: {},
+    pendingTopology: "cylinder",
+  });
+}
+
+test("a received invitation names the clock and komi the host chose", () => {
+  const { onlineInvitationSummary } = summaryHarness();
+  const summary = onlineInvitationSummary({
+    settings: {
+      width: 9,
+      height: 9,
+      topology: "cylinder",
+      scoringRule: "chinese",
+      komi: 6.5,
+      mainTimeSeconds: 300,
+      byoYomiPeriods: 3,
+      byoYomiSeconds: 20,
+    },
+  });
+  assert.equal(summary, "9 × 9 · 竹筒 · 中国规则 · 贴目 6.5 · 5 分钟 + 3×20 秒");
+  assert.equal(
+    translateText(summary, {}, "en"),
+    "9 × 9 · Cylinder · Chinese rules · Komi 6.5 · 5 min + 3×20 sec",
+  );
+  assert.equal(onlineInvitationSummary(null), "等待被邀请方回应。");
+});
+
+test("settings summaries cover untimed and absolute clocks in both languages", () => {
+  const { boardSettingsSummary } = summaryHarness();
+  const untimed = boardSettingsSummary({
+    width: 13, height: 7, topology: "mobius", scoringRule: "japanese", komi: 0,
+  });
+  assert.equal(untimed, "13 × 7 · 莫比乌斯 · 简化领地计分 · 贴目 0 · 不计时");
+  assert.equal(
+    translateText(untimed, {}, "en"),
+    "13 × 7 · Möbius · Simplified territory scoring · Komi 0 · No clock",
+  );
+  const absolute = boardSettingsSummary({
+    width: 19, height: 19, topology: "torus", komi: 7.5, mainTimeSeconds: 600,
+  });
+  assert.equal(absolute, "19 × 19 · 甜甜圈 · 中国规则 · 贴目 7.5 · 10 分钟");
+  assert.equal(
+    translateText(absolute, {}, "en"),
+    "19 × 19 · Torus · Chinese rules · Komi 7.5 · 10 min",
+  );
+});
+
+test("inviting a friend creates the room in place with the configured settings", () => {
+  const handler = slice("elements.inviteFriend.addEventListener(", "elements.inviteLocal.addEventListener(");
+  assert.match(handler, /showOnlineDialog\("", \{ intent: "create" \}\)/u);
+  assert.doesNotMatch(handler, /navigateAppPath/u, "a navigation reloads the page and drops the settings");
+
+  const dialog = slice("function showOnlineDialog(", "function closeOnlineDialog()");
+  assert.match(dialog, /onlineBoardSummarySection\.hidden = !\["all", "create"\]\.includes\(intent\)/u);
+  const create = slice("async function createOnlineRoom(", "async function joinOnlineRoom(");
+  assert.match(create, /roomClient\.createRoom\(\{ name, \.\.\.getNewGameOptions\(\), signal \}\)/u);
+});
+
+test("settings carried into the lobby are restored before its create flow", () => {
+  assert.match(
+    slice('elements.joinInvitation.addEventListener("click"', "elements.cancelInvite.addEventListener("),
+    /rememberLobbyBoardSettings\(\);\s*navigateAppPath\("\/lobby"\)/u,
+  );
+  assert.match(main, /if \(initialRoute\.mode === "lobby"\) restoreLobbyBoardSettings\(\);\s*showAppScreen\(initialRoute\.mode\);/u);
+  const restore = slice("function restoreLobbyBoardSettings()", "function savedPlayerName()");
+  assert.match(restore, /window\.sessionStorage\.getItem\(LOBBY_BOARD_SETTINGS_KEY\)/u);
+  assert.match(restore, /normalizeBoardDimension\(saved\.width\)/u);
+  assert.match(restore, /reflectGameOptions\(options\);\s*resetLobbyPreview\(\);/u);
+});
