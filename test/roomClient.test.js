@@ -1607,3 +1607,116 @@ test("forgetting a room removes its exact fallback and reports a failed local de
   assert.equal(second.lastCredentialCleanupFailed, true);
   assert.ok(identityRecord(storage, "session", "AB23CD"));
 });
+
+function reconnectHarness({ maxAttempts = 2 } = {}) {
+  MockWebSocket.instances = [];
+  const scheduled = [];
+  const network = new EventTarget();
+  const visibility = new EventTarget();
+  visibility.visibilityState = "visible";
+  const client = new RoomClient({
+    baseUrl: "https://baduk.example/",
+    storage: createMemoryStorage(),
+    WebSocketImpl: MockWebSocket,
+    snapshotTimeoutMs: 0,
+    networkTarget: network,
+    visibilityTarget: visibility,
+    reconnect: { initialDelayMs: 100, jitter: 0, maxAttempts },
+    setTimeoutImpl(callback, delay) {
+      const timer = { callback, delay, cancelled: false };
+      scheduled.push(timer);
+      return timer;
+    },
+    clearTimeoutImpl(timer) { timer.cancelled = true; },
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      return jsonResponse({
+        roomCode: "ZX92CV",
+        session: { code: "ZX92CV", token: body.token, playerId: body.playerId, playerName: "白竹" },
+        room: { code: "ZX92CV", revision: 0 },
+      });
+    },
+  });
+  const setVisibility = (state) => {
+    visibility.visibilityState = state;
+    visibility.dispatchEvent(new Event("visibilitychange"));
+  };
+  return { client, scheduled, network, setVisibility };
+}
+
+test("a client that gave up reconnecting retries with a fresh backoff when the network returns", async () => {
+  const { client, scheduled, network } = reconnectHarness({ maxAttempts: 2 });
+  await client.joinRoom("ZX92CV", { name: "白竹" });
+  MockWebSocket.instances[0].open();
+  MockWebSocket.instances[0].close(1006, "network lost");
+  scheduled.at(-1).callback();
+  MockWebSocket.instances[1].close(1006, "still offline");
+  scheduled.at(-1).callback();
+  MockWebSocket.instances[2].close(1006, "still offline");
+  assert.equal(client.connectionStatus, CONNECTION_STATUS.DISCONNECTED);
+  assert.equal(MockWebSocket.instances.length, 3);
+
+  network.dispatchEvent(new Event("online"));
+  assert.equal(MockWebSocket.instances.length, 4);
+  assert.equal(client.connectionStatus, CONNECTION_STATUS.RECONNECTING);
+  network.dispatchEvent(new Event("online"));
+  assert.equal(MockWebSocket.instances.length, 4, "a handshake in flight is not duplicated");
+
+  // The budget restarts: the next drop waits the initial delay again.
+  MockWebSocket.instances[3].close(1006, "flaky");
+  assert.equal(scheduled.at(-1).delay, 100);
+  scheduled.at(-1).callback();
+  MockWebSocket.instances[4].open();
+  MockWebSocket.instances[4].message({ type: "welcome", room: { code: "ZX92CV", revision: 2 } });
+  assert.equal(client.connectionStatus, CONNECTION_STATUS.CONNECTED);
+  client.destroy();
+});
+
+test("returning to the tab skips the remaining backoff wait", async () => {
+  const { client, scheduled, setVisibility } = reconnectHarness({ maxAttempts: 10 });
+  await client.joinRoom("ZX92CV", { name: "白竹" });
+  MockWebSocket.instances[0].open();
+  MockWebSocket.instances[0].close(1006, "laptop asleep");
+  const waiting = scheduled.at(-1);
+  assert.equal(client.connectionStatus, CONNECTION_STATUS.RECONNECTING);
+
+  setVisibility("hidden");
+  assert.equal(MockWebSocket.instances.length, 1, "a hidden tab does not reconnect early");
+  setVisibility("visible");
+  assert.equal(MockWebSocket.instances.length, 2);
+  assert.equal(waiting.cancelled, true);
+  MockWebSocket.instances[1].open();
+  assert.equal(client.connectionStatus, CONNECTION_STATUS.CONNECTED);
+  setVisibility("hidden");
+  setVisibility("visible");
+  assert.equal(MockWebSocket.instances.length, 2, "a connected client is left alone");
+  client.destroy();
+});
+
+test("a session replaced in another window stays closed when the tab or network returns", async () => {
+  const { client, scheduled, network, setVisibility } = reconnectHarness();
+  await client.joinRoom("ZX92CV", { name: "白竹" });
+  MockWebSocket.instances[0].open();
+  MockWebSocket.instances[0].close(4408, "Session replaced");
+  network.dispatchEvent(new Event("online"));
+  setVisibility("visible");
+  assert.equal(client.connectionStatus, CONNECTION_STATUS.CLOSED);
+  assert.equal(client.lastCloseCode, 4408);
+  assert.equal(MockWebSocket.instances.length, 1);
+  assert.equal(scheduled.length, 0);
+  assert.equal(client.reconnectNow(), false);
+  client.destroy();
+});
+
+test("destroying a client stops listening for network and visibility changes", async () => {
+  const { client, network } = reconnectHarness();
+  await client.joinRoom("ZX92CV", { name: "白竹" });
+  MockWebSocket.instances[0].open();
+  client.destroy();
+  client.session = { token: "x".repeat(64) };
+  client.roomCode = "ZX92CV";
+  client._manualClose = false;
+  client.connectionStatus = CONNECTION_STATUS.DISCONNECTED;
+  network.dispatchEvent(new Event("online"));
+  assert.equal(MockWebSocket.instances.length, 1);
+});

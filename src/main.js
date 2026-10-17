@@ -3863,7 +3863,8 @@ function updateRoomUI() {
       if (roomClient.lastCloseCode === 4408) {
         elements.roomHint.textContent = "这个席位已在另一个窗口打开，本页已停止重连。";
       } else if (roomClient.connectionStatus === CONNECTION_STATUS.DISCONNECTED) {
-        elements.roomHint.textContent = "多次重连仍未成功；可以稍后刷新，或忘记这个房间。";
+        elements.roomHint.textContent =
+          "多次重连仍未成功；网络恢复或回到本页时会自动重试，也可以忘记这个房间。";
       } else {
         elements.roomHint.textContent = connecting
           ? "正在连接房间，稍等一下…"

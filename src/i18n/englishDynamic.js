@@ -243,7 +243,6 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "实时连接": "Live",
   "需要联机": "Online room required",
   "这个席位已在另一个窗口打开，本页已停止重连。": "This seat is open in another window, so this page stopped reconnecting.",
-  "多次重连仍未成功；可以稍后刷新，或忘记这个房间。": "Repeated reconnect attempts failed. Refresh later or forget this room.",
   "已恢复对局，可以继续处理有争议的死活。": "Play resumed. You can continue resolving disputed groups.",
   "房间已建立不同形状的新棋盘，复盘已结束并切回实时局面。": "The room created a board with different settings. Replay ended and the live position is shown.",
   "轮到在线 AI 行棋，已自动退出复盘以保持房间对局和计时继续。": "Online AI is to move, so replay closed automatically to keep the game and clock running.",
