@@ -54,8 +54,9 @@ export const SGF_EXTENSION_PROPERTIES = Object.freeze({
 
 export const SGF_DEFAULT_LIMITS = Object.freeze({
   maxBytes: 2 * 1024 * 1024,
+  // Every game tree needs at least one node, so maxNodes also bounds how
+  // deeply variations can nest; parsing uses an explicit stack.
   maxNodes: 10_000,
-  maxTreeDepth: 64,
   maxPropertiesPerNode: 256,
   maxPropertyValues: 20_000,
   maxValueLength: 256 * 1024,
@@ -558,7 +559,7 @@ class SgfParser {
     const trees = [];
     this.skipWhitespace();
     while (this.text[this.offset] === "(") {
-      trees.push(this.parseTree(1));
+      trees.push(this.parseTree());
       this.skipWhitespace();
     }
     if (!trees.length) this.fail("SGF collection must contain a game tree");
@@ -568,25 +569,32 @@ class SgfParser {
     return trees;
   }
 
-  parseTree(depth) {
-    if (depth > this.limits.maxTreeDepth) {
-      this.fail("SGF variation nesting exceeds the configured limit", "SGF_TOO_DEEP");
-    }
-    this.expect("(");
-    this.skipWhitespace();
-    const nodes = [];
-    while (this.text[this.offset] === ";") {
-      nodes.push(this.parseNode());
-      this.skipWhitespace();
-    }
-    if (!nodes.length) this.fail("Every SGF game tree must contain at least one node");
-    const children = [];
-    while (this.text[this.offset] === "(") {
-      children.push(this.parseTree(depth + 1));
-      this.skipWhitespace();
-    }
-    this.expect(")");
-    return { nodes, children };
+  // A main line with many branch points nests one level per branch, so game
+  // trees are parsed with an explicit stack rather than recursion. Hostile
+  // nesting is still bounded because every tree costs at least one node.
+  parseTree() {
+    const open = [];
+    let root = null;
+    do {
+      if (this.text[this.offset] === "(") {
+        this.expect("(");
+        this.skipWhitespace();
+        const tree = { nodes: [], children: [] };
+        while (this.text[this.offset] === ";") {
+          tree.nodes.push(this.parseNode());
+          this.skipWhitespace();
+        }
+        if (!tree.nodes.length) this.fail("Every SGF game tree must contain at least one node");
+        if (open.length) open[open.length - 1].children.push(tree);
+        else root = tree;
+        open.push(tree);
+      } else {
+        this.expect(")");
+        open.pop();
+        if (open.length) this.skipWhitespace();
+      }
+    } while (open.length);
+    return root;
   }
 
   parseNode() {
@@ -659,15 +667,22 @@ class SgfParser {
   }
 }
 
-function flattenMainLine(tree, output = []) {
-  output.push(...tree.nodes);
-  if (tree.children[0]) flattenMainLine(tree.children[0], output);
+function flattenMainLine(tree) {
+  const output = [];
+  for (let current = tree; current; current = current.children[0]) {
+    output.push(...current.nodes);
+  }
   return output;
 }
 
 function countVariations(tree) {
-  let count = Math.max(0, tree.children.length - 1);
-  for (const child of tree.children) count += countVariations(child);
+  let count = 0;
+  const pending = [tree];
+  while (pending.length) {
+    const current = pending.pop();
+    count += Math.max(0, current.children.length - 1);
+    pending.push(...current.children);
+  }
   return count;
 }
 

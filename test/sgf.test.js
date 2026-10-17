@@ -5,6 +5,7 @@ import { GoEngine, PHASE_FINISHED, WHITE } from "../src/game/goEngine.js";
 import { buildReplayFrames } from "../src/game/replay.js";
 import {
   SgfError,
+  encodeSgfPoint,
   escapeSgfValue,
   exportSgf,
   importSgf,
@@ -448,8 +449,42 @@ test("malformed, oversized, too-deep and out-of-board SGF is rejected", () => {
     { code: "SGF_TOO_LARGE" },
   );
   const nested = `${"(;C[x]".repeat(6)}${")".repeat(6)}`;
-  assert.throws(() => importSgf(nested, { limits: { maxTreeDepth: 5 } }), {
-    code: "SGF_TOO_DEEP",
+  assert.throws(() => importSgf(nested, { limits: { maxNodes: 5 } }), {
+    code: "SGF_TOO_MANY_NODES",
   });
   assert.throws(() => importSgf("(;FF[4]GM[1]SZ[5]PB[unterminated)"), SgfError);
+});
+
+test("long main lines with many branch points import; nesting is bounded by node count", () => {
+  // Each branch point nests the rest of the main line one level deeper:
+  // ;B[aa](;W[ba](...)(;B[ss]))(;W[ss])
+  const branches = 100;
+  let line = ";B[rr]";
+  for (let index = branches - 1; index >= 0; index--) {
+    const color = index % 2 === 0 ? "B" : "W";
+    const point = encodeSgfPoint(Math.floor(index / 19), index % 19, 19);
+    line = `;${color}[${point}](${line})(;${color === "B" ? "W" : "B"}[ss])`;
+  }
+  const imported = importSgf(`(;FF[4]GM[1]SZ[19]XTOP[torus]${line})`);
+  assert.equal(imported.replay.events.length, branches + 1);
+  assert.deepEqual(imported.replay.events.at(-1), { type: "play", color: "black", row: 17, col: 17 });
+  assert.equal(
+    imported.warnings.find(({ code }) => code === "IGNORED_VARIATIONS").message,
+    `${branches} non-main SGF variation branch(es) were ignored.`,
+  );
+  assert.equal(buildReplayFrames(imported.replay).frames.length, branches + 2);
+
+  // Hostile nesting fails fast on the node limit instead of the call stack.
+  const hostile = `(;GM[1]${"(;C[x]".repeat(100_000)}${")".repeat(100_001)}`;
+  assert.throws(() => importSgf(hostile), { code: "SGF_TOO_MANY_NODES" });
+  // With the limits raised, nesting that overflowed the old recursive parser
+  // is handled iteratively.
+  const deep = `(;GM[1]${"(;C[x]".repeat(30_000)}${")".repeat(30_001)}`;
+  const raised = importSgf(deep, {
+    limits: { maxNodes: 50_000, maxPropertyValues: 50_000 },
+  });
+  assert.deepEqual(raised.replay.events, []);
+  assert.throws(() => importSgf("(;GM[1](;C[x]"), { code: "INVALID_SGF" });
+  assert.throws(() => importSgf("(;GM[1](;C[x])))"), { code: "INVALID_SGF" });
+  assert.throws(() => importSgf("(;GM[1](;C[x])x)"), { code: "INVALID_SGF" });
 });
