@@ -915,6 +915,7 @@ function refreshLanguageDependentUI() {
     updateUI();
   }
   if (appRouteMode === "lobby") void renderLobbyRooms();
+  if (elements.onlineDialog.open) renderStoredIdentityPanels();
   applyDocumentTranslations(document);
 }
 
@@ -1007,25 +1008,29 @@ function replayEventCount(source = replaySource()) {
 
 function replayMetadataForExport() {
   if (replaySession?.metadata) return cloneSerializable(replaySession.metadata);
+  // Player names are written into the file (PB/PW), so they use the language
+  // the record was exported in rather than the Chinese source copy.
   if (hasOnlineSession()) {
     return {
-      blackPlayer: roomSeat(BLACK)?.name ?? "黑方",
-      whitePlayer: roomSeat(WHITE)?.name ?? "白方",
+      blackPlayer: roomSeat(BLACK)?.name ?? translateText("黑方"),
+      whitePlayer: roomSeat(WHITE)?.name ?? translateText("白方"),
       result: onlineRoom?.game?.result ?? onlineRoom?.timeControl?.outcome ?? null,
       scoreConfirmations: onlineRoom?.scoreConfirmations ?? [],
     };
   }
   if (isAIMode()) {
-    const aiName = `${currentAIName()} ${getAIModel(aiGameModelId).shortLabel}`;
+    const playerName = (color) => translateText(
+      aiControlsColor(color) ? currentAIName(color) : "人类玩家",
+    );
     return {
-      blackPlayer: isAIvsAI() || aiHumanColor === WHITE ? aiName : "人类玩家",
-      whitePlayer: isAIvsAI() || aiHumanColor === BLACK ? aiName : "人类玩家",
+      blackPlayer: playerName(BLACK),
+      whitePlayer: playerName(WHITE),
       result: game?.result ?? currentTimeoutOutcome() ?? null,
     };
   }
   return {
-    blackPlayer: "黑方",
-    whitePlayer: "白方",
+    blackPlayer: translateText("黑方"),
+    whitePlayer: translateText("白方"),
     result: game?.result ?? currentTimeoutOutcome() ?? null,
   };
 }
@@ -1629,7 +1634,7 @@ function currentReviewModel() {
 function reviewStageText(active = reviewActive) {
   if (!active) return "";
   const model = getAIModel(active.modelId);
-  const prefix = active.context === "live"
+  const stagePrefix = active.context === "live"
     ? `${hasOnlineSession() ? "观战局面" : "当前局面"} · `
     : active.mode === "batch" && replaySession?.analysisBatch
       ? `整局分析 ${replaySession.analysisBatch.completed} / ${replaySession.analysisBatch.total} · 第 ${active.step} 手 · `
@@ -1638,18 +1643,18 @@ function reviewStageText(active = reviewActive) {
     const progress = Number.isFinite(active.loadedBytes) && active.loadedBytes > 0
       ? ` · ${formatModelDownloadProgress(active.loadedBytes, model.id)}`
       : "";
-    return `${prefix}载入 KataGo ${model.shortLabel} 模型（${model.downloadLabel}）${progress}…`;
+    return `${stagePrefix}载入 KataGo ${model.shortLabel} 模型（${model.downloadLabel}）${progress}…`;
   }
   if (active.stage === "neural_inference") {
-    return `${prefix}神经网络正在观察局面…`;
+    return `${stagePrefix}神经网络正在观察局面…`;
   }
   if (active.stage === "searching") {
     const topology = active.context === "live"
       ? game?.topology
       : replaySession?.frames?.[active.step]?.topology;
-    return `${prefix}正在按${topologyName(topology)}规则短搜索…`;
+    return `${stagePrefix}正在按${topologyName(topology)}规则短搜索…`;
   }
-  return `${prefix}正在准备分析…`;
+  return `${stagePrefix}正在准备分析…`;
 }
 
 function terminateReviewWorker() {
@@ -2435,8 +2440,8 @@ function localAIModelId(color = game?.currentPlayer) {
   return normalizeAIModelId(aiGameModelId);
 }
 
-function currentAIName() {
-  return `KataGo ${getAIModel(localAIModelId()).shortLabel} ${topologyName()}混合 AI`;
+function currentAIName(color = game?.currentPlayer) {
+  return `KataGo ${getAIModel(localAIModelId(color)).shortLabel} ${topologyName()}混合 AI`;
 }
 
 function aiColor() {
@@ -3318,6 +3323,7 @@ function renderPendingCreatePanel() {
   elements.pendingCreateSelect.replaceChildren(...pending.map((entry) => {
     const option = document.createElement("option");
     option.value = entry.playerId;
+    option.dataset.i18nIgnore = "";
     option.textContent = `${entry.roomCode} · ${entry.name} · ${entry.width} × ${entry.height}`;
     return option;
   }));
@@ -3337,11 +3343,15 @@ function renderStoredIdentityPanels() {
   const joins = code.length === 6 ? roomClient.listPendingJoins(code) : [];
   const selectedSession = elements.storedSessionSelect.value;
   const selectedJoin = elements.pendingJoinSelect.value;
+  // Options mix a player's own name with a role label: translate only the
+  // role and keep the name out of the DOM translator.
   elements.storedSessionSelect.replaceChildren(...sessions.map((entry) => {
     const option = document.createElement("option");
     option.value = entry.playerId;
-    option.textContent = `${entry.playerName || "未命名"} · ${entry.color === BLACK ? "黑方" :
-      entry.color === WHITE ? "白方" : "观众"}`;
+    option.dataset.i18nIgnore = "";
+    option.textContent = `${entry.playerName || translateText("未命名")} · ${translateText(
+      entry.color === BLACK ? "黑方" : entry.color === WHITE ? "白方" : "观众",
+    )}`;
     return option;
   }));
   if (sessions.some((entry) => entry.playerId === selectedSession)) {
@@ -3350,7 +3360,10 @@ function renderStoredIdentityPanels() {
   elements.pendingJoinSelect.replaceChildren(...joins.map((entry) => {
     const option = document.createElement("option");
     option.value = entry.playerId;
-    option.textContent = `${entry.name || "未命名"} · ${entry.role === "spectator" ? "观战" : "玩家"}`;
+    option.dataset.i18nIgnore = "";
+    option.textContent = `${entry.name || translateText("未命名")} · ${translateText(
+      entry.role === "spectator" ? "观战" : "玩家",
+    )}`;
     return option;
   }));
   if (joins.some((entry) => entry.playerId === selectedJoin)) {
@@ -4570,10 +4583,10 @@ async function dispatchMatchAction(action, payload = {}, options = {}) {
   }
   if (route.target === MATCH_TRANSPORT_ONLINE) {
     if (actor === MATCH_CONTROLLER_AI) {
-      const detail = Number.isFinite(options.stats?.inferenceMs)
+      const inferenceDetail = Number.isFinite(options.stats?.inferenceMs)
         ? `（推理 ${Math.round(options.stats.inferenceMs)} ms）`
         : "";
-      setMessage(`KataGo 已完成判断${detail}，正在由服务器验证并同步…`);
+      setMessage(`KataGo 已完成判断${inferenceDetail}，正在由服务器验证并同步…`);
     }
     if (action === MATCH_ACTION_UNDO) {
       setMessage(

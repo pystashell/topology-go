@@ -379,4 +379,18 @@ export const ENGLISH_STATIC = Object.freeze({
   "黑方 · 你先行": "Black · You move first",
   "黑方提子": "Black captures",
   "黑方落子": "Black to move",
+  // Online dialog identity recovery panels
+  "此浏览器保存了房间身份": "This browser saved a room identity",
+  "请选择要恢复的身份；若要以新身份观战或加入，请使用下方按钮。":
+    "Choose the identity to restore, or use the buttons below to watch or join with a new identity.",
+  "恢复所选身份": "Restore selected identity",
+  "恢复已有身份": "Restore a saved identity",
+  "选择房间身份": "Choose a room identity",
+  "有待确认的加入请求": "Pending join request",
+  "服务器可能已经接纳该身份。选择原请求核对，或在下方用新身份加入。":
+    "The server may already have accepted this identity. Check the original request, or join with a new identity below.",
+  "核对并恢复加入": "Check and recover join",
+  "待确认加入": "Pending join",
+  "选择待确认加入身份": "Choose a pending join identity",
+  "待确认建房": "Pending room creation",
 });
