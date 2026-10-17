@@ -701,12 +701,19 @@ summary:focus-visible {
 
 .gesture-hint {
   position: absolute;
-  left: 50%;
+  left: 12px;
+  right: 12px;
   bottom: 20px;
-  transform: translateX(-50%);
+  /* Centred and only as wide as its text, but never wider than the stage:
+     longer (e.g. English) hints wrap instead of running off a phone. */
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  margin: 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 9px;
+  justify-content: center;
+  gap: 2px 9px;
   padding: 8px 13px;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -714,7 +721,8 @@ summary:focus-visible {
   background: rgba(10, 15, 13, 0.7);
   backdrop-filter: blur(10px);
   font-size: 11px;
-  white-space: nowrap;
+  line-height: 1.35;
+  text-align: center;
   pointer-events: none;
 }
 
@@ -2951,6 +2959,9 @@ select:disabled {
 
   .gesture-hint {
     bottom: 10px;
+    padding: 6px 12px;
+    border-radius: 14px;
+    font-size: 10px;
   }
 
   .control-panel {

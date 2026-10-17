@@ -6390,7 +6390,7 @@ function setViewMode(mode) {
           resetIcon: "↤",
           resetLabel: "重置弧面",
           primaryGesture: finePointer ? "右键横向拖动" : "单指横向拖动",
-          secondaryGesture: "弧面循环 · 滚轮缩放",
+          secondaryGesture: finePointer ? "弧面循环 · 滚轮缩放" : "弧面循环 · 双指缩放",
         }
       : {
           resetIcon: "◎",
@@ -6400,11 +6400,14 @@ function setViewMode(mode) {
               ? "回正莫比乌斯"
               : "回正视角",
           primaryGesture: finePointer ? "右键拖动旋转" : "单指拖动旋转",
+          // Touch screens have no wheel: name the pinch gesture instead.
           secondaryGesture: torus
-            ? "观察内圈与背面 · 滚轮缩放"
+            ? finePointer ? "观察内圈与背面 · 滚轮缩放" : "观察内圈与背面 · 双指缩放"
             : mobius
-              ? "观察单面扭转与唯一边界 · 滚轮缩放"
-              : "滚轮缩放",
+              ? finePointer
+                ? "观察单面扭转与唯一边界 · 滚轮缩放"
+                : "观察单面扭转与唯一边界 · 双指缩放"
+              : finePointer ? "滚轮缩放" : "双指缩放",
         };
 
   elements.toggleRotation.hidden = flatActive;

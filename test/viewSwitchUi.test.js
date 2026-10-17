@@ -22,3 +22,28 @@ test("view mode controls are scoped to the view switch, not the board stage", ()
   assert.equal(insideSwitch.length, 3);
   assert.equal(everywhere.length, insideSwitch.length + 1, "only the stage may carry it outside the switch");
 });
+
+const styleSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+
+test("the gesture hint wraps within the stage instead of overflowing a phone", () => {
+  const rule = /\n\.gesture-hint \{([^}]*)\}/u.exec(styleSource)?.[1];
+  assert.ok(rule, "expected a .gesture-hint rule");
+  assert.doesNotMatch(rule, /white-space:\s*nowrap/u);
+  assert.match(rule, /max-width:\s*calc\(100% - 24px\)/u);
+  assert.match(rule, /flex-wrap:\s*wrap/u);
+  assert.doesNotMatch(rule, /translateX\(-50%\)/u, "a 50% offset halves the width available for wrapping");
+});
+
+test("touch screens are told to pinch, not to use a wheel", () => {
+  const start = mainSource.indexOf("const viewCopy = activeViewMode === \"flat\"");
+  const viewCopy = mainSource.slice(start, mainSource.indexOf("elements.toggleRotation.hidden", start));
+  for (const wheel of viewCopy.match(/"[^"]*滚轮缩放"/gu) ?? []) {
+    const pinch = wheel.replace("滚轮缩放", "双指缩放");
+    assert.ok(
+      viewCopy.includes(`finePointer ? ${wheel} : ${pinch}`) ||
+        viewCopy.includes(`? ${wheel}\n                : ${pinch}`),
+      `${wheel} needs a touch alternative`,
+    );
+  }
+  assert.match(viewCopy, /finePointer \? "滚轮缩放" : "双指缩放"/u);
+});
