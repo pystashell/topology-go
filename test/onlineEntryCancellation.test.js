@@ -127,3 +127,16 @@ test("Escape during an entry detaches an already adopted session before returnin
   await request;
   assert.equal(h.context.appRouteMode, "lobby");
 });
+
+test("a pending create resumed from an /online/ link is cancellable", () => {
+  const start = main.indexOf("} else if (roomClient.pendingCreateCode === sharedRoomCode) {");
+  const branch = main.slice(start, main.indexOf("} else {", start));
+  assert.ok(start >= 0);
+  assert.match(branch, /showOnlineDialog\("", \{ intent: "create" \}\)/u);
+  assert.match(branch, /createOnlineRoom\(\{ pendingPlayerId: candidates\[0\]\.playerId \}\)/u);
+  assert.doesNotMatch(
+    branch,
+    /roomClient\.retryPendingCreate\(/u,
+    "a direct retry has no abort signal, so a late result could be adopted after cancelling",
+  );
+});

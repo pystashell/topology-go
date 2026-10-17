@@ -109,6 +109,7 @@ import {
   applyDocumentTranslations,
   getLocale,
   initializeI18n,
+  localizedErrorMessage,
   setLocale,
   subscribeLocale,
   translateText,
@@ -227,7 +228,10 @@ const elements = {
   gesturePrimary: $("#gesture-primary"),
   gestureSecondary: $("#gesture-secondary"),
   gesturePlace: $("#gesture-place"),
-  viewButtons: [...document.querySelectorAll("[data-view-mode]")],
+  // The board stage itself also carries data-view-mode for CSS. Only the
+  // switch buttons are view controls; matching the stage would mark it
+  // pressed and re-run setViewMode on every board tap.
+  viewButtons: [...document.querySelectorAll(".view-switch [data-view-mode]")],
   arcViewButton: $("#arc-view-button"),
   threeDViewLabel: $("#three-d-view-label"),
   rulesSummary: $("#rules-summary"),
@@ -401,6 +405,9 @@ let lobbyPreviewObserver = null;
 let lobbyPreviewRenderer = null;
 let lobbyStatusFilter = "all";
 let lobbyLoading = false;
+let lobbyLoadError = null;
+let lobbyLastRefreshAt = 0;
+let lobbyPollTimer = null;
 let lobbyModulesPromise = null;
 let appRouteMode = "single";
 const autoRotateByView = { arc: false, "3d": false };
@@ -444,6 +451,8 @@ let aiGameModelIds = {
 let aiThinking = false;
 let aiWorker = null;
 let aiWorkerModelId = null;
+let aiWorkerBusy = false;
+let aiWorkerIdleTimer = null;
 let aiRequestId = 0;
 let aiWorkerContext = null;
 let aiFailedPositionToken = null;
@@ -475,6 +484,11 @@ const CHAT_EMOJIS = Object.freeze([
 const PLAYER_NAME_KEY = "bamboo-baduk-player-name";
 const SOUND_ENABLED_KEY = "3d-baduk-sound-enabled";
 const AI_MODEL_KEY = "3d-baduk-ai-model";
+// The lobby refreshes itself while it is on screen. 3 reads a minute stays
+// far below the server's per-IP lobby budget (~120 GETs a minute).
+const LOBBY_POLL_INTERVAL_MS = 20_000;
+const LOBBY_RATE_LIMIT_BACKOFF_MS = 60_000;
+const LOBBY_BOARD_SETTINGS_KEY = "3d-baduk-lobby-board-settings-v1";
 const roomClient = new RoomClient();
 
 function savedSoundEnabled() {
@@ -534,6 +548,10 @@ aiGameModelIds = {
 };
 liveAnalysis.modelId = preferredAIModelId;
 const gameSounds = createGameSounds({ enabled: soundEnabled });
+
+// An idle AI worker keeps its decoded model so the next game starts without
+// fetching and decompressing it again; free it after a long idle stretch.
+const AI_WORKER_IDLE_RELEASE_MS = 10 * 60_000;
 
 const KATAGO_AI = Object.freeze({
   timeMs: 1_400,
@@ -672,6 +690,11 @@ function colorName(color) {
 
 function liveDisplayedGame() {
   return isNextGameSetup() && rematchPreviewGame ? rematchPreviewGame : game;
+}
+
+/** The board the views currently show: the replay frame, else the live game. */
+function displayedBoardState() {
+  return replaySession?.frames?.[replaySession.index] ?? liveDisplayedGame();
 }
 
 function displayedTopology() {
@@ -905,6 +928,7 @@ function refreshLanguageDependentUI() {
     updateUI();
   }
   if (appRouteMode === "lobby") void renderLobbyRooms();
+  if (elements.onlineDialog.open) renderStoredIdentityPanels();
   applyDocumentTranslations(document);
 }
 
@@ -997,25 +1021,29 @@ function replayEventCount(source = replaySource()) {
 
 function replayMetadataForExport() {
   if (replaySession?.metadata) return cloneSerializable(replaySession.metadata);
+  // Player names are written into the file (PB/PW), so they use the language
+  // the record was exported in rather than the Chinese source copy.
   if (hasOnlineSession()) {
     return {
-      blackPlayer: roomSeat(BLACK)?.name ?? "黑方",
-      whitePlayer: roomSeat(WHITE)?.name ?? "白方",
+      blackPlayer: roomSeat(BLACK)?.name ?? translateText("黑方"),
+      whitePlayer: roomSeat(WHITE)?.name ?? translateText("白方"),
       result: onlineRoom?.game?.result ?? onlineRoom?.timeControl?.outcome ?? null,
       scoreConfirmations: onlineRoom?.scoreConfirmations ?? [],
     };
   }
   if (isAIMode()) {
-    const aiName = `${currentAIName()} ${getAIModel(aiGameModelId).shortLabel}`;
+    const playerName = (color) => translateText(
+      aiControlsColor(color) ? currentAIName(color) : "人类玩家",
+    );
     return {
-      blackPlayer: isAIvsAI() || aiHumanColor === WHITE ? aiName : "人类玩家",
-      whitePlayer: isAIvsAI() || aiHumanColor === BLACK ? aiName : "人类玩家",
+      blackPlayer: playerName(BLACK),
+      whitePlayer: playerName(WHITE),
       result: game?.result ?? currentTimeoutOutcome() ?? null,
     };
   }
   return {
-    blackPlayer: "黑方",
-    whitePlayer: "白方",
+    blackPlayer: translateText("黑方"),
+    whitePlayer: translateText("白方"),
     result: game?.result ?? currentTimeoutOutcome() ?? null,
   };
 }
@@ -1099,7 +1127,7 @@ function exportCurrentSgf() {
     setMessage(`已导出 ${filename}。${topologyNote}${scoringNote}`);
   } catch (error) {
     console.error("Unable to export SGF", error);
-    setMessage(`导出 SGF 失败：${error.message || "棋谱格式无法生成"}`, true);
+    setMessage(`导出 SGF 失败：${localizedErrorMessage(error, "棋谱格式无法生成")}`, true);
   }
 }
 
@@ -1136,7 +1164,9 @@ async function importSgfFile(file) {
     );
   } catch (error) {
     console.error("Unable to import SGF", error);
-    const reason = error instanceof SgfError ? error.message : "文件不是可识别的 SGF 棋谱";
+    const reason = error instanceof SgfError
+      ? localizedErrorMessage(error, "文件不是可识别的 SGF 棋谱")
+      : "文件不是可识别的 SGF 棋谱";
     setMessage(`导入 SGF 失败：${reason}`, true);
     maybeStartAITurn();
   } finally {
@@ -1497,7 +1527,7 @@ async function sendChatPayload(payload, { clearText = false } = {}) {
     closeChatPickers();
     setChatStatus("");
   } catch (error) {
-    setChatStatus(error.message || "消息发送失败，请稍后重试。", true);
+    setChatStatus(localizedErrorMessage(error, "消息发送失败，请稍后重试。"), true);
   } finally {
     chatSending = false;
     syncChatUI();
@@ -1618,7 +1648,7 @@ function currentReviewModel() {
 function reviewStageText(active = reviewActive) {
   if (!active) return "";
   const model = getAIModel(active.modelId);
-  const prefix = active.context === "live"
+  const stagePrefix = active.context === "live"
     ? `${hasOnlineSession() ? "观战局面" : "当前局面"} · `
     : active.mode === "batch" && replaySession?.analysisBatch
       ? `整局分析 ${replaySession.analysisBatch.completed} / ${replaySession.analysisBatch.total} · 第 ${active.step} 手 · `
@@ -1627,18 +1657,18 @@ function reviewStageText(active = reviewActive) {
     const progress = Number.isFinite(active.loadedBytes) && active.loadedBytes > 0
       ? ` · ${formatModelDownloadProgress(active.loadedBytes, model.id)}`
       : "";
-    return `${prefix}载入 KataGo ${model.shortLabel} 模型（${model.downloadLabel}）${progress}…`;
+    return `${stagePrefix}载入 KataGo ${model.shortLabel} 模型（${model.downloadLabel}）${progress}…`;
   }
   if (active.stage === "neural_inference") {
-    return `${prefix}神经网络正在观察局面…`;
+    return `${stagePrefix}神经网络正在观察局面…`;
   }
   if (active.stage === "searching") {
     const topology = active.context === "live"
       ? game?.topology
       : replaySession?.frames?.[active.step]?.topology;
-    return `${prefix}正在按${topologyName(topology)}规则短搜索…`;
+    return `${stagePrefix}正在按${topologyName(topology)}规则短搜索…`;
   }
-  return `${prefix}正在准备分析…`;
+  return `${stagePrefix}正在准备分析…`;
 }
 
 function terminateReviewWorker() {
@@ -1736,14 +1766,14 @@ function handleReviewWorkerMessage(event) {
   }
 
   if (completed.context === "live") {
-    liveAnalysis.message = `AI 局势分析暂时失败：${message.message || "分析线程返回错误"}`;
+    liveAnalysis.message = `AI 局势分析暂时失败：${localizedErrorMessage(message, "分析线程返回错误")}`;
     liveAnalysis.error = true;
     syncAIReviewUI();
     return;
   }
   if (!replaySession) return;
   replaySession.analysisBatch = null;
-  replaySession.analysisMessage = `AI 复盘暂时失败：${message.message || "分析线程返回错误"}`;
+  replaySession.analysisMessage = `AI 复盘暂时失败：${localizedErrorMessage(message, "分析线程返回错误")}`;
   replaySession.analysisError = true;
   syncAIReviewUI();
 }
@@ -1754,14 +1784,14 @@ function handleReviewWorkerError(event) {
   reviewActive = null;
   terminateReviewWorker();
   if (failed.context === "live") {
-    liveAnalysis.message = `AI 局势分析线程没有正常启动：${event.message || "未知错误"}`;
+    liveAnalysis.message = `AI 局势分析线程没有正常启动：${localizedErrorMessage(event, "未知错误")}`;
     liveAnalysis.error = true;
     syncAIReviewUI();
     return;
   }
   if (!replaySession) return;
   replaySession.analysisBatch = null;
-  replaySession.analysisMessage = `AI 复盘线程没有正常启动：${event.message || "未知错误"}`;
+  replaySession.analysisMessage = `AI 复盘线程没有正常启动：${localizedErrorMessage(event, "未知错误")}`;
   replaySession.analysisError = true;
   syncAIReviewUI();
 }
@@ -1820,7 +1850,7 @@ function startReviewAtStep(step, mode) {
     worker = ensureReviewWorker();
   } catch (error) {
     replaySession.analysisBatch = null;
-    replaySession.analysisMessage = `无法重建第 ${step} 手：${error.message}`;
+    replaySession.analysisMessage = `无法重建第 ${step} 手：${localizedErrorMessage(error, "未知错误")}`;
     replaySession.analysisError = true;
     syncAIReviewUI();
     return false;
@@ -1919,7 +1949,7 @@ function analyzeCurrentLivePosition() {
     });
     worker = ensureReviewWorker();
   } catch (error) {
-    liveAnalysis.message = `无法复制当前局面：${error.message}`;
+    liveAnalysis.message = `无法复制当前局面：${localizedErrorMessage(error, "未知错误")}`;
     liveAnalysis.error = true;
     syncAIReviewUI();
     return;
@@ -2093,7 +2123,8 @@ function enterReplay(sourceOverride = null, options = {}) {
   }
 
   try {
-    if (aiThinking || aiWorker) cancelAIThinking();
+    // Replay analysis loads its own copy of the model; do not hold two.
+    cancelAIThinking({ terminate: true });
     cancelReplayAIReview({ terminate: true });
     const replay = buildReplayFrames(cloneSerializable(source));
     if (!Array.isArray(replay.frames) || replay.frames.length < 2) {
@@ -2424,8 +2455,8 @@ function localAIModelId(color = game?.currentPlayer) {
   return normalizeAIModelId(aiGameModelId);
 }
 
-function currentAIName() {
-  return `KataGo ${getAIModel(localAIModelId()).shortLabel} ${topologyName()}混合 AI`;
+function currentAIName(color = game?.currentPlayer) {
+  return `KataGo ${getAIModel(localAIModelId(color)).shortLabel} ${topologyName()}混合 AI`;
 }
 
 function aiColor() {
@@ -2509,11 +2540,43 @@ function syncAIMatchModePresentation() {
     : isAIMode() ? "按新设置重开" : "开始对局";
 }
 
-function cancelAIThinking() {
-  aiRequestId += 1;
+function clearAIWorkerIdleRelease() {
+  if (aiWorkerIdleTimer !== null) window.clearTimeout(aiWorkerIdleTimer);
+  aiWorkerIdleTimer = null;
+}
+
+function terminateAIWorker() {
+  clearAIWorkerIdleRelease();
   aiWorker?.terminate();
   aiWorker = null;
   aiWorkerModelId = null;
+  aiWorkerBusy = false;
+}
+
+function scheduleAIWorkerIdleRelease() {
+  clearAIWorkerIdleRelease();
+  if (!aiWorker) return;
+  aiWorkerIdleTimer = window.setTimeout(() => {
+    aiWorkerIdleTimer = null;
+    // Keep the model while an AI game (local or online seat) still uses it.
+    if (aiWorkerBusy || isAIMode() || isOnlineAIController()) {
+      scheduleAIWorkerIdleRelease();
+      return;
+    }
+    terminateAIWorker();
+  }, AI_WORKER_IDLE_RELEASE_MS);
+}
+
+/**
+ * Stop any AI turn in progress. A cooperative cancel cannot interrupt a model
+ * download or a WebGPU dispatch, so a worker that is busy is terminated; an
+ * idle worker is reused by the next game with the same model (replies to
+ * older request ids are ignored). Pass terminate to always release it.
+ */
+function cancelAIThinking({ terminate = false } = {}) {
+  aiRequestId += 1;
+  if (terminate || aiWorkerBusy) terminateAIWorker();
+  else scheduleAIWorkerIdleRelease();
   aiThinking = false;
   aiWorkerContext = null;
   elements.boardStage?.removeAttribute("aria-busy");
@@ -2604,7 +2667,7 @@ function recoverFromAIError(message) {
   const onlineContext = aiWorkerContext?.kind === MATCH_TRANSPORT_ONLINE;
   if (!isAITurn() && !onlineContext) return;
   const failedToken = onlineContext ? aiWorkerContext?.positionToken : null;
-  cancelAIThinking();
+  cancelAIThinking({ terminate: true });
   if (onlineContext) {
     aiFailedPositionToken = failedToken;
     setMessage(
@@ -2643,11 +2706,9 @@ function handleAIWorkerMessage(event) {
   }
 
   const context = aiWorkerContext;
-  const keepWorker = message.type === "result";
-  if (!keepWorker) {
-    aiWorker?.terminate();
-    aiWorker = null;
-  }
+  aiWorkerBusy = false;
+  if (message.type === "result") scheduleAIWorkerIdleRelease();
+  else terminateAIWorker();
   aiThinking = false;
   elements.boardStage.removeAttribute("aria-busy");
   if (message.type === "result") {
@@ -2657,17 +2718,20 @@ function handleAIWorkerMessage(event) {
       applyAIMove(message.move, message.stats);
     }
   } else if (message.code !== "AI_SEARCH_CANCELLED") {
-    recoverFromAIError(message.message || "AI 思考时发生错误。");
+    recoverFromAIError(localizedErrorMessage(message, "AI 思考时发生错误。"));
   }
 }
 
 function handleAIWorkerError(event) {
-  if (!aiThinking) return;
-  aiWorker?.terminate();
-  aiWorker = null;
+  if (!aiThinking) {
+    // A kept idle worker that broke must not be reused by the next game.
+    terminateAIWorker();
+    return;
+  }
+  terminateAIWorker();
   aiThinking = false;
   elements.boardStage.removeAttribute("aria-busy");
-  recoverFromAIError(event.message || "AI 思考线程没有正常启动。");
+  recoverFromAIError(localizedErrorMessage(event, "AI 思考线程没有正常启动。"));
 }
 
 function ensureAIWorker() {
@@ -2698,8 +2762,9 @@ function maybeStartAITurn() {
     recoverFromAIError(`${getAIModel(modelId).name} 需要 WebGPU，当前浏览器无法运行。`);
     return;
   }
+  // A worker holds one model; switching models needs a fresh worker.
   if (aiWorker && aiWorkerModelId && aiWorkerModelId !== modelId) {
-    cancelAIThinking();
+    cancelAIThinking({ terminate: true });
   }
 
   aiThinking = true;
@@ -2740,11 +2805,13 @@ function maybeStartAITurn() {
     } catch (error) {
       aiThinking = false;
       elements.boardStage.removeAttribute("aria-busy");
-      recoverFromAIError(error.message || "AI 无法读取当前棋局。");
+      recoverFromAIError(localizedErrorMessage(error, "AI 无法读取当前棋局。"));
       return;
     }
     const level = KATAGO_AI;
     aiWorkerModelId = modelId;
+    aiWorkerBusy = true;
+    clearAIWorkerIdleRelease();
     worker.postMessage({
       type: "think",
       id: requestId,
@@ -3213,36 +3280,98 @@ async function renderLobbyRooms() {
     cursor = card.nextElementSibling;
   }
   elements.lobbyEmpty.hidden = filtered.length > 0;
+  if (!lobbyLoading) syncLobbyStatus(filtered.length);
+}
+
+function lobbyCountText(shown, total) {
+  return shown === total
+    ? `共 ${total} 个公开房间`
+    : `显示 ${shown} / 共 ${total} 个公开房间`;
+}
+
+/** The status line counts the rooms the filters leave visible. */
+function syncLobbyStatus(shown) {
+  // The error is kept as an object so a language switch re-renders it.
+  const text = lobbyLoadError
+    ? localizedErrorMessage(lobbyLoadError, "暂时无法读取在线大厅。")
+    : lobbyCountText(shown, lobbyRooms.length);
+  // An unchanged count must not re-announce in this live region every poll;
+  // compare with the rendered (possibly translated) text.
+  if (elements.lobbyStatus.textContent !== translateText(text)) {
+    elements.lobbyStatus.textContent = text;
+  }
+  elements.lobbyStatus.classList.toggle("error", Boolean(lobbyLoadError));
+}
+
+function clearLobbyPoll() {
+  if (lobbyPollTimer !== null) window.clearTimeout(lobbyPollTimer);
+  lobbyPollTimer = null;
+}
+
+function lobbyPollingActive() {
+  return appRouteMode === "lobby" && document.visibilityState !== "hidden";
+}
+
+function scheduleLobbyPoll(delayMs = LOBBY_POLL_INTERVAL_MS) {
+  clearLobbyPoll();
+  if (!lobbyPollingActive()) return;
+  lobbyPollTimer = window.setTimeout(() => {
+    lobbyPollTimer = null;
+    void refreshLobby();
+  }, delayMs);
 }
 
 async function refreshLobby({ announce = false } = {}) {
   if (appRouteMode !== "lobby" || lobbyLoading) return;
+  clearLobbyPoll();
   lobbyLoading = true;
   lobbyRefreshController?.abort();
-  lobbyRefreshController = new AbortController();
+  const request = new AbortController();
+  lobbyRefreshController = request;
   elements.lobbyRefresh.disabled = true;
-  elements.lobbyStatus.classList.remove("error");
-  if (announce || !lobbyRooms.length) elements.lobbyStatus.textContent = "正在读取公开房间…";
+  if (announce || lobbyLastRefreshAt === 0) {
+    elements.lobbyStatus.classList.remove("error");
+    elements.lobbyStatus.textContent = "正在读取公开房间…";
+  }
+  let nextPollMs = LOBBY_POLL_INTERVAL_MS;
   try {
     const { fetchLobbyRooms } = await loadLobbyModules();
-    lobbyRooms = await fetchLobbyRooms({ signal: lobbyRefreshController.signal });
-    await renderLobbyRooms();
-    elements.lobbyStatus.textContent = `共 ${lobbyRooms.length} 个公开房间`;
+    lobbyRooms = await fetchLobbyRooms({ signal: request.signal });
+    lobbyLoadError = null;
   } catch (error) {
-    if (error?.cause?.name === "AbortError") return;
-    elements.lobbyStatus.textContent = error?.message || "暂时无法读取在线大厅。";
-    elements.lobbyStatus.classList.add("error");
-    await renderLobbyRooms();
+    if (error?.cause?.name === "AbortError" || request.signal.aborted) return;
+    lobbyLoadError = error ?? new Error("");
+    if (error?.code === "RATE_LIMITED" || error?.status === 429) {
+      nextPollMs = Math.max(
+        LOBBY_RATE_LIMIT_BACKOFF_MS,
+        (Number(error?.retryAfterSeconds) || 0) * 1_000,
+      );
+    }
   } finally {
-    lobbyLoading = false;
+    if (lobbyRefreshController === request) lobbyLoading = false;
     elements.lobbyRefresh.disabled = false;
   }
+  lobbyLastRefreshAt = Date.now();
+  await renderLobbyRooms();
+  scheduleLobbyPoll(nextPollMs);
 }
 
 function cancelLobbyRequest() {
+  clearLobbyPoll();
   lobbyRefreshController?.abort();
   lobbyRefreshController = null;
   lobbyLoading = false;
+}
+
+function resumeLobbyPolling() {
+  if (appRouteMode !== "lobby") return;
+  if (document.visibilityState === "hidden") {
+    clearLobbyPoll();
+    return;
+  }
+  const elapsed = Date.now() - lobbyLastRefreshAt;
+  if (elapsed >= LOBBY_POLL_INTERVAL_MS) void refreshLobby();
+  else scheduleLobbyPoll(LOBBY_POLL_INTERVAL_MS - elapsed);
 }
 
 function loadLobbyOnce() {
@@ -3307,6 +3436,7 @@ function renderPendingCreatePanel() {
   elements.pendingCreateSelect.replaceChildren(...pending.map((entry) => {
     const option = document.createElement("option");
     option.value = entry.playerId;
+    option.dataset.i18nIgnore = "";
     option.textContent = `${entry.roomCode} · ${entry.name} · ${entry.width} × ${entry.height}`;
     return option;
   }));
@@ -3326,11 +3456,15 @@ function renderStoredIdentityPanels() {
   const joins = code.length === 6 ? roomClient.listPendingJoins(code) : [];
   const selectedSession = elements.storedSessionSelect.value;
   const selectedJoin = elements.pendingJoinSelect.value;
+  // Options mix a player's own name with a role label: translate only the
+  // role and keep the name out of the DOM translator.
   elements.storedSessionSelect.replaceChildren(...sessions.map((entry) => {
     const option = document.createElement("option");
     option.value = entry.playerId;
-    option.textContent = `${entry.playerName || "未命名"} · ${entry.color === BLACK ? "黑方" :
-      entry.color === WHITE ? "白方" : "观众"}`;
+    option.dataset.i18nIgnore = "";
+    option.textContent = `${entry.playerName || translateText("未命名")} · ${translateText(
+      entry.color === BLACK ? "黑方" : entry.color === WHITE ? "白方" : "观众",
+    )}`;
     return option;
   }));
   if (sessions.some((entry) => entry.playerId === selectedSession)) {
@@ -3339,7 +3473,10 @@ function renderStoredIdentityPanels() {
   elements.pendingJoinSelect.replaceChildren(...joins.map((entry) => {
     const option = document.createElement("option");
     option.value = entry.playerId;
-    option.textContent = `${entry.name || "未命名"} · ${entry.role === "spectator" ? "观战" : "玩家"}`;
+    option.dataset.i18nIgnore = "";
+    option.textContent = `${entry.name || translateText("未命名")} · ${translateText(
+      entry.role === "spectator" ? "观战" : "玩家",
+    )}`;
     return option;
   }));
   if (joins.some((entry) => entry.playerId === selectedJoin)) {
@@ -3348,6 +3485,47 @@ function renderStoredIdentityPanels() {
   const entering = !elements.onlineRoomCodeField.hidden;
   elements.storedSessionPanel.hidden = !entering || sessions.length === 0;
   elements.pendingJoinPanel.hidden = !entering || joins.length === 0;
+}
+
+function rememberLobbyBoardSettings() {
+  try {
+    window.sessionStorage.setItem(
+      LOBBY_BOARD_SETTINGS_KEY,
+      JSON.stringify(getNewGameOptions()),
+    );
+  } catch {
+    // Without tab storage the lobby simply starts from the default board.
+  }
+}
+
+/** Apply board settings carried from /single into the lobby's create flow. */
+function restoreLobbyBoardSettings() {
+  let saved = null;
+  try {
+    saved = JSON.parse(window.sessionStorage.getItem(LOBBY_BOARD_SETTINGS_KEY) ?? "null");
+  } catch {
+    return;
+  }
+  if (!saved || typeof saved !== "object") return;
+  const komi = Number(saved.komi);
+  const clockNumber = (value, max) => {
+    const numeric = Math.round(Number(value) || 0);
+    return Math.max(0, Math.min(max, numeric));
+  };
+  const options = {
+    width: normalizeBoardDimension(saved.width),
+    height: normalizeBoardDimension(saved.height),
+    topology: [TOPOLOGY_CYLINDER, TOPOLOGY_TORUS, TOPOLOGY_MOBIUS].includes(saved.topology)
+      ? saved.topology
+      : TOPOLOGY_CYLINDER,
+    scoringRule: saved.scoringRule === "japanese" ? "japanese" : SCORING_CHINESE,
+    komi: Number.isFinite(komi) && komi >= 0 && komi <= 20 ? komi : 7.5,
+    mainTimeSeconds: clockNumber(saved.mainTimeSeconds, 180 * 60),
+    byoYomiPeriods: clockNumber(saved.byoYomiPeriods, 20),
+    byoYomiSeconds: clockNumber(saved.byoYomiSeconds, 300),
+  };
+  reflectGameOptions(options);
+  resetLobbyPreview();
 }
 
 function savedPlayerName() {
@@ -3366,15 +3544,46 @@ function rememberPlayerName(name) {
   }
 }
 
+function clockSettingsLabel(settings) {
+  const mainTimeSeconds = Math.max(0, Number(settings?.mainTimeSeconds) || 0);
+  const periods = Math.max(0, Math.round(Number(settings?.byoYomiPeriods) || 0));
+  const periodSeconds = Math.max(0, Math.round(Number(settings?.byoYomiSeconds) || 0));
+  const byoYomi = periods > 0 && periodSeconds > 0;
+  if (mainTimeSeconds <= 0 && !byoYomi) return "不计时";
+  const minutes = Math.round(mainTimeSeconds / 60);
+  return byoYomi
+    ? `${minutes} 分钟 + ${periods}×${periodSeconds} 秒`
+    : `${minutes} 分钟`;
+}
+
+/**
+ * One line describing a game's settings. The invite dialog, the create-room
+ * dialog and a received invitation all use it, so a guest sees the same
+ * clock and komi the host chose.
+ */
+function boardSettingsSummary(settings) {
+  const width = normalizeBoardDimension(settings?.width ?? settings?.size);
+  const height = normalizeBoardDimension(settings?.height ?? settings?.size);
+  const rule = settings?.scoringRule === "japanese" ? "简化领地计分" : "中国规则";
+  const komi = Number(settings?.komi);
+  const komiLabel = Number.isFinite(komi) ? ` · 贴目 ${formatScore(komi)}` : "";
+  return `${width} × ${height} · ${topologySurfaceName(settings?.topology)} · ${rule}${komiLabel} · ${
+    clockSettingsLabel(settings)
+  }`;
+}
+
 function onlineBoardSummaryText() {
-  const width = normalizeBoardDimension(elements.customWidth.value);
-  const height = normalizeBoardDimension(elements.customHeight.value);
-  const rule = elements.scoringRule.value === "japanese" ? "简化领地计分" : "中国规则";
   const clock = selectedTimeControlConfig();
-  const clockLabel = clock
-    ? `${Math.round(clock.mainTimeSeconds / 60)} 分钟 + ${clock.byoYomiPeriods}×${clock.byoYomiSeconds} 秒`
-    : "不计时";
-  return `${width} × ${height} · ${topologySurfaceName(pendingTopology)} · ${rule} · ${clockLabel}`;
+  return boardSettingsSummary({
+    width: elements.customWidth.value,
+    height: elements.customHeight.value,
+    topology: pendingTopology,
+    scoringRule: elements.scoringRule.value,
+    komi: Number(elements.komi.value) || 0,
+    mainTimeSeconds: clock?.mainTimeSeconds ?? 0,
+    byoYomiPeriods: clock?.byoYomiPeriods ?? 0,
+    byoYomiSeconds: clock?.byoYomiSeconds ?? 0,
+  });
 }
 
 function syncLobbySettingsSummary() {
@@ -3438,7 +3647,10 @@ function showOnlineDialog(roomCode = "", { intent = "all" } = {}) {
       : playerOnly
         ? "大厅确认该房间有空位；服务器仍会在进入时再次核验座位。"
         : "输入房间号后，可以申请对手席位，也可以只进入观战。";
-  elements.onlineBoardSummarySection.hidden = intent !== "all";
+  // Creating a room uses the board settings configured on this page, so show
+  // them. The lobby has no settings panel to jump back to.
+  elements.onlineBoardSummarySection.hidden = !["all", "create"].includes(intent);
+  elements.onlineModifySettings.hidden = appRouteMode === "lobby";
   elements.createRoom.hidden = entering;
   elements.onlineJoinDivider.hidden = intent !== "all";
   elements.onlineRoomCodeField.hidden = creating;
@@ -3532,10 +3744,7 @@ function onlineWhiteSeatIsOpen() {
 
 function onlineInvitationSummary(request = onlineRoom?.match?.request) {
   if (!request?.settings) return "等待被邀请方回应。";
-  const settings = request.settings;
-  return `${settings.width} × ${settings.height} · ${topologySurfaceName(settings.topology)} · ${
-    settings.scoringRule === "japanese" ? "简化领地计分" : "中国规则"
-  }`;
+  return boardSettingsSummary(request.settings);
 }
 
 function updateRoomUI() {
@@ -3704,7 +3913,8 @@ function updateRoomUI() {
       if (roomClient.lastCloseCode === 4408) {
         elements.roomHint.textContent = "这个席位已在另一个窗口打开，本页已停止重连。";
       } else if (roomClient.connectionStatus === CONNECTION_STATUS.DISCONNECTED) {
-        elements.roomHint.textContent = "多次重连仍未成功；可以稍后刷新，或忘记这个房间。";
+        elements.roomHint.textContent =
+          "多次重连仍未成功；网络恢复或回到本页时会自动重试，也可以忘记这个房间。";
       } else {
         elements.roomHint.textContent = connecting
           ? "正在连接房间，稍等一下…"
@@ -3968,6 +4178,19 @@ function updateRoomUI() {
   syncChatUI();
   syncMovePreviewAvailability();
   syncClockUI();
+  syncPlayDock();
+}
+
+/**
+ * On phones the board fills the first screen, which pushed the move status
+ * and Pass/Undo below the fold. While this viewer is playing, styles.css
+ * docks them to the bottom of the viewport (only at phone widths).
+ */
+function syncPlayDock() {
+  const docked = !isReplaying() && !isNextGameSetup() &&
+    !elements.playControls.hidden && !elements.passButton.hidden &&
+    !(hasOnlineSession() && !isOnlinePlayer());
+  elements.gameScreen.classList.toggle("play-docked", docked);
 }
 
 function rememberOfflineGame() {
@@ -4380,7 +4603,7 @@ async function sendOnlineCommand(action, payload = {}, { onError } = {}) {
     onlineCommandPending = false;
     onlineCommandRevision = null;
     onError?.(error);
-    setMessage(error.message || "房间拒绝了这个操作。", true);
+    setMessage(localizedErrorMessage(error, "房间拒绝了这个操作。"), true);
     updateRoomUI();
     return false;
   } finally {
@@ -4487,10 +4710,10 @@ async function dispatchMatchAction(action, payload = {}, options = {}) {
   }
   if (route.target === MATCH_TRANSPORT_ONLINE) {
     if (actor === MATCH_CONTROLLER_AI) {
-      const detail = Number.isFinite(options.stats?.inferenceMs)
+      const inferenceDetail = Number.isFinite(options.stats?.inferenceMs)
         ? `（推理 ${Math.round(options.stats.inferenceMs)} ms）`
         : "";
-      setMessage(`KataGo 已完成判断${detail}，正在由服务器验证并同步…`);
+      setMessage(`KataGo 已完成判断${inferenceDetail}，正在由服务器验证并同步…`);
     }
     if (action === MATCH_ACTION_UNDO) {
       setMessage(
@@ -5240,13 +5463,14 @@ function applyReviewCandidateAction(action, candidates) {
     });
   elements.aiVariationPreview.hidden = !active;
   if (active) {
+    // Replays may be rectangular boards of a different size than the live
+    // game, so every coordinate uses the displayed frame's height.
+    const height = boardHeight(displayedBoardState());
     const rankLabel = active.manual ? "自选点" : `候选 ${active.rank}`;
-    elements.aiVariationTitle.textContent = `${rankLabel} · ${formatReviewMove(active.move)}`;
-    elements.aiVariationLine.textContent = formatReviewVariation(active, {
-      height: replaySession
-        ? boardHeight(replaySession.frames[replaySession.index])
-        : boardHeight(),
-    }) || "当前搜索没有返回更长的变化。";
+    elements.aiVariationTitle.textContent =
+      `${rankLabel} · ${formatReviewMove(active.move, height)}`;
+    elements.aiVariationLine.textContent = formatReviewVariation(active, { height }) ||
+      "当前搜索没有返回更长的变化。";
   }
   renderCurrentAnalysisPosition();
 }
@@ -5718,6 +5942,15 @@ function handleBoardPoint({ row, col }) {
     return;
   }
   if (chatPointPicking && hasOnlineSession()) {
+    const replayFrame = replaySession?.frames?.[replaySession.index];
+    if (
+      replayFrame &&
+      (!sameBoardDimensions(replayFrame, game) || replayFrame.topology !== game.topology)
+    ) {
+      // Chat coordinates always name a point on the room's own board.
+      setChatStatus("当前复盘的棋盘与房间棋盘不同，不能从这里引用棋点。", true);
+      return;
+    }
     insertPickedChatPoint(row, col);
     return;
   }
@@ -5758,11 +5991,14 @@ function handleBoardPoint({ row, col }) {
           { type: "toggle-pin", candidate: manual },
           candidates,
         );
-        liveAnalysis.message = `已在本页选择 ${formatReviewMove(manual.move)}；该分支不会发送到房间。`;
+        liveAnalysis.message = `已在本页选择 ${formatReviewMove(
+          manual.move,
+          boardHeight(displayedBoardState()),
+        )}；该分支不会发送到房间。`;
         liveAnalysis.error = false;
         syncAIReviewUI();
       } catch (error) {
-        liveAnalysis.message = `无法建立本地分析分支：${error.message}`;
+        liveAnalysis.message = `无法建立本地分析分支：${localizedErrorMessage(error, "未知错误")}`;
         liveAnalysis.error = true;
         syncAIReviewUI();
       }
@@ -5921,7 +6157,9 @@ function handleHover(point) {
     elements.coordinateHint.textContent = "";
     return;
   }
-  const displayedGame = liveDisplayedGame();
+  // During replay the views show the replay frame, whose dimensions can
+  // differ from the live game's.
+  const displayedGame = displayedBoardState();
   const letter = COORDINATE_LETTERS[point.col] || String(point.col + 1);
   const coordinate = `${letter}${boardHeight(displayedGame) - point.row}`;
   const seamNotes = [];
@@ -6216,7 +6454,7 @@ function setViewMode(mode) {
   const cylinderActive = cylinder && activeViewMode === "3d";
   const torusActive = torus && activeViewMode === "3d";
   const mobiusActive = mobius && activeViewMode === "3d";
-  const displayed = replaySession?.frames?.[replaySession.index] ?? liveDisplayedGame();
+  const displayed = displayedBoardState();
   const viewOptions = {
     width: boardWidth(displayed), height: boardHeight(displayed),
     onPoint: handleBoardPoint, onHover: handleHover,
@@ -6279,7 +6517,7 @@ function setViewMode(mode) {
           resetIcon: "↤",
           resetLabel: "重置弧面",
           primaryGesture: finePointer ? "右键横向拖动" : "单指横向拖动",
-          secondaryGesture: "弧面循环 · 滚轮缩放",
+          secondaryGesture: finePointer ? "弧面循环 · 滚轮缩放" : "弧面循环 · 双指缩放",
         }
       : {
           resetIcon: "◎",
@@ -6289,11 +6527,14 @@ function setViewMode(mode) {
               ? "回正莫比乌斯"
               : "回正视角",
           primaryGesture: finePointer ? "右键拖动旋转" : "单指拖动旋转",
+          // Touch screens have no wheel: name the pinch gesture instead.
           secondaryGesture: torus
-            ? "观察内圈与背面 · 滚轮缩放"
+            ? finePointer ? "观察内圈与背面 · 滚轮缩放" : "观察内圈与背面 · 双指缩放"
             : mobius
-              ? "观察单面扭转与唯一边界 · 滚轮缩放"
-              : "滚轮缩放",
+              ? finePointer
+                ? "观察单面扭转与唯一边界 · 滚轮缩放"
+                : "观察单面扭转与唯一边界 · 双指缩放"
+              : finePointer ? "滚轮缩放" : "双指缩放",
         };
 
   elements.toggleRotation.hidden = flatActive;
@@ -6389,8 +6630,8 @@ async function createOnlineRoom({ pendingPlayerId = "" } = {}) {
     maybeStartAITurn();
     const pending = roomClient.pendingCreateCode;
     showOnlineError(pending
-      ? `${error.message || "创建房间失败"} 已保留房间 ${pending} 的建房凭据；可点击“核对并恢复”重试原请求。若要修改设置，请先放弃所选恢复凭据。`
-      : error.message || "创建房间失败，请稍后重试。");
+      ? `${localizedErrorMessage(error, "创建房间失败，请稍后重试。")} 已保留房间 ${pending} 的建房凭据；可点击“核对并恢复”重试原请求。若要修改设置，请先放弃所选恢复凭据。`
+      : localizedErrorMessage(error, "创建房间失败，请稍后重试。"));
   } finally {
     if (onlineEntryController === request) {
       onlineEntryController = null;
@@ -6471,10 +6712,10 @@ async function joinOnlineRoom(role = "player", pendingPlayerId = "") {
       : pending.some((entry) => !pendingBefore.has(entry.playerId));
     if (pending.length) elements.roomCodeInput.value = code;
     showOnlineError(currentPending
-      ? `${error.message || "加入房间失败。"} 已保留本次加入凭据；请使用下方“核对并恢复”重试原身份。`
+      ? `${localizedErrorMessage(error, "加入房间失败。")} 已保留本次加入凭据；请使用下方“核对并恢复”重试原身份。`
       : pending.length
-        ? `${error.message || "加入房间失败。"} 此房间仍有其他可恢复的加入请求，请核对身份后再恢复。`
-        : error.message || "加入房间失败，请检查房间号。");
+        ? `${localizedErrorMessage(error, "加入房间失败。")} 此房间仍有其他可恢复的加入请求，请核对身份后再恢复。`
+        : localizedErrorMessage(error, "加入房间失败，请检查房间号。"));
   } finally {
     if (onlineEntryController === request) {
       onlineEntryController = null;
@@ -6511,7 +6752,7 @@ function resumeStoredOnlineRoom() {
   } catch (error) {
     restoreOfflineGame();
     updateUI();
-    showOnlineError(error.message || "恢复房间身份失败。");
+    showOnlineError(localizedErrorMessage(error, "恢复房间身份失败。"));
   }
 }
 
@@ -6602,7 +6843,7 @@ async function leaveOnlineRoom() {
   } catch (error) {
     setOnlineBusy(false);
     setMessage(
-      error.message || "没有收到服务器的退出确认，座位仍然保留，请重试。",
+      localizedErrorMessage(error, "没有收到服务器的退出确认，座位仍然保留，请重试。"),
       true,
     );
     updateRoomUI();
@@ -6612,7 +6853,10 @@ async function leaveOnlineRoom() {
 for (const button of elements.openInviteButtons) {
   button.addEventListener("click", showInviteDialog);
 }
-elements.joinInvitation.addEventListener("click", () => navigateAppPath("/lobby"));
+elements.joinInvitation.addEventListener("click", () => {
+  rememberLobbyBoardSettings();
+  navigateAppPath("/lobby");
+});
 elements.cancelInvite.addEventListener("click", closeInviteDialog);
 elements.inviteModifySettings.addEventListener("click", () => {
   closeInviteDialog();
@@ -6633,7 +6877,9 @@ elements.inviteSelfPlay.addEventListener("click", () => {
 });
 elements.inviteFriend.addEventListener("click", () => {
   closeInviteDialog();
-  navigateAppPath("/lobby");
+  // Create the room from this page: the configured board, rules, komi and
+  // clock live here in memory and a navigation would reset them.
+  showOnlineDialog("", { intent: "create" });
 });
 elements.inviteLocal.addEventListener("click", () => void startLocalTwoPlayerGame());
 for (const button of elements.languageButtons) {
@@ -6710,6 +6956,7 @@ elements.lobbyJoinRoom.addEventListener("click", () => {
   showOnlineDialog("", { intent: "join" });
 });
 elements.lobbyRefresh.addEventListener("click", () => void refreshLobby({ announce: true }));
+document.addEventListener("visibilitychange", resumeLobbyPolling);
 for (const button of elements.lobbyStatusButtons) {
   button.addEventListener("click", () => {
     lobbyStatusFilter = button.dataset.lobbyStatus || "all";
@@ -6867,9 +7114,11 @@ roomClient.on("presence", ({ presence }) => {
   updateRoomUI();
 });
 roomClient.on("error", (error) => {
-  if (elements.onlineDialog.open) showOnlineError(error.message);
+  // Server errors arrive in Chinese; show them by code in other languages.
+  const message = localizedErrorMessage(error);
+  if (elements.onlineDialog.open) showOnlineError(message);
   if (!["SOCKET_ERROR", "COMMAND_SEND_ERROR"].includes(error.code)) {
-    setMessage(error.message, true);
+    setMessage(message, true);
   }
   updateRoomUI();
 });
@@ -6932,6 +7181,7 @@ if (initialRoute.mode === "root") {
   replaceAppPath("/single");
 }
 
+if (initialRoute.mode === "lobby") restoreLobbyBoardSettings();
 showAppScreen(initialRoute.mode);
 if (initialRoute.mode === "online" && initialRoute.roomCode.length === 6) {
   const sharedRoomCode = initialRoute.roomCode;
@@ -6942,17 +7192,15 @@ if (initialRoute.mode === "online" && initialRoute.roomCode.length === 6) {
     setMessage(`正在恢复房间 ${sharedRoomCode}…`);
     updateRoomUI();
   } else if (roomClient.pendingCreateCode === sharedRoomCode) {
+    // Resume through the dialog's create flow so the request carries an abort
+    // signal: cancelling must stop this page adopting a late result.
+    const candidates = roomClient.listPendingCreates()
+      .filter((entry) => entry.roomCode === sharedRoomCode);
+    showOnlineDialog("", { intent: "create" });
     setMessage(`正在恢复房间 ${sharedRoomCode}…`);
-    void roomClient.retryPendingCreate(sharedRoomCode).then((result) => {
-      updateRoomUrl(result.roomCode);
-      elements.playerName.value = result.session.playerName;
-      rememberPlayerName(result.session.playerName);
-      setMessage(`房间 ${result.roomCode} 已恢复上次建房请求，房主为 ${result.session.playerName}；请核对棋盘设置。`);
-      updateUI();
-    }).catch((error) => {
-      showOnlineDialog("", { intent: "create" });
-      showOnlineError(error.message || "恢复建房请求失败，请重试。");
-    });
+    if (candidates.length === 1) {
+      void createOnlineRoom({ pendingPlayerId: candidates[0].playerId });
+    }
   } else {
     showOnlineDialog(sharedRoomCode, { intent: initialRoute.role });
     if (roomClient.hasStoredSession(sharedRoomCode)) {
@@ -6975,7 +7223,7 @@ window.addEventListener("keydown", unlockGameSounds, { capture: true, once: true
 window.addEventListener(
   "beforeunload",
   () => {
-    cancelAIThinking();
+    cancelAIThinking({ terminate: true });
     cancelReplayAIReview({ terminate: true });
     cancelLobbyRequest();
     if (clockTimer !== null) window.clearInterval(clockTimer);

@@ -243,7 +243,6 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "实时连接": "Live",
   "需要联机": "Online room required",
   "这个席位已在另一个窗口打开，本页已停止重连。": "This seat is open in another window, so this page stopped reconnecting.",
-  "多次重连仍未成功；可以稍后刷新，或忘记这个房间。": "Repeated reconnect attempts failed. Refresh later or forget this room.",
   "已恢复对局，可以继续处理有争议的死活。": "Play resumed. You can continue resolving disputed groups.",
   "房间已建立不同形状的新棋盘，复盘已结束并切回实时局面。": "The room created a board with different settings. Replay ended and the live position is shown.",
   "轮到在线 AI 行棋，已自动退出复盘以保持房间对局和计时继续。": "Online AI is to move, so replay closed automatically to keep the game and clock running.",
@@ -288,6 +287,30 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "等待服务器确认超时。": "Timed out waiting for server confirmation.",
   "发送房间命令失败。": "Failed to send the room command.",
   "房间连接已关闭。": "The room connection is closed.",
+  "当前环境无法安全生成房间凭证。": "This browser cannot generate secure room credentials.",
+  "无法生成有效的房间号。": "Could not generate a valid room code.",
+  "无法保存建房凭据，请检查浏览器存储设置后重试。":
+    "Could not save the room-creation credentials. Check browser storage settings and try again.",
+  "没有可重试的建房请求。": "There is no room creation to retry.",
+  "无法移除已冲突的建房凭据，请检查浏览器存储设置。":
+    "Could not remove conflicting room-creation credentials. Check browser storage settings.",
+  "服务器返回的建房身份与请求不一致。": "The server returned a host identity that does not match the request.",
+  "暂时无法分配房间码，请重试。": "Could not allocate a room code right now. Try again.",
+  "没有可恢复的加入请求。": "There is no join request to recover.",
+  "无法保存加入凭据，请检查浏览器存储设置后重试。":
+    "Could not save the join credentials. Check browser storage settings and try again.",
+  "服务器返回的加入身份与请求不一致。": "The server returned an identity that does not match the join request.",
+  "无法保存房间会话，请检查浏览器存储设置后重试。":
+    "Could not save the room session. Check browser storage settings and try again.",
+  "尚未取得可确认的棋局局面，请等待房间同步。": "The current position is not confirmed yet. Wait for the room to sync.",
+  "无法保存联机命令序号，请检查浏览器存储设置后重试。":
+    "Could not save the online command sequence. Check browser storage settings and try again.",
+  "无法删除当前房间身份的本地凭据；请检查浏览器存储设置。":
+    "Could not delete this room identity's local credentials. Check browser storage settings.",
+  "当前环境无法连接在线大厅。": "This browser cannot reach the online lobby.",
+  "暂时无法连接在线大厅。": "Cannot reach the online lobby right now.",
+  "在线大厅暂时不可用。": "The online lobby is unavailable right now.",
+  "AI 模型已切换，请重新启动分析线程。": "The AI model changed. Restart the analysis worker.",
   "正在创建…": "Creating…",
   "创建房间": "Create room",
   "正在加入…": "Joining…",
@@ -491,6 +514,8 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "正在发送…": "Sending…",
   "消息发送失败，请稍后重试。": "Message failed to send. Try again shortly.",
   "这条位置引用已经失效。": "This board reference has expired.",
+  "当前复盘的棋盘与房间棋盘不同，不能从这里引用棋点。":
+    "This replay uses a different board from the room, so its points cannot be referenced in chat.",
   "没有识别到这个棋点。": "That board point was not recognized.",
   "表情包": "Sticker",
   "发送表情包：{label}": "Send sticker: {label}",
@@ -507,7 +532,7 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "聊天消息格式不正确。": "The chat message is invalid.",
   "这个表情包不存在。": "That sticker does not exist.",
   "这条消息包含的字符过大，请缩短后再发送。": "This message contains oversized characters. Shorten it and try again.",
-  "请求过于频繁，请稍后再试。": "Too many requests. Please wait a minute and try again.",
+  "请求过于频繁，请稍后再试。": "Too many requests. Wait a minute and try again.",
   "本局进行中，不能更换座位；请等本局结束后再操作。": "Seats cannot change while this game is in progress. Try again after it ends.",
   "操作太频繁了，请稍等一下再试。": "You're doing that too often. Wait a moment and try again.",
   "本次点目的死子标记次数已达上限，请确认结果或继续对局。": "This scoring session has reached its dead-stone marking limit. Confirm the result or resume play.",
@@ -570,6 +595,10 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "观察内圈与背面 · 滚轮缩放": "Inspect inner and back surfaces · wheel to zoom",
   "观察单面扭转与唯一边界 · 滚轮缩放": "Inspect the one-sided twist and single edge · wheel to zoom",
   "滚轮缩放": "Wheel to zoom",
+  "弧面循环 · 双指缩放": "Curved wrap · pinch to zoom",
+  "观察内圈与背面 · 双指缩放": "Inspect inner and back surfaces · pinch to zoom",
+  "观察单面扭转与唯一边界 · 双指缩放": "Inspect the one-sided twist and single edge · pinch to zoom",
+  "双指缩放": "Pinch to zoom",
   "左键点击落子": "Left-click to play",
   "轻点落子": "Tap to play",
   "立体竹筒": "3D cylinder",
@@ -585,13 +614,69 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "A列与末列倒序相邻": "Column A joins the last column in reverse order",
   "📍 点击一个棋点引用到聊天（不会落子）": "📍 Select a point to reference in chat (no move played)",
   "◇ 点击棋点，只在本页建立分析分支": "◇ Select a point to create a local analysis branch",
+  "普通 SGF 阅读器可读取棋步；异形接缝保存在 X* 扩展属性中。":
+    "Standard SGF readers can read the moves; unusual-board seams are stored in X* extension properties.",
+  "本局采用简化领地计分，双活中的眼仍计地。":
+    "This game uses simplified territory scoring; seki eyes still count as territory.",
+  "文件不是可识别的 SGF 棋谱": "The file is not a recognizable SGF record",
+  "导入的 SGF": "the imported SGF",
+  "AI 分析已停止，当前已有结果仍然保留。": "AI analysis stopped; the current results are kept.",
+  "神经网络正在观察局面…": "The neural network is reading the position…",
+  "暂停复盘": "Pause replay",
+  "播放复盘": "Play replay",
+  "正在暂停在线 AI 自对弈…": "Pausing online AI self-play…",
+  "正在继续在线 AI 自对弈…": "Resuming online AI self-play…",
+  "正在暂停…": "Pausing…",
+  "正在继续…": "Resuming…",
+  "直接撤回上一手，保持暂停": "Undo the last move and stay paused",
+  "请先暂停 AI 自对弈，再撤回上一手": "Pause AI self-play before undoing a move",
+  "在线 AI 自对弈已继续。": "Online AI self-play resumed.",
+  "在线 AI 自对弈已暂停；可以悔一步、复盘或切换视图。":
+    "Online AI self-play is paused. You can undo one move, replay, or change views.",
+  "棋局已更新，正在核对在线 AI 暂停状态…": "The game changed. Checking the online AI pause state…",
+  "正在直接撤回上一手…": "Undoing the last move…",
+  "旧棋局只记录了升级后的棋步；仍可切换任意可用视图。":
+    "This older game only recorded moves made after the upgrade. You can still switch to any available view.",
+  "轮到你落子": "Your turn",
+  "最上行与最下行相邻": "Top and bottom rows connect",
+  "莫比乌斯唯一边界": "The Möbius strip's single edge",
+  "点击引用到聊天（不会落子）": "select to reference in chat (no move played)",
+  "请先选择要恢复的房间身份。": "Choose the room identity to restore first.",
+  "所选身份的恢复凭据已失效。可使用下方按钮以新身份进入。":
+    "The selected identity's recovery credentials have expired. Use the buttons below to enter with a new identity.",
+  "恢复房间身份失败。": "Could not restore the room identity.",
+  "所选身份": "the selected identity",
+  "已停止重连，但本地房间凭据未能删除，恢复入口可能再次出现；请检查浏览器存储设置。":
+    "Stopped reconnecting, but the local room credentials could not be deleted, so the recovery option may reappear. Check browser storage settings.",
+  "已退出联机房间，但本地凭据未能删除，恢复入口可能再次出现；请检查浏览器存储设置。":
+    "Left the online room, but the local credentials could not be deleted, so the recovery option may reappear. Check browser storage settings.",
+  "所选加入请求已失效，请重新选择。": "The selected join request has expired. Choose again.",
+  "无法删除所选恢复凭据；请检查浏览器存储设置后重试。":
+    "Could not delete the selected recovery credentials. Check browser storage settings and try again.",
+  "此浏览器保存了该房间的身份；请选择要恢复的身份，或以新身份进入。":
+    "This browser saved identities for this room. Choose one to restore, or enter with a new identity.",
+  "未命名": "Unnamed",
+  "观众": "Spectator",
+  "玩家": "Player",
+  "加入房间失败。": "Could not join the room.",
+  "多次重连仍未成功；网络恢复或回到本页时会自动重试，也可以忘记这个房间。":
+    "Repeated reconnect attempts failed. It retries automatically when the network returns or you come back to this tab; you can also forget this room.",
 });
 
 function capturedTerm(value) {
   return ENGLISH_DYNAMIC[value] ?? value;
 }
 
-function capturedPhrase(value) {
+function clockCopy(clock) {
+  const byoYomi = /^(\d+) 分钟 \+ (\d+)×(\d+) 秒$/u.exec(clock);
+  if (byoYomi) return `${byoYomi[1]} min + ${byoYomi[2]}×${byoYomi[3]} sec`;
+  const absolute = /^(\d+) 分钟$/u.exec(clock);
+  if (absolute) return `${absolute[1]} min`;
+  return capturedTerm(clock);
+}
+
+function capturedPhrase(rawValue) {
+  const value = String(rawValue ?? "").trim();
   const exact = capturedTerm(value);
   if (exact !== value) return exact;
   for (const candidate of ENGLISH_PATTERNS) {
@@ -608,21 +693,36 @@ function capturedPhrase(value) {
   return value;
 }
 
+/** "1 move" / "2 moves": English count phrases for a captured number. */
+function countOf(count, singular, plural = `${singular}s`) {
+  return `${count} ${String(count) === "1" ? singular : plural}`;
+}
+
+// "b10 · WEBGL · 搜索 120 次"-style lists of independently translated parts.
+function segmentsPhrase(value) {
+  return String(value ?? "").split(" · ").map((part) => capturedPhrase(part)).join(" · ");
+}
+
+const ANALYSIS_PREFIX = /^(观战局面|当前局面|第 (\d+) 手|整局分析 (\d+) \/ (\d+) · 第 (\d+) 手)$/u;
+
+function analysisPrefixCopy(prefix) {
+  const match = ANALYSIS_PREFIX.exec(prefix);
+  if (!match) return capturedPhrase(prefix);
+  if (match[1] === "观战局面") return "Spectator position";
+  if (match[1] === "当前局面") return "Current position";
+  if (match[2]) return `Move ${match[2]}`;
+  return `Full-game analysis ${match[3]} / ${match[4]} · move ${match[5]}`;
+}
+
 export const ENGLISH_PATTERNS = Object.freeze([
   {
-    pattern: /^(\d+) × (\d+) · (竹筒|甜甜圈|莫比乌斯) · (中国规则|简化领地计分) · (.+)$/u,
-    replace: (_, width, height, topology, rule, clock) => {
-      const clockMatch = /^(\d+) 分钟 \+ (\d+)×(\d+) 秒$/u.exec(clock);
-      const translatedClock = clockMatch
-        ? `${clockMatch[1]} min + ${clockMatch[2]}×${clockMatch[3]} sec`
-        : capturedTerm(clock);
-      return `${width} × ${height} · ${capturedTerm(topology)} · ${capturedTerm(rule)} · ${translatedClock}`;
+    pattern: /^(\d+) × (\d+) · (竹筒|甜甜圈|莫比乌斯) · (中国规则|简化领地计分)(?: · 贴目 ([\d.]+))?(?: · (.+))?$/u,
+    replace: (_, width, height, topology, rule, komi, clock) => {
+      const komiCopy = komi ? ` · Komi ${komi}` : "";
+      return `${width} × ${height} · ${capturedPhrase(topology)} · ${capturedPhrase(rule)}${komiCopy}${
+        clock ? ` · ${clockCopy(clock)}` : ""
+      }`;
     },
-  },
-  {
-    pattern: /^(\d+) × (\d+) · (竹筒|甜甜圈|莫比乌斯) · (中国规则|简化领地计分)$/u,
-    replace: (_, width, height, topology, rule) =>
-      `${width} × ${height} · ${capturedTerm(topology)} · ${capturedTerm(rule)}`,
   },
   {
     pattern: /^(\d+) 分钟前$/u,
@@ -639,20 +739,24 @@ export const ENGLISH_PATTERNS = Object.freeze([
     replace: (_, count, activity) => `${count} spectator${count === "1" ? "" : "s"} · ${capturedPhrase(activity)}`,
   },
   {
+    pattern: /^显示 (\d+) \/ 共 (\d+) 个公开房间$/u,
+    replace: (_, shown, total) => `Showing ${shown} of ${total} public room${total === "1" ? "" : "s"}`,
+  },
+  {
     pattern: /^共 (\d+) 个公开房间$/u,
     replace: (_, count) => `${count} public room${count === "1" ? "" : "s"}`,
   },
   {
     pattern: /^你将以(.+)认输，对方立即获胜；不需要对方确认，此操作不能撤销。$/u,
-    replace: (_, loser) => `You will resign as ${capturedTerm(loser)}. Your opponent wins immediately; no approval is required and this cannot be undone.`,
+    replace: (_, loser) => `You will resign as ${capturedPhrase(loser)}. Your opponent wins immediately; no approval is required and this cannot be undone.`,
   },
   {
-    pattern: /^你将以(.+)向 (.+) 认输；AI 立即获胜，此操作不能撤销。$/u,
-    replace: (_, loser, ai) => `You will resign as ${capturedTerm(loser)} against ${ai}. The AI wins immediately and this cannot be undone.`,
+    pattern: /^你将以(.+?)向 (.+) 认输；AI 立即获胜，此操作不能撤销。$/u,
+    replace: (_, loser, ai) => `You will resign as ${capturedPhrase(loser)} against ${capturedPhrase(ai)}. The AI wins immediately and this cannot be undone.`,
   },
   {
     pattern: /^(.+)将认输，(.+)立即获胜；此操作不能撤销。$/u,
-    replace: (_, loser, winner) => `${capturedTerm(loser)} will resign. ${capturedTerm(winner)} wins immediately, and this cannot be undone.`,
+    replace: (_, loser, winner) => `${capturedPhrase(loser)} will resign. ${capturedPhrase(winner)} wins immediately, and this cannot be undone.`,
   },
   {
     pattern: /^你执(黑|白) · AI 执(黑|白)$/u,
@@ -660,15 +764,15 @@ export const ENGLISH_PATTERNS = Object.freeze([
   },
   {
     pattern: /^AI · (黑方|白方) · (.+)$/u,
-    replace: (_, color, model) => `AI · ${capturedTerm(color)} · ${model}`,
+    replace: (_, color, model) => `AI · ${capturedPhrase(color)} · ${model}`,
   },
   {
     pattern: /^(.+) 正在思考。你仍可旋转或切换视图。$/u,
-    replace: (_, ai) => `${capturedTerm(ai)} is thinking. You can still rotate or change views.`,
+    replace: (_, ai) => `${capturedPhrase(ai)} is thinking. You can still rotate or change views.`,
   },
   {
     pattern: /^(黑方|白方) AI 正在准备下一手。$/u,
-    replace: (_, color) => `${capturedTerm(color)} AI is preparing the next move.`,
+    replace: (_, color) => `${capturedPhrase(color)} AI is preparing the next move.`,
   },
   {
     pattern: /^KataGo (正在思考|准备落子)$/u,
@@ -676,15 +780,15 @@ export const ENGLISH_PATTERNS = Object.freeze([
   },
   {
     pattern: /^AI 自对弈已开始：黑白双方都由 (.+) 控制。$/u,
-    replace: (_, ai) => `AI self-play started. ${capturedTerm(ai)} controls both colors.`,
+    replace: (_, ai) => `AI self-play started. ${capturedPhrase(ai)} controls both colors.`,
   },
   {
     pattern: /^AI 对局已开始：你执黑，(.+) 执白。$/u,
-    replace: (_, ai) => `AI game started. You play Black; ${capturedTerm(ai)} plays White.`,
+    replace: (_, ai) => `AI game started. You play Black; ${capturedPhrase(ai)} plays White.`,
   },
   {
     pattern: /^AI 对局已开始：(.+) 执黑，正在思考第一手。$/u,
-    replace: (_, ai) => `AI game started. ${capturedTerm(ai)} plays Black and is thinking about the first move.`,
+    replace: (_, ai) => `AI game started. ${capturedPhrase(ai)} plays Black and is thinking about the first move.`,
   },
   {
     pattern: /^正在把 KataGo (.+) 接入在线白方座位…$/u,
@@ -692,21 +796,21 @@ export const ENGLISH_PATTERNS = Object.freeze([
   },
   {
     pattern: /^(.+) 在线 AI 座位仍然保留；请保持房主页面在线，或打开 AI 设置重试\/更换模型。$/u,
-    replace: (_, message) => `${capturedTerm(message)} The online AI seat remains assigned. Keep the host page online, or open AI settings to retry or change the model.`,
+    replace: (_, message) => `${capturedPhrase(message)} The online AI seat remains assigned. Keep the host page online, or open AI settings to retry or change the model.`,
   },
   {
     pattern: /^(.+) 已退出 AI 对局并保留当前棋局；现在可以本地轮流落子，或重新开始 KataGo 对局。$/u,
-    replace: (_, message) => `${capturedTerm(message)} The AI game ended but the position was kept. You can continue locally or invite KataGo again.`,
+    replace: (_, message) => `${capturedPhrase(message)} The AI game ended but the position was kept. You can continue locally or invite KataGo again.`,
   },
   {
     pattern: /^(.+) 正在(房主浏览器中)?思考…$/u,
     replace: (_, ai, hostBrowser) =>
-      `${capturedTerm(ai)} is thinking${hostBrowser ? " in the host browser" : ""}…`,
+      `${capturedPhrase(ai)} is thinking${hostBrowser ? " in the host browser" : ""}…`,
   },
   {
     pattern: /^现在轮到 (.+) 思考；你仍然可以旋转和切换棋盘视图。$/u,
     replace: (_, ai) =>
-      `It is ${capturedTerm(ai)}'s turn to think. You can still rotate or change board views.`,
+      `It is ${capturedPhrase(ai)}'s turn to think. You can still rotate or change board views.`,
   },
   {
     pattern: /^KataGo 已完成判断(?:（推理 (\d+) ms）)?，正在由服务器验证并同步…$/u,
@@ -720,35 +824,57 @@ export const ENGLISH_PATTERNS = Object.freeze([
         ? ` and captures ${captured} stone${captured === "1" ? "" : "s"}`
         : "";
       const inferenceCopy = inferenceMs ? ` (${inferenceMs} ms neural evaluation)` : "";
-      return `${capturedTerm(color)} ${capturedTerm(ai)} plays${captureCopy}${inferenceCopy}.`;
+      return `${capturedPhrase(color)} ${capturedPhrase(ai)} plays${captureCopy}${inferenceCopy}.`;
     },
   },
   {
     pattern: /^(黑方|白方) AI 停一手，另一方继续判断。$/u,
-    replace: (_, color) => `${capturedTerm(color)} AI passes. The other side will continue evaluating.`,
+    replace: (_, color) => `${capturedPhrase(color)} AI passes. The other side will continue evaluating.`,
   },
   {
     pattern: /^(.+) 停一手，轮到你落子。$/u,
-    replace: (_, ai) => `${capturedTerm(ai)} passes. Your turn.`,
+    replace: (_, ai) => `${capturedPhrase(ai)} passes. Your turn.`,
   },
   {
     pattern: /^(.+) 需要 WebGPU，当前浏览器无法运行。$/u,
-    replace: (_, model) => `${capturedTerm(model)} requires WebGPU and cannot run in this browser.`,
+    replace: (_, model) => `${capturedPhrase(model)} requires WebGPU and cannot run in this browser.`,
   },
   {
     pattern: /^(.+) · 胜率 (\d+)% · 访问 (\d+)%$/u,
     replace: (_, move, winRate, visits) =>
-      `${capturedTerm(move)} · win rate ${winRate}% · visits ${visits}%`,
+      `${capturedPhrase(move)} · win rate ${winRate}% · visits ${visits}%`,
   },
   {
     pattern: /^第 (\d+) 手已有 AI 参考(?: · (.+))?。$/u,
     replace: (_, move, detail) =>
-      `Move ${move} has an AI review${detail ? ` · ${capturedPhrase(detail)}` : ""}.`,
+      `Move ${move} has an AI review${detail ? ` · ${segmentsPhrase(detail)}` : ""}.`,
   },
   {
     pattern: /^(观战|当前)局面已有本地 AI 参考(?: · (.+))?。$/u,
     replace: (_, context, detail) =>
-      `The ${context === "观战" ? "spectator" : "current"} position has a local AI review${detail ? ` · ${capturedPhrase(detail)}` : ""}.`,
+      `The ${context === "观战" ? "spectator" : "current"} position has a local AI review${detail ? ` · ${segmentsPhrase(detail)}` : ""}.`,
+  },
+  {
+    pattern: /^(.+?) 首选搜索估值 (\d+)%（当前行棋方视角）。$/u,
+    replace: (_, comparison, estimate) =>
+      `${capturedPhrase(comparison)} Top-choice search estimate: ${estimate}% from the current player's perspective.`,
+  },
+  {
+    pattern: /^(观战局面|当前局面|第 \d+ 手|整局分析 \d+ \/ \d+ · 第 \d+ 手) · (载入 KataGo .+|神经网络正在观察局面…|正在按.+规则短搜索…|正在准备分析…)$/u,
+    replace: (_, prefix, stage) => `${analysisPrefixCopy(prefix)} · ${capturedPhrase(stage)}`,
+  },
+  {
+    pattern: /^载入 KataGo (.+?) 模型（(.+?)）(.*)…$/u,
+    replace: (_, model, size, progress) =>
+      `Loading KataGo ${model} model (${capturedPhrase(size)})${progress}…`,
+  },
+  {
+    pattern: /^正在按(竹筒|甜甜圈|莫比乌斯)规则短搜索…$/u,
+    replace: (_, topology) => `Running a short search with ${capturedTerm(topology)} rules…`,
+  },
+  {
+    pattern: /^(候选 \d+|自选点) · (.+)$/u,
+    replace: (_, rank, move) => `${capturedPhrase(rank)} · ${capturedPhrase(move)}`,
   },
   {
     pattern: /^实战 (.+) 与 AI 首选一致。$/u,
@@ -760,7 +886,8 @@ export const ENGLISH_PATTERNS = Object.freeze([
   },
   {
     pattern: /^实战 (.+) 未进入本次 (\d+) 个已搜索候选；这不等于它一定是坏棋。$/u,
-    replace: "The played move $1 was not among the $2 searched candidates; that does not necessarily make it a bad move.",
+    replace: (_, move, count) =>
+      `The played move ${move} was not among the ${countOf(count, "searched candidate")}; that does not necessarily make it a bad move.`,
   },
   {
     pattern: /^首选搜索估值 (\d+)%（当前行棋方视角）。$/u,
@@ -768,21 +895,25 @@ export const ENGLISH_PATTERNS = Object.freeze([
   },
   {
     pattern: /^无法复制当前局面：(.+)$/u,
-    replace: "Could not copy the current position: $1",
+    replace: (_, reason) => `Could not copy the current position: ${capturedPhrase(reason)}`,
+  },
+  {
+    pattern: /^无法建立本地分析分支：(.+)$/u,
+    replace: (_, reason) => `Could not create the local analysis branch: ${capturedPhrase(reason)}`,
   },
   {
     pattern: /^AI (局势分析|复盘)暂时失败：(.+)$/u,
     replace: (_, kind, message) =>
-      `AI ${kind === "局势分析" ? "position analysis" : "replay review"} failed temporarily: ${capturedTerm(message)}`,
+      `AI ${kind === "局势分析" ? "position analysis" : "replay review"} failed temporarily: ${capturedPhrase(message)}`,
   },
   {
     pattern: /^AI (局势分析|复盘)线程没有正常启动：(.+)$/u,
     replace: (_, kind, message) =>
-      `The AI ${kind === "局势分析" ? "position-analysis" : "replay-review"} worker did not start correctly: ${capturedTerm(message)}`,
+      `The AI ${kind === "局势分析" ? "position-analysis" : "replay-review"} worker did not start correctly: ${capturedPhrase(message)}`,
   },
   {
     pattern: /^无法重建第 (\d+) 手：(.+)$/u,
-    replace: "Could not rebuild move $1: $2",
+    replace: (_, move, reason) => `Could not rebuild move ${move}: ${capturedPhrase(reason)}`,
   },
   {
     pattern: /^已导出 (.+)。普通 SGF 阅读器可读取棋步；异形接缝保存在 X\* 扩展属性中。本局采用简化领地计分，双活中的眼仍计地。$/u,
@@ -801,7 +932,7 @@ export const ENGLISH_PATTERNS = Object.freeze([
     replace: (_, details, hiddenCount) => {
       const translatedDetails = details
         .split("；")
-        .map((detail) => capturedTerm(detail))
+        .map((detail) => capturedPhrase(detail))
         .join("; ");
       return `Compatibility notes: ${translatedDetails}${hiddenCount ? ` (${hiddenCount} more)` : ""}.`;
     },
@@ -810,24 +941,24 @@ export const ENGLISH_PATTERNS = Object.freeze([
     pattern: /^已导入 (.+)，共 (\d+) 手；可播放、切换视图或做 AI 分析。(.*)$/u,
     replace: (_, filename, moves, notes) => {
       const noteCopy = notes.trim();
-      return `Imported ${filename} with ${moves} moves. You can replay, change views, or run AI analysis.${noteCopy ? ` ${capturedPhrase(noteCopy)}` : ""}`;
+      return `Imported ${filename} with ${countOf(moves, "move")}. You can replay, change views, or run AI analysis.${noteCopy ? ` ${capturedPhrase(noteCopy)}` : ""}`;
     },
   },
   {
     pattern: /^已导入 (.+)：原谱未写异形拓扑，按当前选择的(竹筒|甜甜圈|莫比乌斯)复盘。(.*)$/u,
     replace: (_, filename, topology, notes) => {
       const noteCopy = notes.trim();
-      return `Imported ${filename}. The SGF did not specify an unusual-board topology, so it will be replayed as the selected ${capturedTerm(topology)}.${noteCopy ? ` ${capturedPhrase(noteCopy)}` : ""}`;
+      return `Imported ${filename}. The SGF did not specify an unusual-board topology, so it will be replayed as the selected ${capturedPhrase(topology)}.${noteCopy ? ` ${capturedPhrase(noteCopy)}` : ""}`;
     },
   },
   {
     pattern: /^来自 (.+)；可随时切换(平面、弧面或立体视图|平面或立体视图)。$/u,
     replace: (_, source, views) =>
-      `From ${source}; you can switch to ${capturedTerm(views)} at any time.`,
+      `From ${capturedPhrase(source)}; you can switch to ${capturedPhrase(views)} at any time.`,
   },
   {
     pattern: /^可随时切换(平面、弧面或立体视图|平面或立体视图)。$/u,
-    replace: (_, views) => `You can switch to ${capturedTerm(views)} at any time.`,
+    replace: (_, views) => `You can switch to ${capturedPhrase(views)} at any time.`,
   },
   {
     pattern: /^复盘结束：(.+)。认输结果已还原。$/u,
@@ -855,7 +986,7 @@ export const ENGLISH_PATTERNS = Object.freeze([
   {
     pattern: /^第 (\d+) 手：(黑方|白方)停一手。(.*)$/u,
     replace: (_, move, color, note) =>
-      `Move ${move}: ${capturedTerm(color)} passes.${note ? ` ${capturedPhrase(note)}` : ""}`,
+      `Move ${move}: ${capturedPhrase(color)} passes.${note ? ` ${capturedPhrase(note)}` : ""}`,
   },
   {
     pattern: /^第 (\d+) 手：(黑方|白方)落子(?:，提掉 (\d+) 子)?。(.*)$/u,
@@ -863,21 +994,23 @@ export const ENGLISH_PATTERNS = Object.freeze([
       const captureCopy = captured
         ? ` and captures ${captured} stone${captured === "1" ? "" : "s"}`
         : "";
-      return `Move ${move}: ${capturedTerm(color)} plays${captureCopy}.${note ? ` ${capturedPhrase(note)}` : ""}`;
+      return `Move ${move}: ${capturedPhrase(color)} plays${captureCopy}.${note ? ` ${capturedPhrase(note)}` : ""}`;
     },
   },
   {
     pattern: /^黑：活子 ([\d.]+) ＋ 地 ([\d.]+)；白：活子 ([\d.]+) ＋ 地 ([\d.]+) ＋ 贴目 ([\d.]+)；公气 ([\d.]+)$/u,
-    replace: "Black: $1 live stones + $2 territory; White: $3 live stones + $4 territory + $5 komi; neutral: $6",
+    replace: (_, blackStones, blackTerritory, whiteStones, whiteTerritory, komi, neutral) =>
+      `Black: ${countOf(blackStones, "live stone")} + ${blackTerritory} territory; White: ${countOf(whiteStones, "live stone")} + ${whiteTerritory} territory + ${komi} komi; neutral: ${neutral}`,
   },
   {
     pattern: /^黑：地 ([\d.]+) ＋ 提子 ([\d.]+) ＋ 死子 ([\d.]+)；白：地 ([\d.]+) ＋ 提子 ([\d.]+) ＋ 死子 ([\d.]+) ＋ 贴目 ([\d.]+)；公气 ([\d.]+)$/u,
-    replace: "Black: $1 territory + $2 captures + $3 dead stones; White: $4 territory + $5 captures + $6 dead stones + $7 komi; neutral: $8",
+    replace: (_, blackTerritory, blackCaptures, blackDead, whiteTerritory, whiteCaptures, whiteDead, komi, neutral) =>
+      `Black: ${blackTerritory} territory + ${countOf(blackCaptures, "capture")} + ${countOf(blackDead, "dead stone")}; White: ${whiteTerritory} territory + ${countOf(whiteCaptures, "capture")} + ${countOf(whiteDead, "dead stone")} + ${komi} komi; neutral: ${neutral}`,
   },
   {
     pattern: /^(黑方|白方)这块棋已(标为死子|恢复为活棋)。$/u,
     replace: (_, color, state) =>
-      `${capturedTerm(color)}'s group was ${state === "标为死子" ? "marked dead" : "restored as alive"}.`,
+      `${capturedPhrase(color)}'s group was ${state === "标为死子" ? "marked dead" : "restored as alive"}.`,
   },
   {
     pattern: /^点目完成：(.+)。$/u,
@@ -886,7 +1019,7 @@ export const ENGLISH_PATTERNS = Object.freeze([
   {
     pattern: /^(\d+) × (\d+) (竹筒|甜甜圈|莫比乌斯)在线棋盘已准备好，黑方先行。$/u,
     replace: (_, width, height, topology) =>
-      `${width} × ${height} ${capturedTerm(topology)} online board is ready. Black plays first.`,
+      `${width} × ${height} ${capturedPhrase(topology)} online board is ready. Black plays first.`,
   },
   {
     pattern: /^将建立：竹筒（左右首尾相接） · (\d+) × (\d+)。当前对局进度将被清除。$/u,
@@ -901,43 +1034,47 @@ export const ENGLISH_PATTERNS = Object.freeze([
     replace: "New board: Möbius (left and right connect in reverse; top and bottom remain a boundary) · $1 × $2. The current game progress will be cleared.",
   },
   { pattern: /^第 (\d+) 手$/u, replace: "Move $1" },
-  { pattern: /^(\d+) 手$/u, replace: "$1 moves" },
+  { pattern: /^(\d+) 手$/u, replace: (_, moves) => countOf(moves, "move") },
   { pattern: /^第 (\d+) \/ (\d+) 手$/u, replace: "Move $1 / $2" },
   { pattern: /^复盘 · 第 (\d+) \/ (\d+) 手$/u, replace: "Replay · move $1 / $2" },
-  { pattern: /^(\d+) 手 · 对局结束$/u, replace: "$1 moves · game over" },
-  { pattern: /^(\d+) 手 · 计时结束$/u, replace: "$1 moves · clock ended" },
+  { pattern: /^(\d+) 手 · 对局结束$/u, replace: (_, moves) => `${countOf(moves, "move")} · game over` },
+  { pattern: /^(\d+) 手 · 计时结束$/u, replace: (_, moves) => `${countOf(moves, "move")} · clock ended` },
   { pattern: /^候选 (\d+)$/u, replace: "Candidate $1" },
-  { pattern: /^搜索 (\d+) 次$/u, replace: "$1 search iterations" },
+  { pattern: /^搜索 (\d+) 次$/u, replace: (_, count) => countOf(count, "search iteration") },
   { pattern: /^搜索访问占比 (\d+)%$/u, replace: "$1% of search visits" },
-  { pattern: /^读秒 · 剩 (\d+) 次$/u, replace: "$1 byo-yomi periods left" },
+  { pattern: /^读秒 · 剩 (\d+) 次$/u, replace: (_, count) => `${countOf(count, "byo-yomi period")} left` },
   { pattern: /^其后 (\d+) × (\d+) 秒$/u, replace: "then $1 × $2 sec" },
   { pattern: /^(\d+) 分钟 \+ (\d+)×(\d+) 秒$/u, replace: "$1 min + $2×$3 sec" },
   {
     pattern: /^(.+)胜 · (.+)超时(。)?$/u,
     replace: (_, winner, loser, punctuated) =>
-      `${capturedTerm(winner)} wins · ${capturedTerm(loser)} timed out${punctuated ? "." : ""}`,
+      `${capturedPhrase(winner)} wins · ${capturedPhrase(loser)} timed out${punctuated ? "." : ""}`,
   },
   {
     pattern: /^(.+)胜 · (.+)认输(。)?$/u,
     replace: (_, winner, loser, punctuated) =>
-      `${capturedTerm(winner)} wins · ${capturedTerm(loser)} resigned${punctuated ? "." : ""}`,
+      `${capturedPhrase(winner)} wins · ${capturedPhrase(loser)} resigned${punctuated ? "." : ""}`,
   },
-  { pattern: /^(.+)胜 ([\d.]+) 目$/u, replace: (_, winner, margin) => `${capturedTerm(winner)} wins by ${margin} points` },
-  { pattern: /^等待(.+)落子。$/u, replace: (_, color) => `Waiting for ${capturedTerm(color)}.` },
-  { pattern: /^(.+)落子$/u, replace: (_, color) => `${capturedTerm(color)} to play` },
-  { pattern: /^(.+)落子。$/u, replace: (_, color) => `${capturedTerm(color)} plays.` },
-  { pattern: /^(.+)落子，提掉 (\d+) 子。$/u, replace: (_, color, count) => `${capturedTerm(color)} plays and captures ${count} stone${count === "1" ? "" : "s"}.` },
-  { pattern: /^(.+)停一手$/u, replace: (_, color) => `${capturedTerm(color)} passes` },
-  { pattern: /^(.+)停一手。$/u, replace: (_, color) => `${capturedTerm(color)} passes.` },
-  { pattern: /^(.+)停一手，轮到(.+)。$/u, replace: (_, color, next) => `${capturedTerm(color)} passes. ${capturedTerm(next)} to play.` },
-  { pattern: /^(.+)第 (\d+) 手$/u, replace: (_, color, move) => `${capturedTerm(color)} · move ${move}` },
-  { pattern: /^(.+)申请撤回自己的上一手$/u, replace: (_, color) => `${capturedTerm(color)} requests to take back their last move` },
-  { pattern: /^(.+)申请撤回自己的上一手。$/u, replace: (_, color) => `${capturedTerm(color)} requests to take back their last move.` },
-  { pattern: /^(.+)申请撤回自己的上一手，请选择同意或拒绝。$/u, replace: (_, color) => `${capturedTerm(color)} requests to take back their last move. Approve or decline.` },
-  { pattern: /^已撤回(.+)的上一手。$/u, replace: (_, color) => `Undid ${capturedTerm(color)}'s last move.` },
-  { pattern: /^(.+)已确认当前点目，等待另一方。$/u, replace: (_, color) => `${capturedTerm(color)} confirmed the score; waiting for the other player.` },
-  { pattern: /^(.+)已确认；请核对后确认，或继续修改死子。$/u, replace: (_, color) => `${capturedTerm(color)} confirmed. Review and confirm, or keep editing dead stones.` },
-  { pattern: /^(.+) · (\d+) 人观战$/u, replace: (_, message, count) => `${capturedPhrase(message)} · ${count} spectators` },
+  {
+    pattern: /^(.+)胜 ([\d.]+) 目(。)?$/u,
+    replace: (_, winner, margin, punctuated) =>
+      `${capturedPhrase(winner)} wins by ${margin} point${margin === "1" ? "" : "s"}${punctuated ? "." : ""}`,
+  },
+  { pattern: /^等待(.+)落子。$/u, replace: (_, color) => `Waiting for ${capturedPhrase(color)}.` },
+  { pattern: /^(.+)落子$/u, replace: (_, color) => `${capturedPhrase(color)} to play` },
+  { pattern: /^(.+)落子。$/u, replace: (_, color) => `${capturedPhrase(color)} plays.` },
+  { pattern: /^(.+)落子，提掉 (\d+) 子。$/u, replace: (_, color, count) => `${capturedPhrase(color)} plays and captures ${count} stone${count === "1" ? "" : "s"}.` },
+  { pattern: /^(.+)停一手$/u, replace: (_, color) => `${capturedPhrase(color)} passes` },
+  { pattern: /^(.+)停一手。$/u, replace: (_, color) => `${capturedPhrase(color)} passes.` },
+  { pattern: /^(.+)停一手，轮到(.+)。$/u, replace: (_, color, next) => `${capturedPhrase(color)} passes. ${capturedPhrase(next)} to play.` },
+  { pattern: /^(.+)第 (\d+) 手$/u, replace: (_, color, move) => `${capturedPhrase(color)} · move ${move}` },
+  { pattern: /^(.+)申请撤回自己的上一手$/u, replace: (_, color) => `${capturedPhrase(color)} requests to take back their last move` },
+  { pattern: /^(.+)申请撤回自己的上一手。$/u, replace: (_, color) => `${capturedPhrase(color)} requests to take back their last move.` },
+  { pattern: /^(.+)申请撤回自己的上一手，请选择同意或拒绝。$/u, replace: (_, color) => `${capturedPhrase(color)} requests to take back their last move. Approve or decline.` },
+  { pattern: /^已撤回(.+)的上一手。$/u, replace: (_, color) => `Undid ${capturedPhrase(color)}'s last move.` },
+  { pattern: /^(.+)已确认当前点目，等待另一方。$/u, replace: (_, color) => `${capturedPhrase(color)} confirmed the score; waiting for the other player.` },
+  { pattern: /^(.+)已确认；请核对后确认，或继续修改死子。$/u, replace: (_, color) => `${capturedPhrase(color)} confirmed. Review and confirm, or keep editing dead stones.` },
+  { pattern: /^(.+) · (\d+) 人观战$/u, replace: (_, message, count) => `${capturedPhrase(message)} · ${countOf(count, "spectator")}` },
   { pattern: /^房间 ([A-Z0-9]{6}) 已创建，把邀请链接发给朋友吧。$/u, replace: "Room $1 created. Send the invitation link to your friend." },
   { pattern: /^房间 ([A-Z0-9]{6}) 已恢复上次建房请求，房主为 (.+)；请核对棋盘设置。$/u, replace: "Room $1 was recovered from the previous creation request. Host: $2. Check the board settings." },
   { pattern: /^房间 ([A-Z0-9]{6}) 已创建，但浏览器未保存房主凭据；请勿刷新，并检查浏览器存储设置。$/u, replace: "Room $1 was created, but your browser did not save the host credentials. Do not refresh; check browser storage settings." },
@@ -945,17 +1082,17 @@ export const ENGLISH_PATTERNS = Object.freeze([
   { pattern: /^(.+) 已保留房间 ([A-Z0-9]{6}) 的建房凭据；可点击“核对并恢复”重试原请求。若要修改设置，请先放弃所选恢复凭据。$/u, replace: (_, reason, code) => `${capturedPhrase(reason)} Credentials for room ${code} were kept. Choose Check and recover to retry the original request. To change the settings, discard the selected recovery credentials first.` },
   { pattern: /^观战房间 ([A-Z0-9]{4,12})$/u, replace: "Watch room $1" },
   { pattern: /^加入房间 ([A-Z0-9]{4,12})$/u, replace: "Join room $1" },
-  { pattern: /^已加入房间 ([A-Z0-9]{6})，你是(.+)。$/u, replace: (_, code, role) => `Joined room ${code} as ${capturedTerm(role)}.` },
+  { pattern: /^已加入房间 ([A-Z0-9]{6})，你是(.+)。$/u, replace: (_, code, role) => `Joined room ${code} as ${capturedPhrase(role)}.` },
   { pattern: /^已进入房间 ([A-Z0-9]{6})。$/u, replace: "Entered room $1." },
   { pattern: /^正在恢复房间 ([A-Z0-9]{6})…$/u, replace: "Restoring room $1…" },
   { pattern: /^邀请链接：(.+)$/u, replace: "Invitation link: $1" },
   { pattern: /^已选择 (\d+) × (\d+)；点击“新棋盘”后生效。$/u, replace: "Selected $1 × $2. Choose New board to apply." },
   { pattern: /^房间预览已更新为 (\d+) × (\d+)；邀请对局时会使用这套设置。$/u, replace: "Room preview updated to $1 × $2. The invitation will use these settings." },
   { pattern: /^下一局预览已更新为 (\d+) × (\d+)；确认后会使用这套设置。$/u, replace: "Next-game preview updated to $1 × $2. These settings will be used after confirmation." },
-  { pattern: /^(\d+) × (\d+) (.+)棋盘已准备好，黑方先行。$/u, replace: (_, width, height, topology) => `${width} × ${height} ${capturedTerm(topology)} board is ready. Black plays first.` },
-  { pattern: /^(\d+) × (\d+) · (\d+) 点 · (.+)$/u, replace: (_, width, height, points, topology) => `${width} × ${height} · ${points} points · ${capturedTerm(topology)}` },
+  { pattern: /^(\d+) × (\d+) (.+)棋盘已准备好，黑方先行。$/u, replace: (_, width, height, topology) => `${width} × ${height} ${capturedPhrase(topology)} board is ready. Black plays first.` },
+  { pattern: /^(\d+) × (\d+) · (\d+) 点 · (.+)$/u, replace: (_, width, height, points, topology) => `${width} × ${height} · ${countOf(points, "point")} · ${capturedPhrase(topology)}` },
   { pattern: /^(\d+) × (\d+) 棋盘预览暂不可用$/u, replace: "$1 × $2 board preview is unavailable" },
-  { pattern: /^(.+)棋盘规则说明$/u, replace: (_, topology) => `${capturedTerm(topology)} board rules` },
+  { pattern: /^(.+)棋盘规则说明$/u, replace: (_, topology) => `${capturedPhrase(topology)} board rules` },
   { pattern: /^📍 (.+) · 查看棋盘$/u, replace: "📍 $1 · Show on board" },
   { pattern: /^📍 (.+) · 上一块棋盘$/u, replace: "📍 $1 · Previous board" },
   { pattern: /^插入 (.+)$/u, replace: "Insert $1" },
@@ -969,13 +1106,91 @@ export const ENGLISH_PATTERNS = Object.freeze([
   { pattern: /^(.+) · AI · 房主页面在线$/u, replace: "$1 · AI · host page online" },
   { pattern: /^(.+) · AI · 等待房主页面$/u, replace: "$1 · AI · waiting for host page" },
   { pattern: /^已导出 (.+)。$/u, replace: "Exported $1." },
-  { pattern: /^导入 SGF 失败：(.+)$/u, replace: "SGF import failed: $1" },
-  { pattern: /^导出 SGF 失败：(.+)$/u, replace: "SGF export failed: $1" },
-  { pattern: /^整局快速分析完成：共分析 (\d+) 个实战局面。$/u, replace: "Full-game analysis complete: $1 played positions analyzed." },
+  { pattern: /^导入 SGF 失败：(.+)$/u, replace: (_, reason) => `SGF import failed: ${capturedPhrase(reason)}` },
+  { pattern: /^导出 SGF 失败：(.+)$/u, replace: (_, reason) => `SGF export failed: ${capturedPhrase(reason)}` },
+  { pattern: /^整局快速分析完成：共分析 (\d+) 个实战局面。$/u, replace: (_, count) => `Full-game analysis complete: ${countOf(count, "played position")} analyzed.` },
   { pattern: /^已切换到 (.+)；请重新分析当前局面。$/u, replace: "Switched to $1. Analyze this position again." },
   { pattern: /^已切换到 (.+)；不同模型的分析结果会分别保留。$/u, replace: "Switched to $1. Results from each model are kept separately." },
-  { pattern: /^正在载入 KataGo (.+) 神经网络 · (.+)…$/u, replace: "Loading KataGo $1 neural network · $2…" },
+  {
+    pattern: /^正在载入 KataGo (.+?) 神经网络 · (.+)…$/u,
+    replace: (_, model, progress) =>
+      `Loading KataGo ${model} neural network · ${progress.replace(/约 ([\d.]+) MB/u, "about $1 MB")}…`,
+  },
   { pattern: /^KataGo 正在观察整盘棋 · (.+) 推理…$/u, replace: "KataGo is reading the full board · $1 inference…" },
-  { pattern: /^神经判断完成，正在按(.+)规则验证与搜索…$/u, replace: "Neural evaluation complete. Validating and searching with $1 rules…" },
-  { pattern: /^KataGo (.+)混合 AI$/u, replace: (_, topology) => `KataGo ${capturedTerm(topology)} hybrid AI` },
+  {
+    pattern: /^神经判断完成，正在按(.+)规则验证与搜索…$/u,
+    replace: (_, topology) =>
+      `Neural evaluation complete. Validating and searching with ${capturedPhrase(topology)} rules…`,
+  },
+  {
+    pattern: /^KataGo (\S+) (竹筒|甜甜圈|莫比乌斯)混合 AI$/u,
+    replace: (_, model, topology) => `KataGo ${model} ${capturedTerm(topology)} hybrid AI`,
+  },
+  { pattern: /^KataGo (.+)混合 AI$/u, replace: (_, topology) => `KataGo ${capturedPhrase(topology)} hybrid AI` },
+  {
+    pattern: /^AI 自对弈已开始：黑方 (.+)，白方 (.+)。$/u,
+    replace: (_, black, white) => `AI self-play started: Black ${black}, White ${white}.`,
+  },
+  { pattern: /^(\d+) 分钟$/u, replace: (_, minutes) => `${minutes} min` },
+  {
+    pattern: /^📍 (.+) 来自上一块 (\d+) × (\d+) (竹筒|甜甜圈|莫比乌斯)棋盘，当前不强行定位。$/u,
+    replace: (_, label, width, height, topology) =>
+      `📍 ${label} refers to the previous ${width} × ${height} ${capturedTerm(topology)} board, so it is not shown on this one.`,
+  },
+  {
+    pattern: /^已引用 📍 (.+)；发送后当前频道可以点击定位。$/u,
+    replace: "Referenced 📍 $1. People in this channel can jump to it after you send.",
+  },
+  {
+    pattern: /^(.+) 提到了 📍 (.+)，已标记；点击坐标可转到该处。$/u,
+    replace: "$1 mentioned 📍 $2. It is marked; select the coordinate to go there.",
+  },
+  {
+    pattern: /^(黑方|白方) AI (正在思考|准备落子)$/u,
+    replace: (_, color, state) =>
+      `${capturedTerm(color)} AI ${state === "正在思考" ? "is thinking" : "is ready to move"}`,
+  },
+  {
+    pattern: /^已暂停 · (黑方|白方)待行$/u,
+    replace: (_, color) => `Paused · ${capturedTerm(color)} to move`,
+  },
+  {
+    pattern: /^已在本页选择 (.+)；该分支不会发送到房间。$/u,
+    replace: (_, move) => `Selected ${capturedPhrase(move)} on this page; this branch is never sent to the room.`,
+  },
+  {
+    pattern: /^已撤回(黑方|白方) AI 的上一手；自对弈保持暂停。$/u,
+    replace: (_, color) => `Undid ${capturedTerm(color)} AI's last move; self-play stays paused.`,
+  },
+  {
+    pattern: /^(.+?) 已保留本次加入凭据；请使用下方“核对并恢复”重试原身份。$/u,
+    replace: (_, reason) =>
+      `${capturedPhrase(reason)} The credentials for this join were kept. Use Check and recover below to retry the original identity.`,
+  },
+  {
+    pattern: /^(.+?) 此房间仍有其他可恢复的加入请求，请核对身份后再恢复。$/u,
+    replace: (_, reason) =>
+      `${capturedPhrase(reason)} This room has other recoverable join requests. Check the identity before recovering.`,
+  },
+  {
+    pattern: /^正在以 (.+) 的身份恢复房间 ([A-Z0-9]{6})…$/u,
+    replace: (_, name, code) => `Restoring room ${code} as ${capturedPhrase(name)}…`,
+  },
+  {
+    pattern: /^(.+?)本地凭据未能删除，恢复入口可能再次出现；请检查浏览器存储设置。$/u,
+    replace: (_, reason) =>
+      `${capturedPhrase(reason)} The local credentials could not be deleted, so the recovery option may reappear. Check browser storage settings.`,
+  },
+  { pattern: /^棋谱结果 (.+)$/u, replace: "Recorded result $1" },
+  { pattern: /^确认(黑方|白方)结果$/u, replace: (_, color) => `Confirm as ${capturedTerm(color)}` },
+  { pattern: /^联机服务返回 (\d+)。$/u, replace: "The online service returned HTTP $1." },
+  {
+    pattern: /^(\d+) × (\d+) (竹筒|甜甜圈|莫比乌斯)$/u,
+    replace: (_, width, height, topology) => `${width} × ${height} ${capturedTerm(topology)}`,
+  },
+  // Coordinate hint: "D4 · A列与末列相邻 · 点击引用到聊天（不会落子）".
+  {
+    pattern: /^([A-Z]{1,2}\d{1,2}) · (.+)$/u,
+    replace: (_, coordinate, notes) => `${coordinate} · ${segmentsPhrase(notes)}`,
+  },
 ]);

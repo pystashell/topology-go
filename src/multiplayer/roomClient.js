@@ -500,6 +500,14 @@ function publicIdentity(session) {
   return identity;
 }
 
+function browserGlobal(name) {
+  try {
+    return globalThis[name] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function attachSocketListener(socket, type, handler) {
   if (typeof socket.addEventListener === "function") {
     socket.addEventListener(type, handler);
@@ -586,6 +594,18 @@ export class RoomClient {
     this._pendingCommands = new Map();
     this._nextSequence = 1;
     this._awaitingSnapshot = false;
+
+    // A dropped connection gives up after maxAttempts (about a minute). The
+    // browser telling us the network is back, or the player returning to the
+    // tab, is a strong signal to try again with a fresh backoff budget.
+    this._networkTarget = options.networkTarget ?? browserGlobal("window");
+    this._visibilityTarget = options.visibilityTarget ?? browserGlobal("document");
+    this._handleOnline = () => this.reconnectNow();
+    this._handleVisibility = () => {
+      if (this._visibilityTarget?.visibilityState === "visible") this.reconnectNow();
+    };
+    this._networkTarget?.addEventListener?.("online", this._handleOnline);
+    this._visibilityTarget?.addEventListener?.("visibilitychange", this._handleVisibility);
   }
 
   get isConnected() {
@@ -1302,6 +1322,27 @@ export class RoomClient {
     }, retryInMs);
   }
 
+  /**
+   * Reconnect now, resetting the backoff, when this tab still owns a session
+   * that dropped (reconnecting, or given up after maxAttempts). Sessions that
+   * ended on purpose stay closed: a leave or forget, a seat replaced by
+   * another window (4408), an expired identity (4401/4404) or a required
+   * client upgrade.
+   */
+  reconnectNow() {
+    if (!this.session?.token || !this.roomCode || this._manualClose) return false;
+    if (![
+      CONNECTION_STATUS.RECONNECTING,
+      CONNECTION_STATUS.DISCONNECTED,
+    ].includes(this.connectionStatus)) return false;
+    // A socket that is still handshaking will settle on its own.
+    if (this._socket) return false;
+    this._clearReconnectTimer();
+    this._reconnectAttempt = 0;
+    this._openSocket(true);
+    return true;
+  }
+
   _clearReconnectTimer() {
     if (this._reconnectTimer !== null) {
       this.clearTimeoutImpl(this._reconnectTimer);
@@ -1716,6 +1757,8 @@ export class RoomClient {
 
   destroy() {
     this.disconnect({ preserveSession: true });
+    this._networkTarget?.removeEventListener?.("online", this._handleOnline);
+    this._visibilityTarget?.removeEventListener?.("visibilitychange", this._handleVisibility);
     this._listeners.clear();
   }
 }

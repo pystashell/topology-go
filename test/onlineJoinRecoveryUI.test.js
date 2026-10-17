@@ -45,13 +45,15 @@ function joinHarness({ prior = [], fail }) {
   const context = {
     AbortController, onlineBusy: false, onlineEntryController: null,
     BLACK: "black", WHITE: "white", elements, roomClient,
-    document: { createElement: () => ({ value: "", textContent: "" }) },
+    document: { createElement: () => ({ value: "", textContent: "", dataset: {} }) },
+    translateText: (text) => text,
     sanitizeRoomCode: (value) => String(value).toUpperCase().replace(/[^A-HJ-NP-Z2-9]/gu, "").slice(0, 6),
     normalizedPlayerName: () => "Alice",
     rememberOfflineGame: noop, cancelAIThinking: noop,
     cancelReplayAIReview: noop, rememberPlayerName: noop,
     restoreOfflineGame: noop, updateUI: noop, maybeStartAITurn: noop,
     setOnlineBusy: noop,
+    localizedErrorMessage: (error, fallback) => error?.message || fallback,
     showOnlineError: (message = "") => { errorMessage = message; },
   };
   const join = vm.runInNewContext(`${renderSource}\n${joinSource}\njoinOnlineRoom`, context);

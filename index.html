@@ -8,6 +8,29 @@
       name="description"
       content="3D Baduk：支持竹筒、甜甜圈与莫比乌斯棋盘、KataGo AI、音效、悔棋、完整复盘、在线对局以及平面和三维视图。"
     />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/icons/icon-192.png" sizes="192x192" type="image/png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="3D Baduk" />
+    <meta property="og:title" content="3D Baduk · 奇异棋盘围棋" />
+    <meta
+      property="og:description"
+      content="3D Baduk：支持竹筒、甜甜圈与莫比乌斯棋盘、KataGo AI、音效、悔棋、完整复盘、在线对局以及平面和三维视图。"
+    />
+    <!-- Link previews need an absolute image URL: the public deployment (README). -->
+    <meta property="og:image" content="https://topology-go.pystashell.workers.dev/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="3D Baduk：竹筒棋盘上的围棋" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="3D Baduk · 奇异棋盘围棋" />
+    <meta
+      name="twitter:description"
+      content="3D Baduk：支持竹筒、甜甜圈与莫比乌斯棋盘、KataGo AI、音效、悔棋、完整复盘、在线对局以及平面和三维视图。"
+    />
+    <meta name="twitter:image" content="https://topology-go.pystashell.workers.dev/og-image.png" />
     <title>3D Baduk · 奇异棋盘围棋</title>
   </head>
   <body>
@@ -411,7 +434,7 @@
           <section id="undo-request-panel" class="undo-request-panel" aria-live="assertive" hidden>
             <div>
               <span class="eyebrow">联机悔棋</span>
-              <strong id="undo-request-text">对方申请撤回上一手</strong>
+              <strong id="undo-request-text">对方申请撤回自己的上一手</strong>
             </div>
             <div id="undo-response-actions" class="undo-request-actions">
               <button id="approve-undo" class="primary-button" type="button">同意</button>
@@ -740,7 +763,7 @@
 
         <section class="invite-settings-summary" aria-label="本局设置">
           <span>本局设置</span>
-          <strong id="invite-settings-summary">19 × 19 · 竹筒 · 中国规则 · 不计时</strong>
+          <strong id="invite-settings-summary">19 × 19 · 竹筒 · 中国规则 · 贴目 7.5 · 不计时</strong>
           <button id="invite-modify-settings" class="text-button" type="button">修改棋盘设置</button>
         </section>
 
@@ -792,7 +815,7 @@
 
         <section id="online-board-summary-section" class="online-board-summary" aria-label="即将创建的棋盘">
           <span>创建房间将使用</span>
-          <strong id="online-board-summary">19 × 19 · 竹筒 · 中国规则</strong>
+          <strong id="online-board-summary">19 × 19 · 竹筒 · 中国规则 · 贴目 7.5 · 不计时</strong>
           <button id="online-modify-settings" class="text-button" type="button">修改棋盘设置</button>
         </section>
 

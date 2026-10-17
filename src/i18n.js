@@ -1,6 +1,11 @@
 import { ENGLISH_STATIC } from "./i18n/englishStatic.js";
 import * as dynamicDictionary from "./i18n/englishDynamic.js";
 import { ENGLISH_VIEWS } from "./i18n/englishViews.js";
+import {
+  ENGLISH_SERVER_ERRORS,
+  GENERIC_SERVER_ERROR,
+  errorCopy,
+} from "./i18n/serverErrors.js";
 
 export const LOCALE_STORAGE_KEY = "3d-baduk-locale-v1";
 export const LOCALE_CHINESE = "zh-CN";
@@ -11,10 +16,12 @@ const ENGLISH_PATTERNS = Array.isArray(dynamicDictionary.ENGLISH_PATTERNS)
   ? dynamicDictionary.ENGLISH_PATTERNS
   : [];
 const ENGLISH_TEXT = Object.freeze({
+  ...ENGLISH_SERVER_ERRORS,
   ...ENGLISH_STATIC,
   ...ENGLISH_DYNAMIC,
   ...ENGLISH_VIEWS,
 });
+const CJK_TEXT = /[\u3400-\u9fff\uff01-\uff60\u3000-\u303f]/u;
 
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
@@ -166,6 +173,25 @@ export function translateText(source, params = {}, locale = currentLocale) {
     ? exact
     : patternTranslation(text);
   return interpolate(translated, params);
+}
+
+/** True when the English rendering of `source` has no Chinese left in it. */
+export function hasEnglishTranslation(source) {
+  return !CJK_TEXT.test(translateText(source, {}, LOCALE_ENGLISH));
+}
+
+/**
+ * Source copy for showing an error in the current language. Server messages
+ * are Chinese; English keeps them only when the dictionary translates them,
+ * otherwise it uses the copy for the error's code or `fallback`. The result
+ * is a dictionary source string, so the DOM translator renders it.
+ */
+export function localizedErrorMessage(error, fallback = GENERIC_SERVER_ERROR) {
+  return errorCopy(error, {
+    fallback,
+    chinese: currentLocale === LOCALE_CHINESE,
+    isEnglish: hasEnglishTranslation,
+  });
 }
 
 function translatePreservingWhitespace(source) {

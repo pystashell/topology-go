@@ -701,12 +701,19 @@ summary:focus-visible {
 
 .gesture-hint {
   position: absolute;
-  left: 50%;
+  left: 12px;
+  right: 12px;
   bottom: 20px;
-  transform: translateX(-50%);
+  /* Centred and only as wide as its text, but never wider than the stage:
+     longer (e.g. English) hints wrap instead of running off a phone. */
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  margin: 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 9px;
+  justify-content: center;
+  gap: 2px 9px;
   padding: 8px 13px;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -714,7 +721,8 @@ summary:focus-visible {
   background: rgba(10, 15, 13, 0.7);
   backdrop-filter: blur(10px);
   font-size: 11px;
-  white-space: nowrap;
+  line-height: 1.35;
+  text-align: center;
   pointer-events: none;
 }
 
@@ -2951,6 +2959,9 @@ select:disabled {
 
   .gesture-hint {
     bottom: 10px;
+    padding: 6px 12px;
+    border-radius: 14px;
+    font-size: 10px;
   }
 
   .control-panel {
@@ -2985,6 +2996,66 @@ select:disabled {
     min-height: 50px;
   }
 
+  /* Compact play bar: keep the move status and Pass/Undo/Resign on the
+     first screen during a game instead of ~250 px below the fold. */
+  .play-docked .control-panel {
+    padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+    /* A backdrop filter would make the panel the containing block of the
+       fixed bar below; the stacked phone layout does not need the blur. */
+    backdrop-filter: none;
+  }
+
+  .play-docked #message {
+    position: fixed;
+    z-index: 31;
+    left: 0;
+    right: 0;
+    bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+    min-height: 0;
+    margin: 0;
+    padding: 7px 14px;
+    border-top: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    background: rgba(17, 26, 23, 0.97);
+    backdrop-filter: blur(14px);
+    font-size: 11px;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+
+  .play-docked .score-strip {
+    margin-top: 14px;
+  }
+
+  .play-docked #message.error {
+    border-left-color: var(--danger);
+    background: rgba(48, 22, 19, 0.97);
+  }
+
+  .play-docked #play-controls {
+    position: fixed;
+    z-index: 31;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin: 0;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+    grid-template-columns: none;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+    gap: 8px;
+    background: rgba(12, 18, 16, 0.97);
+    backdrop-filter: blur(14px);
+  }
+
+  .play-docked #play-controls button {
+    min-height: 44px;
+    padding: 8px 6px;
+  }
+
   .replay-panel {
     padding: 12px;
   }
@@ -3009,6 +3080,52 @@ select:disabled {
 
   .brand > span:last-child {
     display: none;
+  }
+}
+
+/* Touch screens: board toolbar, shape and view switches stay at least 40 px
+   tall (44 px where they sit over the board), after the phone sizing above. */
+@media (pointer: coarse) {
+  .topology-switch button,
+  .language-switch button,
+  .size-buttons button {
+    min-height: 40px;
+  }
+
+  .language-switch button {
+    min-width: 40px;
+  }
+
+  .scene-toolbar .icon-button {
+    min-width: 40px;
+    min-height: 40px;
+    justify-content: center;
+  }
+
+  .view-switch button {
+    min-height: 40px;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 560px) {
+  /* Fit the larger toolbar beside the view switch on a phone: size the
+     switch to its labels instead of equal (placeholder-widened) columns
+     and drop the decorative glyphs. */
+  .scene-toolbar {
+    gap: 6px;
+  }
+
+  .view-switch {
+    grid-template-columns: repeat(6, auto);
+  }
+
+  .board-stage:not([data-topology="cylinder"]) .view-switch::before,
+  .view-switch button span {
+    display: none;
+  }
+
+  .view-switch button {
+    padding: 6px 5px;
   }
 }
 

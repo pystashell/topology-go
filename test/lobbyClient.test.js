@@ -46,3 +46,22 @@ test("lobby client exposes a stable error when the directory is unavailable", as
     (error) => error instanceof LobbyClientError && error.code === "LOBBY_UNREACHABLE",
   );
 });
+
+test("lobby client keeps the server's error code and Retry-After for rate limits", async () => {
+  await assert.rejects(
+    fetchLobbyRooms({
+      fetchImpl: async () => new Response(
+        JSON.stringify({ error: "请求过于频繁，请稍后再试。", code: "RATE_LIMITED" }),
+        { status: 429, headers: { "Retry-After": "60" } },
+      ),
+    }),
+    (error) => error instanceof LobbyClientError &&
+      error.code === "RATE_LIMITED" &&
+      error.status === 429 &&
+      error.retryAfterSeconds === 60,
+  );
+  await assert.rejects(
+    fetchLobbyRooms({ fetchImpl: async () => new Response("{}", { status: 503 }) }),
+    (error) => error.code === "LOBBY_REJECTED" && error.retryAfterSeconds === null,
+  );
+});
