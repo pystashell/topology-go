@@ -55,6 +55,9 @@ function publishingRoom(engine, lobby) {
       return structuredClone(stored);
     },
     setLobby(next) {
+      // A replaced lobby stands for a new deployment, whose fresh room
+      // instances have not published anything yet.
+      room.indexPublication = null;
       room.env.BADUK_ROOM_INDEX.getByName = () => ({
         fetch: (request) => next.fetch(request),
       });
@@ -84,10 +87,19 @@ test("an operator departure advertises the reusable black seat in the lobby", as
 
   engine.leave({ playerId: "host", now: now + 200 });
   await publisher.persist();
+  const emptyEntry = lobby.rooms.get(code);
+  assert.equal(emptyEntry.status, "setup");
+  assert.equal(emptyEntry.mode, "friend");
+  assert.equal(emptyEntry.joinable, false, "an empty room is not advertised");
+
+  engine.join({
+    name: "Viewer", role: "spectator", playerId: "viewer",
+    tokenHash: await hashRoomToken("viewer-secret"), now: now + 250,
+  });
+  engine.resumeConnection("viewer", "viewer-socket", now + 260);
+  await publisher.persist();
   const entry = lobby.rooms.get(code);
-  assert.equal(entry.status, "setup");
-  assert.equal(entry.mode, "friend");
-  assert.equal(entry.joinable, true);
+  assert.equal(entry.joinable, true, "people still in the room can take a new host");
   const replacement = RoomEngine.restore(engine.serialize());
   assert.equal(replacement.join({
     name: "Next host",

@@ -63,6 +63,11 @@ test("room exit wording distinguishes a normal leave from disconnected cleanup",
   );
   assert.match(
     mainSource,
+    /leavingForfeitsGame\s*\?\s*translateText\("对局正在进行，退出房间会判你认输并释放座位。确定退出吗？"\)/,
+    "leaving a friend game in progress must warn that it resigns the game",
+  );
+  assert.match(
+    mainSource,
     /当前无法通知服务器释放座位。忘记房间只会清除本机凭据，原座位可能继续保留。确定继续吗？/,
     "when disconnected, the warning must not imply that the server seat was released",
   );

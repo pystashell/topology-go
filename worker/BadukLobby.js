@@ -54,6 +54,7 @@ function jsonResponse(body, status = 200) {
     headers: {
       "Cache-Control": "no-store",
       "Content-Type": "application/json; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
     },
   });
 }
@@ -103,10 +104,13 @@ export class BadukLobby {
       if (!isLobbySummary(summary)) {
         return jsonResponse({ error: "Invalid public room snapshot." }, 400);
       }
-      if (summary.expiresAt <= Date.now()) {
+      const now = Date.now();
+      if (summary.expiresAt <= now) {
         return jsonResponse({ ok: true, ignored: "expired" });
       }
-      await this.prune();
+      // Expiry pruning is deterministic, so an ignored upsert need not write
+      // it; an accepted one persists it below in its single write.
+      this.pruneInMemory(now);
       const current = this.rooms.get(summary.code);
       const watermark = this.watermarks.get(summary.code);
       if (staleAgainst(summary, current) || staleAgainst(summary, watermark)) {
@@ -118,7 +122,9 @@ export class BadukLobby {
       }
       this.watermarks.delete(summary.code);
       this.rooms.set(summary.code, summary);
-      await this.prune();
+      // The directory was just pruned at this instant; only a new code can
+      // push it past the visible cap and displace an entry into a watermark.
+      if (this.rooms.size > MAX_LOBBY_ROOMS) this.pruneInMemory(now);
       await this.persist();
       return jsonResponse({ ok: true });
     }
@@ -135,7 +141,7 @@ export class BadukLobby {
       }
       this.remember(current);
       this.rooms.delete(body.code);
-      await this.prune();
+      this.pruneInMemory();
       await this.persist();
       return jsonResponse({ ok: true });
     }
@@ -143,6 +149,10 @@ export class BadukLobby {
   }
 
   async prune(now = Date.now()) {
+    if (this.pruneInMemory(now)) await this.persist();
+  }
+
+  pruneInMemory(now = Date.now()) {
     const rooms = pruneLobbyRooms([...this.rooms.values()], now);
     const kept = new Set(rooms.map((room) => room.code));
     let changed = rooms.length !== this.rooms.size;
@@ -159,7 +169,7 @@ export class BadukLobby {
         changed = true;
       }
     }
-    if (changed) await this.persist();
+    return changed;
   }
 
   remember(summary) {

@@ -15,8 +15,16 @@ import {
   RoomEngineError,
 } from "../src/multiplayer/roomEngine.js";
 import { CHAT_CHANNEL_SPECTATORS } from "../src/multiplayer/chat.js";
+import { lobbySummaryFromRoom } from "../src/multiplayer/lobby.js";
 
 const STORAGE_KEY = "room";
+// The lobby mirrors the room's expiry. Refresh an otherwise unchanged entry
+// once the room's TTL has slid this far past the last published one.
+export const LOBBY_EXPIRY_REFRESH_MS = 30 * 60 * 1_000;
+// Reconnecting sockets only refresh presence and TTL, so record a member's
+// connection at most once per interval (a reservation's first connection
+// is always recorded).
+export const CONNECTION_WRITE_INTERVAL_MS = 60 * 1_000;
 const MAX_SOCKET_CONNECTIONS = 64;
 const MAX_CLIENT_MESSAGE_BYTES = 8 * 1024;
 const POSITION_BOUND_ACTIONS = new Set([
@@ -34,6 +42,7 @@ function jsonResponse(body, status = 200) {
     headers: {
       "Cache-Control": "no-store",
       "Content-Type": "application/json; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
     },
   });
 }
@@ -54,6 +63,11 @@ export class BadukRoom {
     this.unavailableError = null;
     this.retiring = false;
     this.operationQueue = Promise.resolve();
+    // Last lobby publication from this instance: { key, expiresAt }. Null
+    // until one succeeds, and reset when the latest one fails.
+    this.indexPublication = null;
+    // playerId -> when this instance last persisted that member's connection.
+    this.connectionWrites = new Map();
 
     if (typeof ctx.setWebSocketAutoResponse === "function") {
       ctx.setWebSocketAutoResponse(
@@ -89,7 +103,7 @@ export class BadukRoom {
         }
       }
 
-      const advanced = this.engine.advance(now);
+      const advanced = this.engine.advance(now, { includeRoom: false });
       if (advanced.expired) {
         await this.retireRoom();
         return;
@@ -234,7 +248,7 @@ export class BadukRoom {
   async alarm() {
     await this.enqueue(async () => {
       if (!this.engine) return;
-      const result = this.engine.advance(Date.now());
+      const result = this.engine.advance(Date.now(), { includeRoom: false });
       if (result.expired) {
         await this.retireRoom();
         return;
@@ -445,6 +459,7 @@ export class BadukRoom {
 
     try {
       const connectionId = crypto.randomUUID();
+      const joinableBefore = this.lobbyJoinable();
       const connected = await this.engine.connectByToken({
         token,
         connectionId,
@@ -471,7 +486,15 @@ export class BadukRoom {
       server.serializeAttachment(attachment);
       this.ctx.acceptWebSocket(server, ["bamboo-baduk-room"]);
 
-      await this.persist();
+      const connectedAt = Date.now();
+      const playerId = connected.identity.playerId;
+      const lastWrite = this.connectionWrites?.get(playerId);
+      if (connected.firstConnection !== false || lastWrite === undefined ||
+          connectedAt - lastWrite >= CONNECTION_WRITE_INTERVAL_MS ||
+          this.lobbyJoinable() !== joinableBefore) {
+        await this.persist();
+        this.connectionWrites?.set(playerId, connectedAt);
+      }
       await this.scheduleAlarmAfterCommit();
       this.sendWelcome(server, connected.identity, connected.room);
       this.sendState(server, connected.room);
@@ -518,6 +541,12 @@ export class BadukRoom {
         playerId,
         action: command.action,
       });
+      // Seated players get a generous per-member budget for everything but
+      // chat (separately limited). A rejection here writes nothing.
+      this.engine.enforcePlayerCommandRateLimit({
+        playerId,
+        action: command.action,
+      });
     } catch (error) {
       this.sendNormalizedError(socket, error, command.id);
       return;
@@ -546,6 +575,7 @@ export class BadukRoom {
     }
 
     let result;
+    const revisionBefore = this.engine.state?.revision;
     try {
       if (
         POSITION_BOUND_ACTIONS.has(command.action) &&
@@ -612,6 +642,12 @@ export class BadukRoom {
       return;
     }
 
+    // A player's sync only reads. Its receipt can stay in memory unless the
+    // room itself advanced (a clock or reservation expiry) while preparing.
+    // Spectator syncs still persist the shared rate-limit spend.
+    const readOnly = command.action === "sync" &&
+      this.engine.member(playerId)?.role === "player" &&
+      this.engine.state?.revision === revisionBefore;
     try {
       if (command.action !== "leave") {
         this.engine.recordCommand({
@@ -620,7 +656,7 @@ export class BadukRoom {
           sequence: command.sequence,
         });
       }
-      await this.persist();
+      if (!readOnly) await this.persist();
     } catch (error) {
       if (!this.unavailableError) this.markUnavailable("ROOM_COMMIT_FAILED", error);
       this.sendNormalizedError(socket, this.unavailableError, command.id);
@@ -657,8 +693,17 @@ export class BadukRoom {
     const attachment = this.readAttachment(socket);
     if (!attachment.identity) return;
     try {
-      this.engine.disconnect({ connectionId: attachment.connectionId });
-      await this.persist();
+      const joinableBefore = this.lobbyJoinable();
+      const disconnected = this.engine.disconnect({
+        connectionId: attachment.connectionId,
+      });
+      // Only a spectator's reconnect grace starts here and must survive a
+      // restart, and the lobby must learn when a host's presence opens or
+      // closes the room to joiners; other presence is not worth a rewrite.
+      if (disconnected?.spectatorOffline !== false ||
+          this.lobbyJoinable() !== joinableBefore) {
+        await this.persist();
+      }
       await this.scheduleAlarm();
       this.broadcastState(socket);
       this.broadcastPresence(socket);
@@ -688,31 +733,78 @@ export class BadukRoom {
     this.queueIndexPublish();
   }
 
+  lobbyJoinable() {
+    // Presence decides whether the lobby advertises a seat, and a publish
+    // needs a stored directory revision, so socket events that flip it write.
+    if (!this.engine || !this.env?.BADUK_ROOM_INDEX) return null;
+    try {
+      return lobbySummaryFromRoom(this.engine.directorySnapshot()).joinable;
+    } catch {
+      return null;
+    }
+  }
+
   queueIndexPublish() {
-    const publishing = this.publishRoomIndexSnapshot();
+    if (!this.engine || !this.env?.BADUK_ROOM_INDEX) return;
+    let room;
+    let summary;
+    try {
+      room = this.engine.directorySnapshot();
+      summary = lobbySummaryFromRoom(room);
+    } catch (error) {
+      console.error("Unable to project room for optional index", error);
+      return;
+    }
+    // Every persist bumps the directory revision, but most (syncs, receipts,
+    // presence-free writes) leave the public entry unchanged. The single
+    // global lobby rewrites its whole index per upsert, so only publish a
+    // visible change, a materially later expiry, or a retry after a failure.
+    // A skipped publish just leaves an older directory revision in the lobby.
+    const {
+      revision: _revision,
+      directoryRevision: _directoryRevision,
+      updatedAt: _updatedAt,
+      expiresAt,
+      ...visible
+    } = summary;
+    const key = JSON.stringify(visible);
+    const previous = this.indexPublication;
+    if (previous?.key === key &&
+        expiresAt - previous.expiresAt < LOBBY_EXPIRY_REFRESH_MS) {
+      return;
+    }
+    const publication = { key, expiresAt };
+    this.indexPublication = publication;
+    const publishing = this.publishRoomIndexSnapshot(room).then((published) => {
+      if (!published && this.indexPublication === publication) {
+        this.indexPublication = null;
+      }
+    });
     if (typeof this.ctx.waitUntil === "function") this.ctx.waitUntil(publishing);
     else void publishing;
   }
 
-  async publishRoomIndexSnapshot() {
+  async publishRoomIndexSnapshot(room) {
     // A room is the source of truth. The optional index receives a one-way
     // public snapshot and derives its own disposable directory entry. Nothing
     // in this object ever reads from the index.
-    if (!this.engine || !this.env?.BADUK_ROOM_INDEX) return;
+    if (!room || !this.env?.BADUK_ROOM_INDEX) return false;
     try {
       const index = this.env.BADUK_ROOM_INDEX.getByName("global");
       const response = await index.fetch(
         new Request("https://room-index.internal/internal/upsert", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(this.engine.snapshot()),
+          body: JSON.stringify(room),
         }),
       );
       if (!response.ok) {
         console.error("Unable to publish room to optional index", response.status);
       }
+      return response.ok;
     } catch (error) {
       console.error("Unable to publish room to optional index", error);
+      return false;
     }
   }
 
@@ -802,12 +894,21 @@ export class BadukRoom {
     }
   }
 
-  roomForSocket(socket, fallback = null) {
+  roomForSocket(socket, fallback = null, snapshotsByRole = null) {
     const attachment = this.readAttachment(socket);
     if (!this.engine || !attachment.identity?.playerId) return fallback;
     try {
       if (typeof this.engine.snapshotFor === "function") {
-        return this.engine.snapshotFor(attachment.identity.playerId);
+        const role = snapshotsByRole && typeof this.engine.member === "function"
+          ? this.engine.member(attachment.identity.playerId)?.role
+          : undefined;
+        if (!role) return this.engine.snapshotFor(attachment.identity.playerId);
+        // snapshotFor() varies only by the viewer's role (chat channels), so
+        // a broadcast builds at most one player and one spectator snapshot.
+        if (!snapshotsByRole.has(role)) {
+          snapshotsByRole.set(role, this.engine.snapshotFor(attachment.identity.playerId));
+        }
+        return snapshotsByRole.get(role);
       }
       if (typeof this.engine.snapshot === "function") return this.engine.snapshot();
     } catch {
@@ -828,9 +929,9 @@ export class BadukRoom {
     });
   }
 
-  sendState(socket, room = null) {
+  sendState(socket, room = null, snapshotsByRole = null) {
     const attachment = this.readAttachment(socket);
-    const safeRoom = this.roomForSocket(socket, room);
+    const safeRoom = this.roomForSocket(socket, room, snapshotsByRole);
     if (!safeRoom) return;
     this.safeSend(socket, {
       ...makeStateMessage(safeRoom),
@@ -841,7 +942,10 @@ export class BadukRoom {
 
   broadcastState(excluded) {
     if (!this.engine) return;
-    for (const socket of this.joinedSockets(excluded)) this.sendState(socket);
+    const snapshotsByRole = new Map();
+    for (const socket of this.joinedSockets(excluded)) {
+      this.sendState(socket, null, snapshotsByRole);
+    }
   }
 
   broadcastPresence(excluded) {

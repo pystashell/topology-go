@@ -3725,7 +3725,7 @@ function updateRoomUI() {
     } else if (undoRequest) {
       elements.roomHint.textContent = ownUndoRequest
         ? "悔棋申请已发送，等待对方回应。"
-        : `${colorName(undoRequest.requesterColor)}申请撤回上一手，请选择同意或拒绝。`;
+        : `${colorName(undoRequest.requesterColor)}申请撤回自己的上一手，请选择同意或拒绝。`;
     } else if (game.phase === PHASE_SCORING) {
       if (ownScoreConfirmed) {
         elements.roomHint.textContent = "你已确认当前点目，正在等待对方确认。";
@@ -3837,7 +3837,7 @@ function updateRoomUI() {
           : "请先暂停 AI 自对弈，再撤回上一手"
         : match.opponentController === MATCH_CONTROLLER_AI
         ? "直接撤回你和 AI 的上一轮落子，不需要 AI 同意"
-        : "需要对方同意后才会撤回上一手"
+        : "需要对方同意后才会撤回你的上一手"
     : aiMode
       ? "直接回到你上一次选择之前，不需要 AI 同意"
       : "直接撤回上一手";
@@ -3851,8 +3851,8 @@ function updateRoomUI() {
   );
   if (undoRequest) {
     elements.undoRequestText.textContent = ownUndoRequest
-      ? "已申请撤回上一手，正在等待对方回应"
-      : `${colorName(undoRequest.requesterColor)}申请撤回上一手`;
+      ? "已申请撤回你的上一手，正在等待对方回应"
+      : `${colorName(undoRequest.requesterColor)}申请撤回自己的上一手`;
   }
   elements.undoResponseActions.hidden = !undoRequest || ownUndoRequest;
   elements.cancelUndoRequest.hidden = !undoRequest || !ownUndoRequest;
@@ -4138,10 +4138,10 @@ function announceRoomState(room, previousRoom) {
   } else if (!previousUndoRequest && undoRequest) {
     setMessage(isOwnUndoRequest(undoRequest)
       ? "悔棋申请已发送，等待对方回应。"
-      : `${colorName(undoRequest.requesterColor)}申请撤回上一手。`);
+      : `${colorName(undoRequest.requesterColor)}申请撤回自己的上一手。`);
   } else if (previousUndoRequest && !undoRequest) {
     setMessage(room.moveCount < previousRoom.moveCount
-      ? "悔棋已同意，上一手已撤回。"
+      ? "悔棋已同意，已撤回申请方的上一手。"
       : "悔棋申请已结束，棋局继续。");
   } else if (previousPhase === PHASE_SCORING && room.game.phase === PHASE_FINISHED) {
     setMessage(`点目完成：${formatResult(room.game.result)}。`);
@@ -6581,7 +6581,16 @@ async function leaveOnlineRoom() {
       : "已停止重连，但本地房间凭据未能删除，恢复入口可能再次出现；请检查浏览器存储设置。");
     return;
   }
-  const confirmed = window.confirm(translateText("退出房间会释放你的座位，确定退出吗？"));
+  // The room scores a seated player's departure from a friend game that is
+  // under way as a resignation; say so before the player confirms.
+  const leavingForfeitsGame = isOnlinePlayer() &&
+    onlineRoom?.match?.mode === ONLINE_MODE_FRIEND &&
+    onlineMatchStatus() === ONLINE_MATCH_PLAYING &&
+    onlineRoom.moveCount > 0 &&
+    onlineRoom.game?.phase !== PHASE_FINISHED;
+  const confirmed = window.confirm(leavingForfeitsGame
+    ? translateText("对局正在进行，退出房间会判你认输并释放座位。确定退出吗？")
+    : translateText("退出房间会释放你的座位，确定退出吗？"));
   if (!confirmed) return;
   setOnlineBusy(true);
   try {

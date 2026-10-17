@@ -72,3 +72,57 @@ test("all async forwarding branches use the shared HTTP error response", async (
     assert.equal((await worker.fetch(new Request(origin + path), env)).status, 500);
   }
 });
+
+test("rate-limited routes return 429 before reaching a Durable Object", async () => {
+  const keys = [];
+  const deny = { async limit({ key }) { keys.push(key); return { success: false }; } };
+  const untouched = { getByName() { throw new Error("must not reach a Durable Object"); } };
+  const env = {
+    BADUK_ROOMS: untouched,
+    BADUK_ROOM_INDEX: untouched,
+    ROOM_CREATE_RATE_LIMITER: deny,
+    ROOM_JOIN_RATE_LIMITER: deny,
+    ROOM_SOCKET_RATE_LIMITER: deny,
+    LOBBY_RATE_LIMITER: deny,
+  };
+  const requests = [
+    new Request(origin + "/api/rooms", { method: "POST", body: "{}" }),
+    new Request(origin + "/api/rooms/BAM234/join", { method: "POST", body: "{}" }),
+    new Request(origin + "/api/rooms/BAM234/socket", { headers: { Upgrade: "websocket" } }),
+    new Request(origin + "/api/lobby"),
+  ];
+  for (const request of requests) {
+    request.headers.set("CF-Connecting-IP", "203.0.113.7");
+    const response = await worker.fetch(request, env);
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.get("Retry-After"), "60");
+    const body = await response.json();
+    assert.equal(body.code, "RATE_LIMITED");
+    assert.equal(body.retryable, true);
+    assert.equal(typeof body.error, "string");
+  }
+  assert.deepEqual(keys, Array(4).fill("203.0.113.7"));
+});
+
+test("each route spends only its own limiter and a broken limiter fails open", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const spent = [];
+  const limiter = (name, outcome) => ({
+    async limit() {
+      spent.push(name);
+      if (outcome instanceof Error) throw outcome;
+      return { success: outcome };
+    },
+  });
+  const env = {
+    BADUK_ROOM_INDEX: {
+      getByName: () => ({ fetch: async () => Response.json({ rooms: [] }) }),
+    },
+    ROOM_CREATE_RATE_LIMITER: limiter("create", false),
+    LOBBY_RATE_LIMITER: limiter("lobby", new Error("binding unavailable")),
+  };
+  const response = await worker.fetch(new Request(origin + "/api/lobby"), env);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { rooms: [] });
+  assert.deepEqual(spent, ["lobby"]);
+});

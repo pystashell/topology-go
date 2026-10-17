@@ -480,6 +480,7 @@ test("starting an equivalent new game invalidates the previous AI response", () 
     now: 1_200,
   }).room;
 
+  room.applyAction({ playerId: "black-player", action: "resign", now: 1_250 });
   room.applyAction({
     playerId: "black-player",
     action: "new_game",
@@ -1202,6 +1203,13 @@ test("supports pass, scoring controls, resume and a black-controlled new game", 
       }),
     (error) => error instanceof RoomEngineError && error.code === "FORBIDDEN",
   );
+  // A restored legacy room cannot restart a game that is under way.
+  assert.throws(
+    () => room.applyAction({ playerId: "black-player", action: "new_game", now: 5_200 }),
+    (error) => error instanceof RoomEngineError && error.code === "GAME_IN_PROGRESS",
+  );
+  assert.equal(room.snapshot(5_200).moveCount, 2);
+  room.applyAction({ playerId: "white-player", action: "resign", now: 5_500 });
 
   const fresh = room.applyAction({
     playerId: "black-player",
@@ -1389,6 +1397,7 @@ test("rectangular rooms create, persist, play and start another rectangular game
 
   const restored = RoomEngine.restore(room.serialize());
   assert.equal(restored.snapshot(1_300).game.board[8][12], "black");
+  restored.applyAction({ playerId: "white-player", action: "resign", now: 1_350 });
   const fresh = restored.applyAction({
     playerId: "black-player",
     action: "new_game",
@@ -1425,6 +1434,7 @@ test("online rooms accept and persist 30x20 games without square aliases", () =>
 
   const restored = RoomEngine.restore(room.serialize());
   assert.equal(restored.snapshot(1_300).game.board[19][29], "black");
+  restored.applyAction({ playerId: "white-player", action: "resign", now: 1_350 });
   const fresh = restored.applyAction({
     playerId: "black-player",
     action: "new_game",
@@ -1735,7 +1745,7 @@ test("a stale client cannot request undo for a newer authoritative position", ()
   assert.equal(unchanged.undoRequest, null);
 
   const current = room.applyAction({
-    playerId: "white-player",
+    playerId: "black-player",
     action: "request_undo",
     payload: { expectedMoveCount: 1 },
     now: 3_200,
@@ -1982,8 +1992,18 @@ test("undo requests reject spectators, empty games, scoring and stale targets", 
     payload: { row: 0, col: 0 },
     now: 3_000,
   });
+  // White has not moved yet, so it has nothing of its own to take back.
+  assert.throws(
+    () => room.applyAction({
+      playerId: "white-player",
+      action: "request_undo",
+      payload: { expectedMoveCount: 1 },
+      now: 3_050,
+    }),
+    (error) => error instanceof RoomEngineError && error.code === "UNDO_UNAVAILABLE",
+  );
   const request = room.applyAction({
-    playerId: "white-player",
+    playerId: "black-player",
     action: "request_undo",
     payload: { expectedMoveCount: 1 },
     now: 3_100,
@@ -1991,7 +2011,7 @@ test("undo requests reject spectators, empty games, scoring and stale targets", 
   assert.throws(
     () =>
       room.applyAction({
-        playerId: "black-player",
+        playerId: "white-player",
         action: "respond_undo",
         payload: {
           accept: true,
@@ -2006,7 +2026,7 @@ test("undo requests reject spectators, empty games, scoring and stale targets", 
   assert.equal(room.snapshot(3_201).undoRequest.targetMoveCount, 1);
 
   room.applyAction({
-    playerId: "white-player",
+    playerId: "black-player",
     action: "cancel_undo",
     payload: {
       targetMoveCount: 1,
@@ -2161,6 +2181,13 @@ test("new games and player departures clear pending undo requests", () => {
     payload: { expectedMoveCount: 1 },
     now: 3_100,
   });
+  // A game under way (here with a pending undo) cannot be restarted.
+  assert.throws(
+    () => room.applyAction({ playerId: "black-player", action: "new_game", now: 3_150 }),
+    (error) => error instanceof RoomEngineError && error.code === "GAME_IN_PROGRESS",
+  );
+  assert.notEqual(room.snapshot(3_150).undoRequest, null);
+  room.applyAction({ playerId: "white-player", action: "resign", now: 3_180 });
   const fresh = room.applyAction({
     playerId: "black-player",
     action: "new_game",
@@ -2176,7 +2203,7 @@ test("new games and player departures clear pending undo requests", () => {
     now: 3_300,
   });
   room.applyAction({
-    playerId: "white-player",
+    playerId: "black-player",
     action: "request_undo",
     payload: { expectedMoveCount: 1 },
     now: 3_400,
@@ -2669,7 +2696,7 @@ test("resignation clears a pending undo and permanently stops the room clock", (
     now: 3_000,
   });
   room.applyAction({
-    playerId: "white-player",
+    playerId: "black-player",
     action: "request_undo",
     payload: { expectedMoveCount: 1 },
     now: 4_000,
@@ -2826,6 +2853,7 @@ test("clocks pause outside play and a new game can replace or disable its settin
 
   room.applyAction({ playerId: "black-player", action: "resume_play", now: 40_000 });
   assert.equal(room.snapshot(41_000).timeControl.running, true);
+  room.applyAction({ playerId: "black-player", action: "resign", now: 41_500 });
 
   const fresh = room.applyAction({
     playerId: "black-player",

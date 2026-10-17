@@ -33,7 +33,11 @@ import {
   normalizeChatPayload,
   trimStoredChatHistories,
 } from "./chat.js";
-import { isRoomCode, isRoomRole } from "./protocol.js";
+import {
+  isRoomCode,
+  isRoomRole,
+  stripUnsafeNameCharacters,
+} from "./protocol.js";
 
 export const ROOM_TTL_MS = 24 * 60 * 60 * 1_000;
 export const MAX_SPECTATORS = 32;
@@ -44,6 +48,13 @@ export const SPECTATOR_COMMAND_MEMBER_BURST = 3;
 export const SPECTATOR_COMMAND_MEMBER_REFILL_MS = 3 * 1_000;
 export const SPECTATOR_COMMAND_ROOM_BURST = 8;
 export const SPECTATOR_COMMAND_ROOM_REFILL_MS = 1 * 1_000;
+// Seated players send one command per acknowledged round trip, and AI moves
+// wait for a network evaluation, so 8/s sustained with a 40-command burst
+// leaves real play (including local and AI self-play) far from the limit.
+export const PLAYER_COMMAND_BURST = 40;
+export const PLAYER_COMMAND_REFILL_MS = 125;
+// Dead-stone marks per scoring session, as a multiple of board points.
+export const DEAD_STONE_TOGGLES_PER_POINT = 4;
 export const MAX_COMMAND_RECEIPTS = 256;
 export const CHAT_MEMBER_BURST = 5;
 export const CHAT_MEMBER_REFILL_MS = 1_200;
@@ -60,6 +71,12 @@ export const MATCH_MODE_HUMAN_AI = "human-ai";
 export const MATCH_MODE_AI_AI = "ai-ai";
 export const MATCH_MODE_LOCAL = "local";
 export const MAX_ROUND_ARCHIVE = 24;
+// Archived replays live in the room's single stored value, which Cloudflare
+// caps at 2 MiB. Keep only the newest rounds that fit this budget: a 900-move
+// 30x30 live game (~1.1 MiB), both full chat histories and all receipts take
+// ~1.3 MiB, leaving the value near 1.6 MiB. Typical 19x19 rounds (~15 KiB)
+// still keep all 24.
+export const MAX_ROUND_ARCHIVE_BYTES = 384 * 1024;
 
 const VALID_MATCH_STATUSES = new Set([
   MATCH_STATUS_SETUP,
@@ -158,12 +175,23 @@ function normalizeName(value) {
   if (typeof value !== "string") {
     throw new RoomEngineError("请填写名字。", 400, "BAD_REQUEST");
   }
-  const name = value.replace(/\s+/g, " ").trim();
+  // Names are public in the room and lobby; drop characters that hide or
+  // reorder what other people see.
+  const name = stripUnsafeNameCharacters(value).replace(/\s+/g, " ").trim();
   if (!name) throw new RoomEngineError("请填写名字。", 400, "BAD_REQUEST");
   if ([...name].length > 20) {
     throw new RoomEngineError("名字最多 20 个字。", 400, "BAD_REQUEST");
   }
   return name;
+}
+
+function validateStoredName(value) {
+  // Stored names predate character stripping; restore cleans them instead of
+  // rejecting a room over a name that was accepted when it was saved.
+  const name = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  if (!name || [...name].length > 20) {
+    throw new RoomEngineError("房间成员状态无效。", 500, "BAD_ROOM_STATE");
+  }
 }
 
 function normalizePlayerId(value) {
@@ -414,17 +442,58 @@ function publicReplay(game, timeControl, resignationOutcome) {
   return replay;
 }
 
-function fingerprint(prefix, value) {
-  const bytes = new TextEncoder().encode(JSON.stringify(value));
-  let hash = 0xcbf29ce484222325n;
-  for (const byte of bytes) {
-    hash ^= BigInt(byte);
-    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+const textEncoder = new TextEncoder();
+
+function hexLimb(value) {
+  return value.toString(16).padStart(4, "0");
+}
+
+/**
+ * FNV-1a 64 over bytes, as a 16-digit lowercase hex string. The 64-bit state
+ * is kept in four 16-bit limbs so the per-byte loop uses small-integer math
+ * instead of allocating BigInts; the output is identical to the BigInt form.
+ */
+export function fnv1a64Hex(bytes) {
+  let h0 = 0x2325;
+  let h1 = 0x8422;
+  let h2 = 0x9ce4;
+  let h3 = 0xcbf2;
+  for (let index = 0; index < bytes.length; index += 1) {
+    h0 ^= bytes[index];
+    // hash * 0x100000001b3 mod 2^64 = hash * 0x1b3 + (hash << 40).
+    const t0 = h0 * 0x1b3;
+    const t1 = h1 * 0x1b3 + (t0 >>> 16);
+    const t2 = h2 * 0x1b3 + (h0 << 8) + (t1 >>> 16);
+    h3 = (h3 * 0x1b3 + (h1 << 8) + (t2 >>> 16)) & 0xffff;
+    h0 = t0 & 0xffff;
+    h1 = t1 & 0xffff;
+    h2 = t2 & 0xffff;
   }
+  return hexLimb(h3) + hexLimb(h2) + hexLimb(h1) + hexLimb(h0);
+}
+
+function jsonByteLength(value) {
+  return textEncoder.encode(JSON.stringify(value)).byteLength;
+}
+
+function trimRoundArchive(archive) {
+  const kept = [];
+  let bytes = 0;
+  for (let index = archive.length - 1; index >= 0; index -= 1) {
+    if (kept.length >= MAX_ROUND_ARCHIVE) break;
+    bytes += jsonByteLength(archive[index]);
+    if (bytes > MAX_ROUND_ARCHIVE_BYTES) break;
+    kept.unshift(archive[index]);
+  }
+  return kept;
+}
+
+function fingerprint(prefix, value) {
+  const bytes = textEncoder.encode(JSON.stringify(value));
   return [
     prefix,
     "v1",
-    hash.toString(16).padStart(16, "0"),
+    fnv1a64Hex(bytes),
     bytes.length.toString(36),
   ].join("-");
 }
@@ -799,7 +868,7 @@ function validateSerializedState(state) {
   let spectators = 0;
   for (const member of state.members) {
     normalizePlayerId(member.playerId);
-    normalizeName(member.name);
+    validateStoredName(member.name);
     normalizeTokenHash(member.tokenHash);
     if (member.role === "player") {
       if (!VALID_COLORS.has(member.color) || colors.has(member.color)) {
@@ -1045,7 +1114,7 @@ export class RoomEngine {
     state.scoreConfirmations ??= [];
     state.undoRequest ??= null;
     state.resignationOutcome ??= null;
-    state.roundArchive ??= [];
+    state.roundArchive = trimRoundArchive(state.roundArchive ?? []);
     state.allowLegacyNewGame ??= false;
     state.match.aiAutoplayPaused ??= false;
     state.timeControl = persistedRoomTimeControl(state.timeControl);
@@ -1084,6 +1153,8 @@ export class RoomEngine {
     }
     state.receipts = state.receipts.slice(-MAX_COMMAND_RECEIPTS);
     for (const member of state.members) {
+      const cleanName = stripUnsafeNameCharacters(member.name).replace(/\s+/g, " ").trim();
+      if (cleanName) member.name = cleanName;
       member.lastSequence ??= 0;
       member.chatBucket = restoredChatBucket(
         member.chatBucket,
@@ -1183,12 +1254,7 @@ export class RoomEngine {
     });
   }
 
-  snapshot(nowInput, { viewerRole = "player" } = {}) {
-    const now = readNow(nowInput);
-    this.assertAvailable(now);
-    const visibleChatChannels = viewerRole === "spectator"
-      ? new Set([CHAT_CHANNEL_PLAYERS, CHAT_CHANNEL_SPECTATORS])
-      : new Set([CHAT_CHANNEL_PLAYERS]);
+  publicView(now) {
     const players = this.state.members
       .filter((member) => member.role === "player")
       .sort((left, right) =>
@@ -1248,6 +1314,47 @@ export class RoomEngine {
       game.lastMove = clone(this.state.resignationOutcome.lastMove);
     }
     game.moveCount = this.state.moveCount;
+    return { players, spectators, timeControl, game, resignationResult };
+  }
+
+  /**
+   * The public fields the optional lobby derives its directory entry from.
+   * Unlike snapshot(), it skips replay, chat and position tokens.
+   */
+  directorySnapshot(nowInput) {
+    const now = readNow(nowInput);
+    this.assertAvailable(now);
+    const { players, spectators, timeControl, game } = this.publicView(now);
+    return {
+      code: this.state.code,
+      revision: this.state.revision,
+      directoryRevision: this.state.directoryRevision,
+      incarnationId: this.state.incarnationId,
+      match: clone(this.state.match),
+      moveCount: this.state.moveCount,
+      timeControl,
+      game,
+      players,
+      spectators,
+      createdAt: this.state.createdAt,
+      updatedAt: this.state.updatedAt,
+      expiresAt: this.state.expiresAt,
+    };
+  }
+
+  snapshot(nowInput, { viewerRole = "player" } = {}) {
+    const now = readNow(nowInput);
+    this.assertAvailable(now);
+    const visibleChatChannels = viewerRole === "spectator"
+      ? new Set([CHAT_CHANNEL_PLAYERS, CHAT_CHANNEL_SPECTATORS])
+      : new Set([CHAT_CHANNEL_PLAYERS]);
+    const {
+      players,
+      spectators,
+      timeControl,
+      game,
+      resignationResult,
+    } = this.publicView(now);
     const replay = publicReplay(this.game, timeControl, this.state.resignationOutcome);
     return {
       code: this.state.code,
@@ -1258,7 +1365,8 @@ export class RoomEngine {
       positionToken: positionToken(this.game, this.state),
       scoringToken: this.scoringToken(),
       match: clone(this.state.match),
-      roundArchive: clone(this.state.roundArchive),
+      // Full archived replays stay in storage; every state message carries
+      // only their summaries (no client reads the replays).
       rounds: this.state.roundArchive.map((round) => ({
         roundId: round.roundId,
         startedAt: round.startedAt,
@@ -1352,7 +1460,9 @@ export class RoomEngine {
     let effectiveRole = normalizedRole;
     let color = null;
     if (effectiveRole === "player") {
-      color = this.nextOpenColor();
+      // Seats are fixed while a friend game is under way; a late player
+      // watches until the round ends instead of taking over a color.
+      color = this.friendRoundInProgress() ? null : this.nextOpenColor();
       if (!color) {
         effectiveRole = "spectator";
       }
@@ -1420,6 +1530,7 @@ export class RoomEngine {
         "ALREADY_SEATED",
       );
     }
+    this.assertSeatsUnlocked();
     if (this.nextOpenColor() !== WHITE) {
       throw new RoomEngineError(
         "白方席位已经被其他玩家、AI 或本地对手占用。",
@@ -1457,6 +1568,7 @@ export class RoomEngine {
         "FORBIDDEN",
       );
     }
+    this.assertSeatsUnlocked();
     this.evictExpiredSpectators(now);
     if (this.spectatorCount() >= MAX_SPECTATORS) {
       throw new RoomEngineError(
@@ -1533,6 +1645,9 @@ export class RoomEngine {
     );
     this.connections.set(normalizedConnectionId, identity.playerId);
     const member = this.requireMember(identity.playerId);
+    // A null marker is a reservation that expires unless this connection is
+    // recorded; the caller must persist it.
+    const firstConnection = member.lastConnectedAt === null;
     if (
       member.role === "spectator" ||
       (member.role === "player" &&
@@ -1544,6 +1659,7 @@ export class RoomEngine {
       identity,
       connectionId: normalizedConnectionId,
       revision: this.state.revision,
+      firstConnection,
       room: this.snapshotFor(member.playerId, now),
     };
   }
@@ -1574,10 +1690,9 @@ export class RoomEngine {
     const playerId = this.connections.get(connectionId);
     this.connections.delete(connectionId);
     const member = playerId ? this.member(playerId) : null;
-    if (
-      member?.role === "spectator" &&
-      !this.isOnline(member.playerId)
-    ) {
+    const spectatorOffline = member?.role === "spectator" &&
+      !this.isOnline(member.playerId);
+    if (spectatorOffline) {
       // Start the reconnect grace from the actual disconnect, rather than the
       // last command the observer happened to send while watching.
       member.lastSeenAt = now;
@@ -1585,7 +1700,8 @@ export class RoomEngine {
     return {
       changed: false,
       revision: this.state.revision,
-      room: this.snapshot(now),
+      // The grace start must be stored; nothing else here is durable.
+      spectatorOffline,
     };
   }
 
@@ -1599,6 +1715,19 @@ export class RoomEngine {
     const member = this.requireMember(normalizePlayerId(playerId));
     const resetOperatorRound = member.role === "player" &&
       member.color === BLACK && this.state.match?.mode !== MATCH_MODE_FRIEND;
+    // Leaving a seat mid-game is a resignation: it ends the round through the
+    // same outcome and replay as the resign action, so the clock cannot be
+    // paused by an empty seat and nobody else can take over the color.
+    const forfeit = member.role === "player" && member.automated !== true &&
+      this.friendRoundInProgress()
+      ? this.recordResignation(member.color, now)
+      : null;
+    if (forfeit) {
+      this.markRoundFinished(now);
+      this.state.scoreConfirmations = [];
+      this.state.scoringRevision += 1;
+      this.bumpPositionEpoch();
+    }
     let nextGame = null;
     let nextTimeControl = null;
     if (resetOperatorRound) {
@@ -1664,6 +1793,7 @@ export class RoomEngine {
       changed: true,
       revision: this.state.revision,
       identity: this.identityFor(member),
+      ...(forfeit ? { move: clone(forfeit) } : {}),
       room: this.snapshot(now),
     };
   }
@@ -1836,6 +1966,7 @@ export class RoomEngine {
 
     if (action === "attach_ai") {
       this.requireHost(member);
+      this.assertSeatsUnlocked();
       const modelId = normalizeAIModelId(payload.modelId);
       const existingAutomated = this.automatedPlayer();
       if (!existingAutomated && this.nextOpenColor() !== WHITE) {
@@ -1901,6 +2032,7 @@ export class RoomEngine {
       }
     } else if (action === "detach_ai") {
       const automated = this.requireAutomatedPlayer(member);
+      this.assertSeatsUnlocked();
       this.state.members = this.state.members.filter(
         (candidate) => candidate.playerId !== automated.playerId,
       );
@@ -2222,51 +2354,23 @@ export class RoomEngine {
           "ILLEGAL_MOVE",
         );
       }
-      const replayEventCount = snapshotReplay(this.game).events.length;
-      const lastMove = clone(this.game.lastMove);
-      const currentPlayer = this.game.currentPlayer;
-      const consecutivePasses = this.game.consecutivePasses;
       const loser = payload.color ?? member.color;
       if (!VALID_COLORS.has(loser)) {
         throw new RoomEngineError("Resigning color is invalid.", 400, "BAD_REQUEST");
       }
       this.assertController(member, loser);
-      const winner = loser === BLACK ? WHITE : BLACK;
-      while (this.game.phase === PHASE_PLAY) {
-        const pass = this.game.pass();
-        if (!pass.ok) break;
-      }
-      const compatibleFinish = this.game.finishScoring();
-      if (!compatibleFinish.ok) {
-        throw new RoomEngineError(
-          "当前无法记录认输结果。",
-          409,
-          "ILLEGAL_MOVE",
-        );
-      }
-      const terminalFingerprint = compatibleTerminalFingerprint(this.game);
-      this.state.resignationOutcome = {
-        winner,
-        loser,
-        reason: "resign",
-        resignation: true,
-        currentPlayer,
-        consecutivePasses,
-        finishedAt: now,
-        replayEventCount,
-        lastMove,
-        terminalFingerprint,
-        roomRevision: this.state.revision + 1,
-      };
-      move = {
-        ok: true,
-        type: "resign",
-        color: loser,
-        ...publicResignationResult(this.state.resignationOutcome),
-        phase: PHASE_FINISHED,
-      };
+      move = this.recordResignation(loser, now);
     } else if (action === "toggle_dead") {
       this.assertAnyController(member);
+      // Every mark is a replay event; bound a scoring session's growth.
+      if (this.deadStoneTogglesThisScoring() >=
+          DEAD_STONE_TOGGLES_PER_POINT * this.game.width * this.game.height) {
+        throw new RoomEngineError(
+          "本次点目的死子标记次数已达上限，请确认结果或继续对局。",
+          409,
+          "SCORING_TOGGLE_LIMIT",
+        );
+      }
       const row = validateCoordinate(payload.row, "行");
       const col = validateCoordinate(payload.col, "列");
       move = this.game.toggleDead(row, col);
@@ -2367,6 +2471,13 @@ export class RoomEngine {
           "UNDO_UNAVAILABLE",
         );
       }
+      if (this.undoCountFor(member.color) === 0) {
+        throw new RoomEngineError(
+          "你还没有可以撤回的棋步。",
+          409,
+          "UNDO_UNAVAILABLE",
+        );
+      }
       this.state.undoRequest = {
         requesterId: member.playerId,
         requesterRole: member.role,
@@ -2401,10 +2512,12 @@ export class RoomEngine {
         );
       }
       if (payload.accept) {
+        const undoCount = this.undoCountFor(request.requesterColor);
         if (
           this.state.moveCount !== request.targetMoveCount ||
           typeof this.game.canUndo !== "function" ||
-          !this.game.canUndo()
+          !this.game.canUndo() ||
+          undoCount === 0
         ) {
           throw new RoomEngineError(
             "这份悔棋申请已经过期。",
@@ -2412,6 +2525,8 @@ export class RoomEngine {
             "STALE_UNDO_REQUEST",
           );
         }
+        const previousGame = serializeGame(this.game);
+        const previousTimeControl = clone(this.state.timeControl);
         if (
           this.state.timeControl &&
           !this.state.timeControl.outcome &&
@@ -2419,20 +2534,30 @@ export class RoomEngine {
         ) {
           this.state.timeControl = pauseTimeControl(this.state.timeControl, now);
         }
-        const undoResult = this.game.undo();
-        if (!undoResult?.ok) {
-          throw new RoomEngineError(
-            "当前无法撤回最后一手。",
-            409,
-            "UNDO_UNAVAILABLE",
-          );
+        // Take back the requester's own latest move and any reply since.
+        const undoneMoves = [];
+        let undoResult = null;
+        for (let index = 0; index < undoCount; index += 1) {
+          undoResult = this.game.undo();
+          if (!undoResult?.ok) {
+            this.game = restoreGame(previousGame);
+            this.state.timeControl = previousTimeControl;
+            throw new RoomEngineError(
+              "当前无法撤回最后一手。",
+              409,
+              "UNDO_UNAVAILABLE",
+            );
+          }
+          undoneMoves.push(undoResult.move);
         }
-        this.state.moveCount -= 1;
+        this.state.moveCount -= undoCount;
         this.state.undoRequest = null;
         move = {
           ...clone(undoResult),
           ok: true,
           type: "undo_accepted",
+          undoneCount: undoCount,
+          undoneMoves: clone(undoneMoves),
           requesterId: request.requesterId,
           requesterColor: request.requesterColor,
           responderId: member.playerId,
@@ -2483,6 +2608,15 @@ export class RoomEngine {
           "只有黑方可以开始新的一局。",
           403,
           "FORBIDDEN",
+        );
+      }
+      // The pre-negotiation restart may replace a finished or untouched
+      // board, but never a game that is under way.
+      if (this.roundInProgress()) {
+        throw new RoomEngineError(
+          "Finish the current game before proposing another one.",
+          409,
+          "GAME_IN_PROGRESS",
         );
       }
       const legacyMode = normalizeMatchMode(
@@ -2647,6 +2781,30 @@ export class RoomEngine {
     this.state.spectatorCommandBucket = roomSpend.bucket;
   }
 
+  enforcePlayerCommandRateLimit({ playerId, action, now: nowInput }) {
+    const now = readNow(nowInput);
+    const member = this.requireMember(normalizePlayerId(playerId));
+    // Chat has its own buckets and leaving must always be possible.
+    if (member.role !== "player" || action === "chat" || action === "leave") return;
+    const spend = spendChatToken(
+      restoredChatBucket(member.commandBucket, PLAYER_COMMAND_BURST, member.lastSeenAt ?? now),
+      PLAYER_COMMAND_BURST,
+      PLAYER_COMMAND_REFILL_MS,
+      now,
+    );
+    if (!spend.ok) {
+      throw new RoomEngineError(
+        "操作太频繁了，请稍等一下再试。",
+        429,
+        "COMMAND_RATE_LIMITED",
+        true,
+      );
+    }
+    // Kept in memory and saved with the next write: an evicted instance can
+    // only restore a fuller bucket after the idle time that refills it anyway.
+    member.commandBucket = spend.bucket;
+  }
+
   recordCommand({ playerId, id, sequence = null, now: nowInput, error }) {
     const now = readNow(nowInput);
     const decision = this.inspectCommand(playerId, id, sequence);
@@ -2670,8 +2828,11 @@ export class RoomEngine {
     return clone(receipt);
   }
 
-  advance(nowInput) {
+  advance(nowInput, { includeRoom = true } = {}) {
     const now = readNow(nowInput);
+    // Internal callers only need the flags; building a full snapshot hashes
+    // the whole position history, so they opt out of the returned room.
+    const room = () => (includeRoom ? this.snapshot(now) : null);
     if (this.state.expiredAt !== null) {
       return {
         changed: false,
@@ -2714,7 +2875,7 @@ export class RoomEngine {
         expired: false,
         timedOut: true,
         revision: this.state.revision,
-        room: this.snapshot(now),
+        room: room(),
         nextDueAt: this.nextDueAt(),
       };
     }
@@ -2730,7 +2891,7 @@ export class RoomEngine {
         ...(evictedSpectators > 0 ? { evictedSpectators } : {}),
         ...(evictedPlayers > 0 ? { evictedPlayers } : {}),
         revision: this.state.revision,
-        room: this.snapshot(now),
+        room: room(),
         nextDueAt: this.nextDueAt(),
       };
     }
@@ -2738,7 +2899,7 @@ export class RoomEngine {
       changed: false,
       expired: false,
       revision: this.state.revision,
-      room: this.snapshot(now),
+      room: room(),
       nextDueAt: this.nextDueAt(),
     };
   }
@@ -2935,6 +3096,107 @@ export class RoomEngine {
     return true;
   }
 
+  /**
+   * A friend game whose seats are fixed: started, at least one move played,
+   * and not yet decided (scoring still counts as in progress). Before the
+   * first move people may still come and go, which also keeps rooms created
+   * with an immediately playing round joinable.
+   */
+  friendRoundInProgress() {
+    return this.state.match?.mode === MATCH_MODE_FRIEND && this.roundInProgress();
+  }
+
+  roundInProgress() {
+    return this.state.match?.status === MATCH_STATUS_PLAYING &&
+      this.state.moveCount > 0 &&
+      this.game.phase !== PHASE_FINISHED &&
+      !this.currentRoundResult();
+  }
+
+  undoCountFor(color) {
+    // An undo request takes back the requester's own latest move together
+    // with any reply played since (a pass counts as a move). Turns alternate,
+    // so that is the latest move or the one before it; 0 means none is left
+    // in the undo history.
+    const history = this.game.undoHistory ?? [];
+    for (let count = 1; count <= Math.min(2, history.length); count += 1) {
+      if (history[history.length - count].move?.color === color) return count;
+    }
+    return 0;
+  }
+
+  deadStoneTogglesThisScoring() {
+    // A scoring session starts after a pass and ends with resume/finish, so
+    // its marks are exactly the trailing toggle events of the replay.
+    const events = this.game.replay?.events ?? [];
+    let count = 0;
+    while (count < events.length && events[events.length - 1 - count].type === "toggle_dead") {
+      count += 1;
+    }
+    return count;
+  }
+
+  assertSeatsUnlocked() {
+    // The clock only runs while both seats are filled, and a refilled seat
+    // could resign for the absent player; neither may change mid-game.
+    if (this.friendRoundInProgress()) {
+      throw new RoomEngineError(
+        "本局进行中，不能更换座位；请等本局结束后再操作。",
+        409,
+        "GAME_IN_PROGRESS",
+      );
+    }
+  }
+
+  recordResignation(loser, now) {
+    if (this.game.phase === PHASE_SCORING) {
+      // Only a departure resigns during scoring. Reopen play first so the
+      // stored outcome keeps the play-phase snapshot that restore validates.
+      const resumed = this.game.resumePlay(this.game.currentPlayer);
+      if (!resumed?.ok) {
+        throw new RoomEngineError("当前无法记录认输结果。", 409, "ILLEGAL_MOVE");
+      }
+    }
+    const replayEventCount = snapshotReplay(this.game).events.length;
+    const lastMove = clone(this.game.lastMove);
+    const currentPlayer = this.game.currentPlayer;
+    const consecutivePasses = this.game.consecutivePasses;
+    const winner = loser === BLACK ? WHITE : BLACK;
+    while (this.game.phase === PHASE_PLAY) {
+      const pass = this.game.pass();
+      if (!pass.ok) break;
+    }
+    const compatibleFinish = this.game.finishScoring();
+    if (!compatibleFinish.ok) {
+      throw new RoomEngineError(
+        "当前无法记录认输结果。",
+        409,
+        "ILLEGAL_MOVE",
+      );
+    }
+    const terminalFingerprint = compatibleTerminalFingerprint(this.game);
+    this.state.resignationOutcome = {
+      winner,
+      loser,
+      reason: "resign",
+      resignation: true,
+      currentPlayer,
+      consecutivePasses,
+      finishedAt: now,
+      replayEventCount,
+      lastMove,
+      terminalFingerprint,
+      roomRevision: this.state.revision + 1,
+    };
+    return {
+      ok: true,
+      type: "resign",
+      color: loser,
+      ...publicResignationResult(this.state.resignationOutcome),
+      phase: PHASE_FINISHED,
+    };
+  }
+
   archiveCurrentRound(now) {
     const match = this.state.match;
     if (!match || match.roundId < 1 || match.startedAt === null) return;
@@ -2958,7 +3220,7 @@ export class RoomEngine {
       moveCount: this.state.moveCount,
       replay,
     });
-    this.state.roundArchive = this.state.roundArchive.slice(-MAX_ROUND_ARCHIVE);
+    this.state.roundArchive = trimRoundArchive(this.state.roundArchive);
   }
 
   startRound({ settings, mode, controllers, now }) {
@@ -3463,7 +3725,7 @@ export class RoomEngine {
   }
 
   prepare(now) {
-    if (this.advance(now).expired) {
+    if (this.advance(now, { includeRoom: false }).expired) {
       throw new RoomEngineError(
         "没有找到这个房间，可能已经过期了。",
         404,

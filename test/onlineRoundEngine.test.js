@@ -71,12 +71,26 @@ test("rejected legacy restart preserves the active round and its archive", () =>
   });
   const baseline = original.serialize();
 
+  // The legacy immediate restart never replaces a game that is under way.
+  for (const payload of [{}, { mode: MATCH_MODE_LOCAL, size: 13 }]) {
+    const room = RoomEngine.restore(baseline);
+    const before = roundBusinessState(room);
+    assert.throws(
+      () => room.applyAction({ playerId: "host", action: "new_game", payload, now: 1_300 }),
+      (error) => error instanceof RoomEngineError &&
+        error.status === 409 && error.code === "GAME_IN_PROGRESS",
+    );
+    assert.deepEqual(roundBusinessState(room), before);
+  }
+
+  original.applyAction({ playerId: "friend", action: "resign", now: 1_250 });
+  const finished = original.serialize();
   for (const payload of [
     { mode: "not-a-mode" },
     { mode: MATCH_MODE_AI_AI, aiModelIds: { black: "invalid-model" } },
     { mode: MATCH_MODE_AI_AI, aiModelIds: { white: "invalid-model" } },
   ]) {
-    const room = RoomEngine.restore(baseline);
+    const room = RoomEngine.restore(finished);
     const before = roundBusinessState(room);
     assert.throws(
       () => room.applyAction({
@@ -91,6 +105,11 @@ test("rejected legacy restart preserves the active round and its archive", () =>
     assert.deepEqual(roundBusinessState(room), before);
     assert.deepEqual(roundBusinessState(RoomEngine.restore(room.serialize())), before);
   }
+  const restarted = RoomEngine.restore(finished).applyAction({
+    playerId: "host", action: "new_game", payload: { size: 13 }, now: 1_400,
+  }).room;
+  assert.equal(restarted.match.status, MATCH_STATUS_PLAYING);
+  assert.equal(restarted.game.width, 13);
 });
 
 test("setup-first friend rooms persist an invitation until the opponent accepts", () => {
@@ -344,9 +363,10 @@ test("an AI or local host leaving archives the round and frees a fresh setup", (
     assert.equal(after.game.board[0][0], null);
     assert.equal(after.timeControl.running, false);
     assert.notEqual(after.positionToken, oldPositionToken);
-    assert.equal(after.roundArchive.length, 1);
-    assert.equal(after.roundArchive[0].mode, mode);
-    assert.equal(after.roundArchive[0].moveCount, 1);
+    assert.equal(after.rounds.length, 1);
+    assert.equal(after.rounds[0].mode, mode);
+    assert.equal(after.rounds[0].moveCount, 1);
+    assert.equal(room.state.roundArchive[0].replay.events.length, 1);
     assert.equal(room.nextOpenColor(), "black");
 
     for (const nextId of ["same-person-new-identity", "other-person"]) {
@@ -361,7 +381,8 @@ test("an AI or local host leaving archives the round and frees a fresh setup", (
       assert.equal(joined.identity.color, "black");
       assert.equal(joined.room.match.status, MATCH_STATUS_SETUP);
       assert.equal(joined.room.match.controllers.black.operatorId, nextId);
-      assert.equal(joined.room.roundArchive.length, 1);
+      assert.equal(joined.room.rounds.length, 1);
+      assert.equal(restored.state.roundArchive.length, 1);
     }
   }
 });
@@ -754,13 +775,14 @@ test("starting the next round preserves a full bounded archive for replay and lo
     height: 9,
   }, 1_400).room;
   assert.equal(next.match.status, MATCH_STATUS_PLAYING);
-  assert.equal(next.roundArchive.length, 1);
-  assert.equal(next.roundArchive[0].mode, MATCH_MODE_LOCAL);
-  assert.equal(next.roundArchive[0].result.reason, "resign");
-  assert.equal(next.roundArchive[0].settings.width, 9);
-  assert.equal(next.roundArchive[0].replay.complete, true);
-  assert.equal(next.roundArchive[0].replay.events[0].row, 2);
-  assert.equal(next.roundArchive[0].replay.events[0].col, 3);
+  assert.equal(next.rounds.length, 1);
+  assert.equal(next.rounds[0].mode, MATCH_MODE_LOCAL);
+  assert.equal(next.rounds[0].result.reason, "resign");
+  assert.equal(next.rounds[0].settings.width, 9);
+  const [archived] = room.state.roundArchive;
+  assert.equal(archived.replay.complete, true);
+  assert.equal(archived.replay.events[0].row, 2);
+  assert.equal(archived.replay.events[0].col, 3);
 });
 
 test("scoring, resignation, and timeout archives replay the public terminal frame", () => {
@@ -806,7 +828,8 @@ test("scoring, resignation, and timeout archives replay the public terminal fram
     request(room, { mode: MATCH_MODE_LOCAL }, 1_100);
     const finished = scenario.finish(room);
     assert.equal(finished.match.status, MATCH_STATUS_FINISHED, scenario.name);
-    const archive = request(room, { mode: MATCH_MODE_LOCAL }, 4_300).room.roundArchive.at(-1);
+    request(room, { mode: MATCH_MODE_LOCAL }, 4_300);
+    const archive = room.state.roundArchive.at(-1);
     assert.equal(archive.moveCount, finished.moveCount, scenario.name);
     assert.equal(
       buildReplayFrames(archive.replay).steps.length,
@@ -819,7 +842,7 @@ test("scoring, resignation, and timeout archives replay the public terminal fram
       scenario.name,
     );
     assert.deepEqual(
-      RoomEngine.restore(room.serialize()).snapshot(4_301).roundArchive.at(-1).replay,
+      RoomEngine.restore(room.serialize()).state.roundArchive.at(-1).replay,
       archive.replay,
       scenario.name,
     );
@@ -847,7 +870,7 @@ test("v1 rooms migrate to persistent match controllers and protocol accepts nego
   assert.equal(migrated.match.mode, MATCH_MODE_FRIEND);
   assert.equal(migrated.match.controllers.black.operatorId, "host");
   assert.equal(migrated.match.controllers.white.operatorId, "friend");
-  assert.deepEqual(migrated.roundArchive, []);
+  assert.deepEqual(migrated.rounds, []);
 
   for (const action of ["request_game", "respond_game", "cancel_game_request"]) {
     assert.equal(normalizeCommandMessage({
@@ -858,4 +881,48 @@ test("v1 rooms migrate to persistent match controllers and protocol accepts nego
       payload: {},
     })?.action, action);
   }
+});
+
+test("a migrated v1 room keeps its legacy restart only between games", () => {
+  const room = createSetupRoom({ startImmediately: true });
+  joinWhite(room);
+  const v1 = (engine) => {
+    const legacy = engine.serialize();
+    legacy.schemaVersion = 1;
+    delete legacy.match;
+    delete legacy.roundArchive;
+    delete legacy.allowLegacyNewGame;
+    return RoomEngine.restore(legacy);
+  };
+
+  // No move yet: the immediate restart still applies new settings.
+  const untouched = v1(room);
+  assert.equal(untouched.state.allowLegacyNewGame, true);
+  assert.equal(untouched.applyAction({
+    playerId: "host", action: "new_game", payload: { size: 13 }, now: 1_200,
+  }).room.game.width, 13);
+
+  room.applyAction({ playerId: "host", action: "play", payload: { row: 0, col: 0 }, now: 1_200 });
+  const midGame = v1(room);
+  assert.throws(
+    () => midGame.applyAction({
+      playerId: "host", action: "new_game", payload: { size: 13, komi: 0 }, now: 1_300,
+    }),
+    (error) => error instanceof RoomEngineError && error.code === "GAME_IN_PROGRESS",
+  );
+  assert.equal(midGame.game.width, 9);
+  assert.equal(midGame.state.moveCount, 1);
+  midGame.applyAction({ playerId: "friend", action: "pass", now: 1_400 });
+  midGame.applyAction({ playerId: "host", action: "pass", now: 1_500 });
+  assert.throws(
+    () => midGame.applyAction({ playerId: "host", action: "new_game", payload: {}, now: 1_600 }),
+    (error) => error instanceof RoomEngineError && error.code === "GAME_IN_PROGRESS",
+    "scoring is still part of the game",
+  );
+
+  midGame.applyAction({ playerId: "host", action: "resume_play", now: 1_700 });
+  midGame.applyAction({ playerId: "friend", action: "resign", now: 1_800 });
+  assert.equal(midGame.applyAction({
+    playerId: "host", action: "new_game", payload: { size: 13 }, now: 1_900,
+  }).room.game.width, 13);
 });

@@ -120,6 +120,24 @@ function hasBlackHumanHost(room, controllers) {
   );
 }
 
+function blackHostOnline(room, controllers) {
+  const operator = humanRoomPlayer(room, controllers?.black?.operatorId);
+  const host = operator ?? (room?.players ?? []).find((player) =>
+    player?.color === "black" &&
+    player?.automated !== true &&
+    player?.role !== "ai"
+  );
+  return host?.online === true;
+}
+
+function anyoneOnline(room) {
+  return [...(room?.players ?? []), ...(room?.spectators ?? [])].some((member) =>
+    member?.online === true &&
+    member?.automated !== true &&
+    member?.role !== "ai"
+  );
+}
+
 function hasBlackSeatOccupant(room, controllers) {
   const black = controllers?.black;
   return Boolean(
@@ -247,10 +265,13 @@ export function lobbySummaryFromRoom(room, now = Date.now()) {
     spectatorCount: (room.spectators ?? []).filter((spectator) => spectator?.online !== false).length,
     // The room arbitrates concurrent claims atomically. A released white seat
     // can be filled during an older round; a hostless setup can take a new black
-    // player after its previous operator explicitly leaves.
+    // player after its previous operator explicitly leaves. Only advertise a
+    // seat someone is actually there to play with: an offline host (such as a
+    // create that never connected) or an empty room is not joinable.
     joinable: mode === "friend" && (
-      (blackHostPresent && !whiteSeatOccupied) ||
-      (status === LOBBY_STATUS_SETUP && !hasBlackSeatOccupant(room, controllers))
+      (blackHostPresent && blackHostOnline(room, controllers) && !whiteSeatOccupied) ||
+      (status === LOBBY_STATUS_SETUP && !hasBlackSeatOccupant(room, controllers) &&
+        anyoneOnline(room))
     ),
     watchable: true,
     createdAt: finiteTimestamp(room.createdAt, updatedAt),
