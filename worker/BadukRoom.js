@@ -15,8 +15,12 @@ import {
   RoomEngineError,
 } from "../src/multiplayer/roomEngine.js";
 import { CHAT_CHANNEL_SPECTATORS } from "../src/multiplayer/chat.js";
+import { lobbySummaryFromRoom } from "../src/multiplayer/lobby.js";
 
 const STORAGE_KEY = "room";
+// The lobby mirrors the room's expiry. Refresh an otherwise unchanged entry
+// once the room's TTL has slid this far past the last published one.
+export const LOBBY_EXPIRY_REFRESH_MS = 30 * 60 * 1_000;
 const MAX_SOCKET_CONNECTIONS = 64;
 const MAX_CLIENT_MESSAGE_BYTES = 8 * 1024;
 const POSITION_BOUND_ACTIONS = new Set([
@@ -54,6 +58,9 @@ export class BadukRoom {
     this.unavailableError = null;
     this.retiring = false;
     this.operationQueue = Promise.resolve();
+    // Last lobby publication from this instance: { key, expiresAt }. Null
+    // until one succeeds, and reset when the latest one fails.
+    this.indexPublication = null;
 
     if (typeof ctx.setWebSocketAutoResponse === "function") {
       ctx.setWebSocketAutoResponse(
@@ -689,30 +696,66 @@ export class BadukRoom {
   }
 
   queueIndexPublish() {
-    const publishing = this.publishRoomIndexSnapshot();
+    if (!this.engine || !this.env?.BADUK_ROOM_INDEX) return;
+    let room;
+    let summary;
+    try {
+      room = this.engine.directorySnapshot();
+      summary = lobbySummaryFromRoom(room);
+    } catch (error) {
+      console.error("Unable to project room for optional index", error);
+      return;
+    }
+    // Every persist bumps the directory revision, but most (syncs, receipts,
+    // presence-free writes) leave the public entry unchanged. The single
+    // global lobby rewrites its whole index per upsert, so only publish a
+    // visible change, a materially later expiry, or a retry after a failure.
+    // A skipped publish just leaves an older directory revision in the lobby.
+    const {
+      revision: _revision,
+      directoryRevision: _directoryRevision,
+      updatedAt: _updatedAt,
+      expiresAt,
+      ...visible
+    } = summary;
+    const key = JSON.stringify(visible);
+    const previous = this.indexPublication;
+    if (previous?.key === key &&
+        expiresAt - previous.expiresAt < LOBBY_EXPIRY_REFRESH_MS) {
+      return;
+    }
+    const publication = { key, expiresAt };
+    this.indexPublication = publication;
+    const publishing = this.publishRoomIndexSnapshot(room).then((published) => {
+      if (!published && this.indexPublication === publication) {
+        this.indexPublication = null;
+      }
+    });
     if (typeof this.ctx.waitUntil === "function") this.ctx.waitUntil(publishing);
     else void publishing;
   }
 
-  async publishRoomIndexSnapshot() {
+  async publishRoomIndexSnapshot(room) {
     // A room is the source of truth. The optional index receives a one-way
     // public snapshot and derives its own disposable directory entry. Nothing
     // in this object ever reads from the index.
-    if (!this.engine || !this.env?.BADUK_ROOM_INDEX) return;
+    if (!room || !this.env?.BADUK_ROOM_INDEX) return false;
     try {
       const index = this.env.BADUK_ROOM_INDEX.getByName("global");
       const response = await index.fetch(
         new Request("https://room-index.internal/internal/upsert", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(this.engine.snapshot()),
+          body: JSON.stringify(room),
         }),
       );
       if (!response.ok) {
         console.error("Unable to publish room to optional index", response.status);
       }
+      return response.ok;
     } catch (error) {
       console.error("Unable to publish room to optional index", error);
+      return false;
     }
   }
 

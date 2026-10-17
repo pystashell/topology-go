@@ -159,7 +159,7 @@ test("room persistence never depends on the optional one-way room index", async 
     serialize() {
       return { durable: true };
     },
-    snapshot() {
+    directorySnapshot() {
       return {
         code: "ABC123",
         revision: 1,

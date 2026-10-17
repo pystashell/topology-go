@@ -55,6 +55,9 @@ function publishingRoom(engine, lobby) {
       return structuredClone(stored);
     },
     setLobby(next) {
+      // A replaced lobby stands for a new deployment, whose fresh room
+      // instances have not published anything yet.
+      room.indexPublication = null;
       room.env.BADUK_ROOM_INDEX.getByName = () => ({
         fetch: (request) => next.fetch(request),
       });

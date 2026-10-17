@@ -1208,12 +1208,7 @@ export class RoomEngine {
     });
   }
 
-  snapshot(nowInput, { viewerRole = "player" } = {}) {
-    const now = readNow(nowInput);
-    this.assertAvailable(now);
-    const visibleChatChannels = viewerRole === "spectator"
-      ? new Set([CHAT_CHANNEL_PLAYERS, CHAT_CHANNEL_SPECTATORS])
-      : new Set([CHAT_CHANNEL_PLAYERS]);
+  publicView(now) {
     const players = this.state.members
       .filter((member) => member.role === "player")
       .sort((left, right) =>
@@ -1273,6 +1268,47 @@ export class RoomEngine {
       game.lastMove = clone(this.state.resignationOutcome.lastMove);
     }
     game.moveCount = this.state.moveCount;
+    return { players, spectators, timeControl, game, resignationResult };
+  }
+
+  /**
+   * The public fields the optional lobby derives its directory entry from.
+   * Unlike snapshot(), it skips replay, chat and position tokens.
+   */
+  directorySnapshot(nowInput) {
+    const now = readNow(nowInput);
+    this.assertAvailable(now);
+    const { players, spectators, timeControl, game } = this.publicView(now);
+    return {
+      code: this.state.code,
+      revision: this.state.revision,
+      directoryRevision: this.state.directoryRevision,
+      incarnationId: this.state.incarnationId,
+      match: clone(this.state.match),
+      moveCount: this.state.moveCount,
+      timeControl,
+      game,
+      players,
+      spectators,
+      createdAt: this.state.createdAt,
+      updatedAt: this.state.updatedAt,
+      expiresAt: this.state.expiresAt,
+    };
+  }
+
+  snapshot(nowInput, { viewerRole = "player" } = {}) {
+    const now = readNow(nowInput);
+    this.assertAvailable(now);
+    const visibleChatChannels = viewerRole === "spectator"
+      ? new Set([CHAT_CHANNEL_PLAYERS, CHAT_CHANNEL_SPECTATORS])
+      : new Set([CHAT_CHANNEL_PLAYERS]);
+    const {
+      players,
+      spectators,
+      timeControl,
+      game,
+      resignationResult,
+    } = this.publicView(now);
     const replay = publicReplay(this.game, timeControl, this.state.resignationOutcome);
     return {
       code: this.state.code,
