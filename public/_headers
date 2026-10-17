@@ -1,0 +1,20 @@
+# Static asset response headers (Workers static assets; Vite copies this file
+# into dist/). /api/* responses come from the Worker and set their own.
+#
+# The app loads only same-origin bundles, styles, models (fetch), its KataGo
+# module worker and same-origin WebSockets; it uses no inline scripts/styles,
+# eval or WebAssembly in the document.
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+
+# The KataGo worker runs under its own response's policy. TensorFlow.js
+# bundles long.js, which compiles a tiny WebAssembly module for 64-bit integer
+# math when the worker starts; 'wasm-unsafe-eval' allows only that (no JS
+# eval), and is not granted to the document.
+/assets/katagoWorker-*
+  ! Content-Security-Policy
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
