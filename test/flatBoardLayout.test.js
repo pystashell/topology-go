@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { flatBoardLayout, flatRowLabel } from "../src/view/flatBoardLayout.js";
+import { mobiusPointFromCover } from "../src/game/mobiusTopology.js";
+import {
+  flatBoardLayout,
+  flatRowLabel,
+  mobiusRowLabelsForCopy,
+  mobiusWindowBands,
+  mobiusWindowCopies,
+} from "../src/view/flatBoardLayout.js";
 
 const SIZES = [
   [9, 9],
@@ -29,6 +36,89 @@ test("row labels count down from the top for square and rectangular boards", () 
   );
   assert.equal(flatRowLabel(0, 15), "15");
   assert.equal(flatRowLabel(14, 15), "1");
+});
+
+test("Mobius row labels reverse in every odd copy of the cover", () => {
+  assert.deepEqual(mobiusRowLabelsForCopy(0, 5), ["5", "4", "3", "2", "1"]);
+  assert.deepEqual(mobiusRowLabelsForCopy(1, 5), ["1", "2", "3", "4", "5"]);
+  assert.deepEqual(mobiusRowLabelsForCopy(-1, 5), ["1", "2", "3", "4", "5"]);
+  assert.deepEqual(mobiusRowLabelsForCopy(2, 5), ["5", "4", "3", "2", "1"]);
+});
+
+test("Mobius window reports the flip seam between differently labelled edges", () => {
+  assert.deepEqual(mobiusWindowCopies({ offsetColumns: 0, width: 9 }), {
+    leftCopy: 0,
+    rightCopy: 0,
+    leftFlipped: false,
+    rightFlipped: false,
+    seam: null,
+  });
+  // Dragged three columns right: G H J of the flipped copy, then A..F.
+  assert.deepEqual(mobiusWindowCopies({ offsetColumns: 3, width: 9 }), {
+    leftCopy: -1,
+    rightCopy: 0,
+    leftFlipped: true,
+    rightFlipped: false,
+    seam: 3,
+  });
+  // One full lap: the whole window shows the flipped copy, no inner seam.
+  const lap = mobiusWindowCopies({ offsetColumns: 9, width: 9 });
+  assert.equal(lap.seam, null);
+  assert.equal(lap.leftFlipped, true);
+  assert.equal(lap.rightFlipped, true);
+  // A lap plus two columns: the seam returns, now with the flip on the right.
+  assert.deepEqual(mobiusWindowCopies({ offsetColumns: 11, width: 9 }), {
+    leftCopy: -2,
+    rightCopy: -1,
+    leftFlipped: false,
+    rightFlipped: true,
+    seam: 2,
+  });
+});
+
+test("Mobius edge labels match the points drawn in the edge columns", () => {
+  for (const [width, height] of [[9, 9], [19, 19], [25, 9], [7, 15]]) {
+    for (let step = 0; step < width * 8; step += 1) {
+      const offsetColumns = (step / 4) % (width * 2);
+      const window = mobiusWindowCopies({ offsetColumns, width });
+      const leftLabels = mobiusRowLabelsForCopy(window.leftCopy, height);
+      const rightLabels = mobiusRowLabelsForCopy(window.rightCopy, height);
+      const leftColumn = Math.round(-offsetColumns);
+      const rightColumn = Math.round(width - 1 - offsetColumns);
+      for (let visualRow = 0; visualRow < height; visualRow += 1) {
+        const left = mobiusPointFromCover(visualRow, leftColumn, width, height);
+        const right = mobiusPointFromCover(visualRow, rightColumn, width, height);
+        assert.equal(leftLabels[visualRow], String(height - left.row));
+        assert.equal(rightLabels[visualRow], String(height - right.row));
+      }
+      if (window.seam === null) {
+        assert.equal(window.leftFlipped, window.rightFlipped);
+      } else {
+        assert.notEqual(window.leftFlipped, window.rightFlipped);
+        assert.ok(window.seam >= 0.5 && window.seam <= width - 0.5);
+      }
+    }
+  }
+});
+
+test("Mobius window bands tile the window and alternate orientation", () => {
+  for (const width of [5, 9, 19]) {
+    for (let step = 0; step < width * 8; step += 1) {
+      const offsetColumns = (step * 0.37) % (width * 2);
+      const bands = mobiusWindowBands({ offsetColumns, width });
+      assert.ok(bands.length === 1 || bands.length === 2);
+      assert.equal(bands[0].start, 0);
+      assert.equal(bands.at(-1).end, width);
+      for (let index = 1; index < bands.length; index += 1) {
+        assert.equal(bands[index].start, bands[index - 1].end);
+        assert.notEqual(bands[index].flipped, bands[index - 1].flipped);
+        // Each copy boundary is where cover column copy*width begins.
+        assert.ok(
+          Math.abs(bands[index].start - (bands[index].copy * width + offsetColumns)) < 1e-9,
+        );
+      }
+    }
+  }
 });
 
 function textBoxes(layout, { torus, viewportWidth }) {

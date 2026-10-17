@@ -3,7 +3,13 @@ import {
   mobiusPointInCopy,
 } from "../game/mobiusTopology.js";
 import { formatGoColumn } from "../game/boardDimensions.js";
-import { flatBoardLayout, flatRowLabel } from "./flatBoardLayout.js";
+import {
+  flatBoardLayout,
+  flatRowLabel,
+  mobiusRowLabelsForCopy,
+  mobiusWindowBands,
+  mobiusWindowCopies,
+} from "./flatBoardLayout.js";
 import {
   invalidatePendingTapOnAdditionalPointer,
   pointerGestureRoles,
@@ -19,6 +25,12 @@ const TAU = Math.PI * 2;
 const DRAG_THRESHOLD = 6;
 const LABEL_COLOR = "rgba(235, 240, 237, 0.54)";
 const SEAM_ACCENT = "rgba(230, 185, 105, 0.95)";
+// Rows of a vertically flipped copy of the Mobius cover are labelled and
+// tinted in this colour so labels on either side of the flip seam are never
+// read against the wrong half of the board.
+const FLIP_ACCENT = "rgba(140, 186, 255, 0.95)";
+const FLIP_LABEL_COLOR = "rgba(150, 192, 255, 0.86)";
+const FLIP_TINT = "rgba(64, 104, 196, 0.13)";
 // Floating stage chrome the flat board keeps its labels and captions clear of.
 const BOARD_OVERLAY_SELECTOR = ".view-switch, .scene-toolbar, .gesture-hint";
 
@@ -676,6 +688,7 @@ export class FlatBoard {
     context.clearRect(0, 0, this.viewportWidth, this.viewportHeight);
 
     this.drawBoardSurface(context);
+    this.drawMobiusFlipTint(context);
     this.drawGrid(context);
     this.drawStarPoints(context);
     this.drawTerritory(context);
@@ -1296,6 +1309,93 @@ export class FlatBoard {
     context.restore();
   }
 
+  /** Tint the parts of the window that show a vertically flipped copy. */
+  drawMobiusFlipTint(context) {
+    if (!this.isMobius) return;
+    context.save();
+    context.fillStyle = FLIP_TINT;
+    for (const band of mobiusWindowBands({
+      offsetColumns: this.offsetColumns,
+      width: this.width,
+    })) {
+      if (!band.flipped) continue;
+      context.fillRect(
+        this.frameX + band.start * this.cell,
+        this.frameY,
+        (band.end - band.start) * this.cell,
+        this.boardPixelsHeight,
+      );
+    }
+    context.restore();
+  }
+
+  /**
+   * Inside the window the cover is continuous, but row numbers reverse where
+   * one copy of the board meets the next. Mark that flip seam explicitly.
+   */
+  drawMobiusFlipSeams(context) {
+    const bands = mobiusWindowBands({
+      offsetColumns: this.offsetColumns,
+      width: this.width,
+    });
+    const top = this.frameY;
+    const bottom = this.frameY + this.boardPixelsHeight;
+    for (const band of bands.slice(1)) {
+      const x = this.frameX + band.start * this.cell;
+      context.save();
+      const glow = context.createLinearGradient(x - 10, 0, x + 10, 0);
+      glow.addColorStop(0, "rgba(140, 186, 255, 0)");
+      glow.addColorStop(0.5, "rgba(140, 186, 255, 0.3)");
+      glow.addColorStop(1, "rgba(140, 186, 255, 0)");
+      context.fillStyle = glow;
+      context.fillRect(x - 10, top, 20, this.boardPixelsHeight);
+      context.strokeStyle = FLIP_ACCENT;
+      context.lineWidth = 2;
+      context.setLineDash([10, 4, 2, 4]);
+      context.beginPath();
+      context.moveTo(x, top - 3);
+      context.lineTo(x, bottom + 3);
+      context.stroke();
+      context.setLineDash([]);
+      // Badges sit between two column labels, so only draw them when there
+      // is room; the line, tint and label colours carry the meaning anyway.
+      if (this.cell >= 22) {
+        for (const y of [this.layout.topLabelY, this.layout.bottomLabelY]) {
+          this.drawFlipBadge(context, x, y, Math.min(8, this.cell * 0.3));
+        }
+      }
+      context.restore();
+    }
+  }
+
+  drawFlipBadge(context, x, y, radius) {
+    context.save();
+    context.fillStyle = "rgba(14, 24, 38, 0.92)";
+    context.strokeStyle = FLIP_ACCENT;
+    context.lineWidth = 1.2;
+    context.beginPath();
+    context.arc(x, y, radius, 0, TAU);
+    context.fill();
+    context.stroke();
+    // Two opposing arrows: rows run the other way across this seam.
+    const arm = radius * 0.55;
+    const head = radius * 0.32;
+    context.lineWidth = 1.3;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.beginPath();
+    for (const [dx, direction] of [[-radius * 0.3, -1], [radius * 0.3, 1]]) {
+      const tipY = y + direction * arm;
+      context.moveTo(x + dx, y - direction * arm);
+      context.lineTo(x + dx, tipY);
+      context.moveTo(x + dx - head, tipY - direction * head);
+      context.lineTo(x + dx, tipY);
+      context.lineTo(x + dx + head, tipY - direction * head);
+    }
+    context.stroke();
+    context.restore();
+  }
+
   drawMobiusSeam(context) {
     const left = this.frameX;
     const right = this.frameX + this.boardPixelsWidth;
@@ -1351,6 +1451,7 @@ export class FlatBoard {
     context.stroke();
     context.restore();
 
+    this.drawMobiusFlipSeams(context);
     this.drawTopCaption(context, "↕ 左右反向相接 · 横向一圈后上下翻转");
     this.drawSideCaptions(context, "与右侧倒序相接", "与左侧倒序相接");
   }
@@ -1459,29 +1560,21 @@ export class FlatBoard {
     };
 
     if (this.isMobius) {
-      const leftCoverColumn = Math.round(-this.offsetColumns);
-      const rightCoverColumn = Math.round(
-        this.width - 1 - this.offsetColumns,
-      );
+      // Each side is labelled for the copy of the board at that edge; a
+      // flipped copy is shown in the flip colour to match its tint and seam.
+      const copies = mobiusWindowCopies({
+        offsetColumns: this.offsetColumns,
+        width: this.width,
+      });
+      const leftLabels = mobiusRowLabelsForCopy(copies.leftCopy, this.height);
+      const rightLabels = mobiusRowLabelsForCopy(copies.rightCopy, this.height);
       for (let visualRow = 0; visualRow < this.height; visualRow += 1) {
-        const leftPoint = mobiusPointFromCover(
-          visualRow,
-          leftCoverColumn,
-          this.width,
-          this.height,
-        );
-        const rightPoint = mobiusPointFromCover(
-          visualRow,
-          rightCoverColumn,
-          this.width,
-          this.height,
-        );
         drawPair(
           this.frameY + (visualRow + 0.5) * this.cell,
-          flatRowLabel(leftPoint.row, this.height),
-          flatRowLabel(rightPoint.row, this.height),
-          LABEL_COLOR,
-          LABEL_COLOR,
+          leftLabels[visualRow],
+          rightLabels[visualRow],
+          copies.leftFlipped ? FLIP_LABEL_COLOR : LABEL_COLOR,
+          copies.rightFlipped ? FLIP_LABEL_COLOR : LABEL_COLOR,
         );
       }
       return;

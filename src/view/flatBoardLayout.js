@@ -1,6 +1,9 @@
+import { mobiusCopyIndex, mobiusRowForCopy } from "../game/mobiusTopology.js";
+
 /**
  * Pure layout and label math for FlatBoard. Everything here works in CSS
- * pixels so it can be unit tested without a canvas.
+ * pixels (or cell units for the Mobius window) so it can be unit tested
+ * without a canvas.
  */
 
 export const NARROW_FLAT_VIEWPORT = 560;
@@ -26,6 +29,10 @@ function clamp(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
+function mod(value, divisor) {
+  return ((value % divisor) + divisor) % divisor;
+}
+
 export function flatLabelFontSize(cell) {
   return clamp(cell * 0.24, 8, 11);
 }
@@ -41,6 +48,57 @@ export function flatSeamCaptionFontSize(cell) {
 /** Go-style row number: the top row of an H-row board is H, the bottom 1. */
 export function flatRowLabel(row, height) {
   return String(height - row);
+}
+
+/**
+ * Which copies of the Mobius cover the visible window shows.
+ *
+ * FlatBoard draws cover column c centred at (c + offsetColumns + 0.5) cells
+ * from the frame's left edge. Each run of `width` cover columns is one copy
+ * of the board; odd copies are vertically flipped. Edge row labels follow the
+ * column nearest each edge, so the left and right labels can belong to
+ * different copies. `seam` is then the flip boundary between them, in cells
+ * from the left frame edge (always within [0.5, width - 0.5]).
+ */
+export function mobiusWindowCopies({ offsetColumns, width }) {
+  // `|| 0` folds -0 into 0 so copy indices compare and serialise cleanly.
+  const leftCopy = mobiusCopyIndex(Math.round(-offsetColumns) || 0, width);
+  const rightCopy = mobiusCopyIndex(
+    Math.round(width - 1 - offsetColumns) || 0,
+    width,
+  );
+  return {
+    leftCopy,
+    rightCopy,
+    leftFlipped: mod(leftCopy, 2) === 1,
+    rightFlipped: mod(rightCopy, 2) === 1,
+    seam: leftCopy === rightCopy ? null : rightCopy * width + offsetColumns,
+  };
+}
+
+/**
+ * Exact copy bands of the Mobius cover inside the window, in cells from the
+ * left frame edge. Used for drawing the flip seam and flipped-copy tint so
+ * they slide continuously while the board is dragged.
+ */
+export function mobiusWindowBands({ offsetColumns, width }) {
+  const bands = [];
+  const firstCopy = Math.floor(-offsetColumns / width) - 1;
+  for (let copy = firstCopy; copy <= firstCopy + 3; copy += 1) {
+    const start = Math.max(0, copy * width + offsetColumns);
+    const end = Math.min(width, (copy + 1) * width + offsetColumns);
+    if (end - start > 1e-6) {
+      bands.push({ copy, start, end, flipped: mod(copy, 2) === 1 });
+    }
+  }
+  return bands;
+}
+
+/** Row labels, top to bottom, for one copy of the Mobius cover. */
+export function mobiusRowLabelsForCopy(copyIndex, height) {
+  return Array.from({ length: height }, (_, visualRow) =>
+    flatRowLabel(mobiusRowForCopy(visualRow, copyIndex, height), height),
+  );
 }
 
 function estimateTextWidth(text, fontSize) {
