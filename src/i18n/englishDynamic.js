@@ -505,6 +505,7 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "聊天消息格式不正确。": "The chat message is invalid.",
   "这个表情包不存在。": "That sticker does not exist.",
   "这条消息包含的字符过大，请缩短后再发送。": "This message contains oversized characters. Shorten it and try again.",
+  "请求过于频繁，请稍后再试。": "Too many requests. Please wait a minute and try again.",
   "导出 SGF": "Export SGF",
   "导入 SGF": "Import SGF",
   "有待确认的建房请求": "Pending room creation",

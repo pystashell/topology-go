@@ -13,15 +13,43 @@ export { BadukLobby, BadukRoom };
 const MAX_BODY_BYTES = 4 * 1024;
 const JOIN_TOKEN_PATTERN = /^[0-9a-f]{64}$/u;
 const JOIN_PLAYER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
 
-function jsonResponse(body, status = 200) {
+function jsonResponse(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       "Cache-Control": "no-store",
       "Content-Type": "application/json; charset=utf-8",
+      ...extraHeaders,
     },
   });
+}
+
+/**
+ * Per-client budget from a Workers Rate Limiting binding (see wrangler.jsonc).
+ * Each route has its own binding keyed by the client IP. The bindings are
+ * optional infrastructure: when one is absent (unit tests, plain local tools)
+ * or briefly unavailable, the request proceeds rather than failing the room.
+ */
+async function withinRateLimit(limiter, request) {
+  if (typeof limiter?.limit !== "function") return true;
+  const key = request.headers.get("CF-Connecting-IP") || "unknown-client";
+  try {
+    const { success } = await limiter.limit({ key });
+    return success !== false;
+  } catch (error) {
+    console.error("Rate limiter unavailable", error);
+    return true;
+  }
+}
+
+function rateLimitedResponse() {
+  return jsonResponse({
+    error: "请求过于频繁，请稍后再试。",
+    code: "RATE_LIMITED",
+    retryable: true,
+  }, 429, { "Retry-After": String(RATE_LIMIT_RETRY_AFTER_SECONDS) });
 }
 
 function hasAllowedOrigin(request) {
@@ -302,6 +330,9 @@ const worker = {
           return new Response(null, { status: 405, headers: { Allow: "GET" } });
         }
         if (!hasAllowedOrigin(request)) return jsonResponse({ error: "请求来源不允许。" }, 403);
+        if (!(await withinRateLimit(env.LOBBY_RATE_LIMITER, request))) {
+          return rateLimitedResponse();
+        }
         return await listLobbyRooms(env);
       }
 
@@ -310,6 +341,9 @@ const worker = {
           return new Response(null, { status: 405, headers: { Allow: "POST" } });
         }
         if (!hasAllowedOrigin(request)) return jsonResponse({ error: "请求来源不允许。" }, 403);
+        if (!(await withinRateLimit(env.ROOM_CREATE_RATE_LIMITER, request))) {
+          return rateLimitedResponse();
+        }
         return await createRoom(request, env);
       }
 
@@ -319,6 +353,9 @@ const worker = {
           return new Response(null, { status: 405, headers: { Allow: "GET" } });
         }
         if (!hasAllowedOrigin(request)) return jsonResponse({ error: "请求来源不允许。" }, 403);
+        if (!(await withinRateLimit(env.ROOM_SOCKET_RATE_LIMITER, request))) {
+          return rateLimitedResponse();
+        }
         return await env.BADUK_ROOMS.getByName(socketMatch[1]).fetch(request);
       }
 
@@ -329,6 +366,9 @@ const worker = {
           return new Response(null, { status: 405, headers: { Allow: "POST" } });
         }
         if (!hasAllowedOrigin(request)) return jsonResponse({ error: "请求来源不允许。" }, 403);
+        if (!(await withinRateLimit(env.ROOM_JOIN_RATE_LIMITER, request))) {
+          return rateLimitedResponse();
+        }
         return await joinRoom(request, env, joinMatch[1]);
       }
 
