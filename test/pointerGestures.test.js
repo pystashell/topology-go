@@ -5,6 +5,8 @@ import { CylinderBoard } from "../src/view/CylinderBoard.js";
 import { FlatBoard } from "../src/view/FlatBoard.js";
 import { TorusBoard } from "../src/view/TorusBoard.js";
 import {
+  applyBoardTouchAction,
+  boardTouchAction,
   invalidatePendingTapOnAdditionalPointer,
   pointerGestureRoles,
   preventBoardContextMenu,
@@ -160,4 +162,30 @@ test("board context menus are suppressed without another side effect", () => {
   let prevented = 0;
   preventBoardContextMenu({ preventDefault: () => { prevented += 1; } });
   assert.equal(prevented, 1);
+});
+
+test("only views with horizontal-only drags hand vertical swipes to the page", () => {
+  const policy = (view, topology) => boardTouchAction({ view, topology });
+  assert.equal(policy("arc", "cylinder"), "pan-y");
+  assert.equal(policy("3d", "cylinder"), "pan-y");
+  assert.equal(policy("flat", "cylinder"), "pan-y");
+  assert.equal(policy("flat", "mobius"), "pan-y");
+  // Torus panning and free 3D rotation need vertical drags.
+  assert.equal(policy("flat", "torus"), "none");
+  assert.equal(policy("3d", "torus"), "none");
+  assert.equal(policy("3d", "mobius"), "none");
+  // pan-y never includes pinch-zoom, so pinches still reach the view.
+  for (const view of ["flat", "arc", "3d"]) {
+    for (const topology of ["cylinder", "torus", "mobius"]) {
+      assert.doesNotMatch(policy(view, topology), /pinch|auto|manipulation/);
+    }
+  }
+});
+
+test("touch policy overrides the inline style OrbitControls leaves", () => {
+  const container = { style: { touchAction: "" } };
+  const canvas = { style: { touchAction: "none" } };
+  applyBoardTouchAction([container, canvas, null], "pan-y");
+  assert.equal(container.style.touchAction, "pan-y");
+  assert.equal(canvas.style.touchAction, "pan-y");
 });

@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
+  applyBoardTouchAction,
+  boardTouchAction,
   pointerGestureRoles,
   preventBoardContextMenu,
 } from "./pointerGestures.js";
@@ -171,6 +173,10 @@ export class ArcBoard {
     this.controls.zoomSpeed = 0.72;
     this.onControlsChange = () => this.requestRender();
     this.controls.addEventListener("change", this.onControlsChange);
+    applyBoardTouchAction(
+      [this.container, this.renderer.domElement],
+      boardTouchAction({ view: "arc", topology: "cylinder" }),
+    );
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();

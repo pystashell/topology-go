@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
+  applyBoardTouchAction,
+  boardTouchAction,
   invalidatePendingTapOnAdditionalPointer,
   pointerGestureRoles,
   preventBoardContextMenu,
@@ -148,6 +150,10 @@ export class CylinderBoard {
     this.controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
     this.onControlsChange = () => this.requestRender();
     this.controls.addEventListener("change", this.onControlsChange);
+    applyBoardTouchAction(
+      [this.container, this.renderer.domElement],
+      boardTouchAction({ view: "3d", topology: "cylinder" }),
+    );
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
