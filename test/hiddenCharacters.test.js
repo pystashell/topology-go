@@ -45,8 +45,16 @@ test("stored names are cleaned on restore instead of breaking the room", () => {
   stored.members[0].name = "Ho‮st";
   stored.members.push({ ...structuredClone(stored.members[0]), playerId: "ghost",
     name: "​", role: "spectator", color: null, tokenHash: "c".repeat(64) });
+  stored.chatMessages = [{
+    id: "host:1", sequence: 1, senderId: "host", senderName: "Ho\u202est",
+    senderRole: "player", senderColor: "black", channel: "players", kind: "text",
+    text: "hi", points: [], boardWidth: 9, boardHeight: 9, boardSize: 9,
+    boardTopology: "cylinder", moveCount: 0, sentAt: 1_000,
+  }];
+  stored.chatSequence = 1;
   const restored = RoomEngine.restore(stored);
   assert.equal(restored.member("host").name, "Host");
+  assert.equal(restored.snapshot(1_100).chat.messages[0].senderName, "Host");
   assert.equal(restored.member("ghost").name, "​", "a name with nothing visible is kept as stored");
 });
 

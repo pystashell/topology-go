@@ -5,7 +5,10 @@ import {
   MIN_BOARD_DIMENSION,
   parseGoColumn,
 } from "../game/boardDimensions.js";
-import { stripUnsafeTextCharacters } from "./protocol.js";
+import {
+  stripUnsafeNameCharacters,
+  stripUnsafeTextCharacters,
+} from "./protocol.js";
 
 export const COORDINATE_LETTERS = GO_COLUMN_LABELS;
 
@@ -260,6 +263,9 @@ function normalizedStoredChatMessages(messages) {
         .filter(isStoredChatMessage)
         .map((message) => ({
           ...JSON.parse(JSON.stringify(message)),
+          // Messages saved before name cleaning keep a readable sender.
+          senderName: stripUnsafeNameCharacters(message.senderName).trim() ||
+            message.senderName,
           channel: chatMessageChannel(message),
         }))
     : [];
