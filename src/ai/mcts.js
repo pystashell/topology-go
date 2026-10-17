@@ -801,9 +801,140 @@ function reliableTerritory(game) {
   return territory;
 }
 
+/**
+ * Conservative dead-stone estimate for scoring a finished search line.
+ *
+ * GoEngine only proposes groups whose last liberty cannot be defended, so an
+ * obviously dead stone left inside settled territory would otherwise turn
+ * that territory neutral and make passing look like a loss. Stones of one
+ * colour are treated as dead only when all of these hold:
+ *
+ * - they lie in a connected area of empty and own-colour points that the
+ *   opponent walls off from less than half of the board;
+ * - they fill less than a quarter of that area, like stones left inside
+ *   territory rather than a wall whose open space is still contested;
+ * - no empty region inside that area touches their colour alone, so they
+ *   have no eye at all, not even a false or one-point eye; and
+ * - every opponent string bordering the area has more liberties than each
+ *   enclosed string, plus a liberty the enclosed stones do not touch, so the
+ *   opponent wins the liberty race and seki is left alone.
+ *
+ * Areas and liberties use GoEngine's neighbours, so every topology's seams
+ * count. The result is a defensive copy and the game is not changed.
+ *
+ * @returns {{row: number, col: number}[]}
+ */
+export function estimateDeadStones(gameOrState) {
+  const game =
+    gameOrState instanceof GoEngine
+      ? gameOrState
+      : GoEngine.fromSearchState(gameOrState);
+  const groups = groupMap(game);
+  const pointCount = game.width * game.height;
+  const dead = [];
+
+  for (const color of [BLACK, WHITE]) {
+    const opponent = color === BLACK ? WHITE : BLACK;
+    const visited = new Set();
+    for (const group of groups.groups) {
+      const [start] = group.stones;
+      if (group.color !== color || visited.has(pointKey(start.row, start.col))) {
+        continue;
+      }
+
+      const area = [];
+      const borders = new Set();
+      const pending = [start];
+      visited.add(pointKey(start.row, start.col));
+      while (pending.length > 0) {
+        const point = pending.pop();
+        area.push(point);
+        for (const neighbour of game.neighbors(point.row, point.col)) {
+          const key = pointKey(neighbour.row, neighbour.col);
+          if (game.get(neighbour.row, neighbour.col) === opponent) {
+            borders.add(groups.byStone.get(key));
+          } else if (!visited.has(key)) {
+            visited.add(key);
+            pending.push(neighbour);
+          }
+        }
+      }
+      if (area.length * 2 >= pointCount || borders.size === 0) continue;
+      const enclosed = new Set();
+      let enclosedStones = 0;
+      for (const point of area) {
+        const stoneGroup = groups.byStone.get(pointKey(point.row, point.col));
+        if (!stoneGroup) continue;
+        enclosed.add(stoneGroup);
+        enclosedStones += 1;
+      }
+      if (enclosedStones * 4 >= area.length) continue;
+      if (hasEyeInArea(game, area, opponent)) continue;
+
+      const enclosedLiberties = new Set();
+      let mostLiberties = 0;
+      for (const inner of enclosed) {
+        mostLiberties = Math.max(mostLiberties, inner.liberties.length);
+        for (const liberty of inner.liberties) {
+          enclosedLiberties.add(pointKey(liberty.row, liberty.col));
+        }
+      }
+      const opponentWinsRace = [...borders].every(
+        (outer) =>
+          outer.liberties.length > mostLiberties &&
+          outer.liberties.some(
+            (liberty) => !enclosedLiberties.has(pointKey(liberty.row, liberty.col)),
+          ),
+      );
+      if (!opponentWinsRace) continue;
+      for (const inner of enclosed) {
+        dead.push(...inner.stones.map((stone) => ({ ...stone })));
+      }
+    }
+  }
+  return dead;
+}
+
+/** Whether some empty region inside `area` is bordered without `opponent`. */
+function hasEyeInArea(game, area, opponent) {
+  const seen = new Set();
+  for (const start of area) {
+    const startKey = pointKey(start.row, start.col);
+    if (game.get(start.row, start.col) !== null || seen.has(startKey)) continue;
+    const pending = [start];
+    seen.add(startKey);
+    let touchesOpponent = false;
+    while (pending.length > 0) {
+      const point = pending.pop();
+      for (const neighbour of game.neighbors(point.row, point.col)) {
+        const value = game.get(neighbour.row, neighbour.col);
+        const key = pointKey(neighbour.row, neighbour.col);
+        if (value === opponent) touchesOpponent = true;
+        else if (value === null && !seen.has(key)) {
+          seen.add(key);
+          pending.push(neighbour);
+        }
+      }
+    }
+    if (!touchesOpponent) return true;
+  }
+  return false;
+}
+
+function markEstimatedDeadStones(game) {
+  for (const stone of estimateDeadStones(game)) {
+    if (!game.isMarkedDead(stone.row, stone.col)) {
+      game.toggleDead(stone.row, stone.col);
+    }
+  }
+}
+
 function evaluate(game, rootPlayer) {
   let difference;
   if (game.phase !== PHASE_PLAY) {
+    // Both players passed in this line. Score it the way players would agree
+    // to: remove clearly dead stones that the engine's narrow proof skipped.
+    markEstimatedDeadStones(game);
     const score = game.score();
     difference =
       rootPlayer === BLACK
@@ -819,11 +950,15 @@ function evaluate(game, rootPlayer) {
     }
     const territory = reliableTerritory(game);
     const opponent = rootPlayer === BLACK ? WHITE : BLACK;
+    // Komi counts exactly as in game.score(). Without it, passing (scored
+    // with komi) and playing on (estimated without it) were not comparable.
+    const komi = rootPlayer === WHITE ? game.komi : -game.komi;
     difference =
       (game.captures[rootPlayer] - game.captures[opponent]) * 2.5 +
       (safety[rootPlayer] - safety[opponent]) +
       (territory[rootPlayer] - territory[opponent]) * 0.9 +
-      (stones[rootPlayer] - stones[opponent]) * 0.12;
+      (stones[rootPlayer] - stones[opponent]) * 0.12 +
+      komi;
   }
   // Smooth bounded values preserve useful information from unfinished lines.
   const scale = Math.max(4, Math.sqrt(game.width * game.height) * 0.75);
