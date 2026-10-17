@@ -1745,7 +1745,7 @@ test("a stale client cannot request undo for a newer authoritative position", ()
   assert.equal(unchanged.undoRequest, null);
 
   const current = room.applyAction({
-    playerId: "white-player",
+    playerId: "black-player",
     action: "request_undo",
     payload: { expectedMoveCount: 1 },
     now: 3_200,
@@ -1992,8 +1992,18 @@ test("undo requests reject spectators, empty games, scoring and stale targets", 
     payload: { row: 0, col: 0 },
     now: 3_000,
   });
+  // White has not moved yet, so it has nothing of its own to take back.
+  assert.throws(
+    () => room.applyAction({
+      playerId: "white-player",
+      action: "request_undo",
+      payload: { expectedMoveCount: 1 },
+      now: 3_050,
+    }),
+    (error) => error instanceof RoomEngineError && error.code === "UNDO_UNAVAILABLE",
+  );
   const request = room.applyAction({
-    playerId: "white-player",
+    playerId: "black-player",
     action: "request_undo",
     payload: { expectedMoveCount: 1 },
     now: 3_100,
@@ -2001,7 +2011,7 @@ test("undo requests reject spectators, empty games, scoring and stale targets", 
   assert.throws(
     () =>
       room.applyAction({
-        playerId: "black-player",
+        playerId: "white-player",
         action: "respond_undo",
         payload: {
           accept: true,
@@ -2016,7 +2026,7 @@ test("undo requests reject spectators, empty games, scoring and stale targets", 
   assert.equal(room.snapshot(3_201).undoRequest.targetMoveCount, 1);
 
   room.applyAction({
-    playerId: "white-player",
+    playerId: "black-player",
     action: "cancel_undo",
     payload: {
       targetMoveCount: 1,
@@ -2193,7 +2203,7 @@ test("new games and player departures clear pending undo requests", () => {
     now: 3_300,
   });
   room.applyAction({
-    playerId: "white-player",
+    playerId: "black-player",
     action: "request_undo",
     payload: { expectedMoveCount: 1 },
     now: 3_400,
@@ -2686,7 +2696,7 @@ test("resignation clears a pending undo and permanently stops the room clock", (
     now: 3_000,
   });
   room.applyAction({
-    playerId: "white-player",
+    playerId: "black-player",
     action: "request_undo",
     payload: { expectedMoveCount: 1 },
     now: 4_000,

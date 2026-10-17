@@ -2471,6 +2471,13 @@ export class RoomEngine {
           "UNDO_UNAVAILABLE",
         );
       }
+      if (this.undoCountFor(member.color) === 0) {
+        throw new RoomEngineError(
+          "你还没有可以撤回的棋步。",
+          409,
+          "UNDO_UNAVAILABLE",
+        );
+      }
       this.state.undoRequest = {
         requesterId: member.playerId,
         requesterRole: member.role,
@@ -2505,10 +2512,12 @@ export class RoomEngine {
         );
       }
       if (payload.accept) {
+        const undoCount = this.undoCountFor(request.requesterColor);
         if (
           this.state.moveCount !== request.targetMoveCount ||
           typeof this.game.canUndo !== "function" ||
-          !this.game.canUndo()
+          !this.game.canUndo() ||
+          undoCount === 0
         ) {
           throw new RoomEngineError(
             "这份悔棋申请已经过期。",
@@ -2516,6 +2525,8 @@ export class RoomEngine {
             "STALE_UNDO_REQUEST",
           );
         }
+        const previousGame = serializeGame(this.game);
+        const previousTimeControl = clone(this.state.timeControl);
         if (
           this.state.timeControl &&
           !this.state.timeControl.outcome &&
@@ -2523,20 +2534,30 @@ export class RoomEngine {
         ) {
           this.state.timeControl = pauseTimeControl(this.state.timeControl, now);
         }
-        const undoResult = this.game.undo();
-        if (!undoResult?.ok) {
-          throw new RoomEngineError(
-            "当前无法撤回最后一手。",
-            409,
-            "UNDO_UNAVAILABLE",
-          );
+        // Take back the requester's own latest move and any reply since.
+        const undoneMoves = [];
+        let undoResult = null;
+        for (let index = 0; index < undoCount; index += 1) {
+          undoResult = this.game.undo();
+          if (!undoResult?.ok) {
+            this.game = restoreGame(previousGame);
+            this.state.timeControl = previousTimeControl;
+            throw new RoomEngineError(
+              "当前无法撤回最后一手。",
+              409,
+              "UNDO_UNAVAILABLE",
+            );
+          }
+          undoneMoves.push(undoResult.move);
         }
-        this.state.moveCount -= 1;
+        this.state.moveCount -= undoCount;
         this.state.undoRequest = null;
         move = {
           ...clone(undoResult),
           ok: true,
           type: "undo_accepted",
+          undoneCount: undoCount,
+          undoneMoves: clone(undoneMoves),
           requesterId: request.requesterId,
           requesterColor: request.requesterColor,
           responderId: member.playerId,
@@ -3090,6 +3111,18 @@ export class RoomEngine {
       this.state.moveCount > 0 &&
       this.game.phase !== PHASE_FINISHED &&
       !this.currentRoundResult();
+  }
+
+  undoCountFor(color) {
+    // An undo request takes back the requester's own latest move together
+    // with any reply played since (a pass counts as a move). Turns alternate,
+    // so that is the latest move or the one before it; 0 means none is left
+    // in the undo history.
+    const history = this.game.undoHistory ?? [];
+    for (let count = 1; count <= Math.min(2, history.length); count += 1) {
+      if (history[history.length - count].move?.color === color) return count;
+    }
+    return 0;
   }
 
   deadStoneTogglesThisScoring() {
