@@ -569,3 +569,36 @@ test("compressed setup ranges are capped at twice the board's points", () => {
     { code: "SGF_TOO_LARGE" },
   );
 });
+
+test("KM is a bounded SGF decimal and invalid komi falls back to 0 with a warning", () => {
+  const komiOf = (value, size = 9) => {
+    const imported = importSgf(`(;FF[4]GM[1]SZ[${size}]XTOP[torus]KM[${value}])`);
+    return {
+      komi: imported.replay.base.komi,
+      warned: imported.warnings.some(({ code }) => code === "INVALID_KOMI"),
+    };
+  };
+  for (const [value, komi] of [
+    ["6.5", 6.5], ["-3", -3], ["+7", 7], [".5", 0.5], [" 7.5 ", 7.5], ["-0", 0],
+    ["", 0], ["50", 50],
+  ]) {
+    assert.deepEqual(komiOf(value), { komi, warned: false }, value);
+  }
+  for (const value of ["0x10", "1e2", "1e308", "-1e300", "Infinity", "NaN", "6,5", "7.5.1", "-81.5"]) {
+    assert.deepEqual(komiOf(value), { komi: 0, warned: true }, value);
+  }
+  // The bound is the room limit of 50, or the point count of larger boards.
+  assert.deepEqual(komiOf("50", 5), { komi: 50, warned: false });
+  assert.deepEqual(komiOf("50.5", 5), { komi: 0, warned: true });
+  assert.deepEqual(komiOf("-81", 9), { komi: -81, warned: false });
+  assert.deepEqual(komiOf("361", 19), { komi: 361, warned: false });
+  assert.deepEqual(komiOf("361.5", 19), { komi: 0, warned: true });
+
+  // Every komi a room can use survives an SGF round trip, even on 5x5.
+  const game = new GoEngine({ size: 5, komi: 50, scoringRule: "chinese" });
+  game.play(2, 2);
+  const { sgf } = exportSgf({ replay: game.getReplayState() });
+  const imported = importSgf(sgf);
+  assert.equal(imported.replay.base.komi, 50);
+  assert.equal(imported.warnings.some(({ code }) => code === "INVALID_KOMI"), false);
+});

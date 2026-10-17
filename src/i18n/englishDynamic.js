@@ -542,6 +542,7 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "已按 FF[4] 兼容方式解析": "The record was parsed using FF[4] compatibility",
   "文本已按 UTF-8 读取": "The text was read as UTF-8",
   "已兼容旧式 tt 停着": "Legacy tt pass moves were accepted",
+  "贴目无效，已按 0 目复盘": "The invalid komi was replaced with 0 for replay",
   "缺少尺寸，已按 19 × 19 解释": "The missing board size was interpreted as 19 × 19",
   "缺少棋类标记，已按围棋解释": "The missing game type was interpreted as Go",
   "属性名已规范化": "Property identifiers were normalized",

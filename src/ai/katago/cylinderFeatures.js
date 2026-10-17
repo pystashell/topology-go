@@ -97,7 +97,12 @@ export function buildCylinderFeatures(gameOrState) {
     }
   }
 
-  const selfKomi = player === WHITE ? game.komi : -game.komi;
+  // Like KataGo, bound komi to the board area plus 20 before encoding it.
+  const komiBound = width * height + 20;
+  const selfKomi = Math.max(
+    -komiBound,
+    Math.min(komiBound, player === WHITE ? game.komi : -game.komi),
+  );
   global[5] = selfKomi / 20;
   // KataGo v7 rule features: positional superko is represented by the two
   // ko-rule inputs below. Exact repetition checks are still done by GoEngine.

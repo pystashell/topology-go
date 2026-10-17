@@ -789,14 +789,26 @@ function decodeMove(value, width, height, warnings, context) {
   }
 }
 
-function parseKomi(value, warnings) {
-  if (value === undefined || value === "") return 0;
-  const komi = Number(value);
-  if (!Number.isFinite(komi)) {
-    warnings.push(warning("INVALID_KOMI", `Invalid KM value '${value}' was replaced with 0.`));
+// SGF Real: an optional sign, digits and an optional decimal fraction.
+// Number() would also accept hexadecimal, exponents and "Infinity".
+const SGF_REAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/u;
+// Rooms allow komi up to 50. Beyond that, or beyond the board's point count
+// on larger boards, komi alone would decide every game.
+const ROOM_KOMI_LIMIT = 50;
+
+function parseKomi(value, warnings, pointCount) {
+  const text = String(value ?? "").trim();
+  if (!text) return 0;
+  const limit = Math.max(ROOM_KOMI_LIMIT, pointCount);
+  const komi = SGF_REAL.test(text) ? Number(text) : NaN;
+  if (!Number.isFinite(komi) || Math.abs(komi) > limit) {
+    warnings.push(warning(
+      "INVALID_KOMI",
+      `Invalid KM value '${value}' was replaced with 0; komi must be a decimal number from -${limit} to ${limit}.`,
+    ));
     return 0;
   }
-  return komi;
+  return komi === 0 ? 0 : komi;
 }
 
 function gameInfoNode(nodes, partialBase) {
@@ -831,13 +843,13 @@ function gameInfoNode(nodes, partialBase) {
   return selected;
 }
 
-function readMetadata(root, info, warnings) {
+function readMetadata(root, info, warnings, pointCount) {
   return {
     format: firstProperty(root, "FF") ?? "",
     game: firstProperty(root, "GM") ?? "",
     charset: firstProperty(root, "CA") ?? "",
     application: firstProperty(root, "AP") ?? "",
-    komi: parseKomi(info ? firstProperty(info, "KM") : undefined, warnings),
+    komi: parseKomi(info ? firstProperty(info, "KM") : undefined, warnings, pointCount),
     rules: info ? firstProperty(info, "RU") ?? "" : "",
     blackPlayer: info ? firstProperty(info, "PB") ?? "" : "",
     whitePlayer: info ? firstProperty(info, "PW") ?? "" : "",
@@ -1005,7 +1017,7 @@ export function importSgf(input, options = {}) {
   const sizeValue = firstProperty(root, "SZ");
   if (sizeValue === undefined) warnings.push(warning("MISSING_SIZE", "SZ was absent; 19x19 was assumed."));
   const { width, height } = parseSize(sizeValue ?? "19", limits);
-  const metadata = readMetadata(root, info, warnings);
+  const metadata = readMetadata(root, info, warnings, width * height);
   const scoringRule = normalizeRule(metadata.rules, warnings);
 
   const topologyValue = firstProperty(root, SGF_EXTENSION_PROPERTIES.topology);

@@ -269,6 +269,27 @@ test("KataGo opponent-pass input ignores a pass by the player to move", () => {
   assert.deepEqual(channelPoints(features, 9), []);
 });
 
+test("KataGo komi input is bounded to the board area plus 20 like KataGo", () => {
+  for (const [komi, player, expectedSelfKomi] of [
+    [6.5, WHITE, 6.5],
+    [1_000, WHITE, 5 * 3 + 20],
+    [1_000, BLACK, -(5 * 3 + 20)],
+    [-1e9, BLACK, 5 * 3 + 20],
+  ]) {
+    const game = new GoEngine({
+      width: 5,
+      height: 3,
+      komi,
+      currentPlayer: player,
+      scoringRule: "chinese",
+    });
+    const features = buildCylinderFeatures(game);
+    assert.equal(features.global[5], Math.fround(expectedSelfKomi / 20));
+    assert.ok(Number.isFinite(features.global[18]));
+    assert.ok(Math.abs(features.global[18]) <= 0.5);
+  }
+});
+
 test("neural root policy steers quiet play before candidate truncation", () => {
   const game = new GoEngine({ size: 5, komi: 0 });
   const rootPolicy = new Float32Array(26).fill(1e-6);

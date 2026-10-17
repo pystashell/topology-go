@@ -1040,6 +1040,7 @@ function sgfImportWarningSummary(warnings) {
     NON_FF4: "已按 FF[4] 兼容方式解析",
     CHARSET_ASSUMED_UTF8: "文本已按 UTF-8 读取",
     LEGACY_TT_PASS: "已兼容旧式 tt 停着",
+    INVALID_KOMI: "贴目无效，已按 0 目复盘",
     MISSING_SIZE: "缺少尺寸，已按 19 × 19 解释",
     MISSING_GM: "缺少棋类标记，已按围棋解释",
     NORMALIZED_PROPERTY_ID: "属性名已规范化",
