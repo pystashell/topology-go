@@ -6580,7 +6580,16 @@ async function leaveOnlineRoom() {
       : "已停止重连，但本地房间凭据未能删除，恢复入口可能再次出现；请检查浏览器存储设置。");
     return;
   }
-  const confirmed = window.confirm(translateText("退出房间会释放你的座位，确定退出吗？"));
+  // The room scores a seated player's departure from a friend game that is
+  // under way as a resignation; say so before the player confirms.
+  const leavingForfeitsGame = isOnlinePlayer() &&
+    onlineRoom?.match?.mode === ONLINE_MODE_FRIEND &&
+    onlineMatchStatus() === ONLINE_MATCH_PLAYING &&
+    onlineRoom.moveCount > 0 &&
+    onlineRoom.game?.phase !== PHASE_FINISHED;
+  const confirmed = window.confirm(leavingForfeitsGame
+    ? translateText("对局正在进行，退出房间会判你认输并释放座位。确定退出吗？")
+    : translateText("退出房间会释放你的座位，确定退出吗？"));
   if (!confirmed) return;
   setOnlineBusy(true);
   try {

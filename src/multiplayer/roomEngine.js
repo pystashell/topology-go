@@ -1413,7 +1413,9 @@ export class RoomEngine {
     let effectiveRole = normalizedRole;
     let color = null;
     if (effectiveRole === "player") {
-      color = this.nextOpenColor();
+      // Seats are fixed while a friend game is under way; a late player
+      // watches until the round ends instead of taking over a color.
+      color = this.friendRoundInProgress() ? null : this.nextOpenColor();
       if (!color) {
         effectiveRole = "spectator";
       }
@@ -1481,6 +1483,7 @@ export class RoomEngine {
         "ALREADY_SEATED",
       );
     }
+    this.assertSeatsUnlocked();
     if (this.nextOpenColor() !== WHITE) {
       throw new RoomEngineError(
         "白方席位已经被其他玩家、AI 或本地对手占用。",
@@ -1518,6 +1521,7 @@ export class RoomEngine {
         "FORBIDDEN",
       );
     }
+    this.assertSeatsUnlocked();
     this.evictExpiredSpectators(now);
     if (this.spectatorCount() >= MAX_SPECTATORS) {
       throw new RoomEngineError(
@@ -1660,6 +1664,19 @@ export class RoomEngine {
     const member = this.requireMember(normalizePlayerId(playerId));
     const resetOperatorRound = member.role === "player" &&
       member.color === BLACK && this.state.match?.mode !== MATCH_MODE_FRIEND;
+    // Leaving a seat mid-game is a resignation: it ends the round through the
+    // same outcome and replay as the resign action, so the clock cannot be
+    // paused by an empty seat and nobody else can take over the color.
+    const forfeit = member.role === "player" && member.automated !== true &&
+      this.friendRoundInProgress()
+      ? this.recordResignation(member.color, now)
+      : null;
+    if (forfeit) {
+      this.markRoundFinished(now);
+      this.state.scoreConfirmations = [];
+      this.state.scoringRevision += 1;
+      this.bumpPositionEpoch();
+    }
     let nextGame = null;
     let nextTimeControl = null;
     if (resetOperatorRound) {
@@ -1725,6 +1742,7 @@ export class RoomEngine {
       changed: true,
       revision: this.state.revision,
       identity: this.identityFor(member),
+      ...(forfeit ? { move: clone(forfeit) } : {}),
       room: this.snapshot(now),
     };
   }
@@ -1897,6 +1915,7 @@ export class RoomEngine {
 
     if (action === "attach_ai") {
       this.requireHost(member);
+      this.assertSeatsUnlocked();
       const modelId = normalizeAIModelId(payload.modelId);
       const existingAutomated = this.automatedPlayer();
       if (!existingAutomated && this.nextOpenColor() !== WHITE) {
@@ -1962,6 +1981,7 @@ export class RoomEngine {
       }
     } else if (action === "detach_ai") {
       const automated = this.requireAutomatedPlayer(member);
+      this.assertSeatsUnlocked();
       this.state.members = this.state.members.filter(
         (candidate) => candidate.playerId !== automated.playerId,
       );
@@ -2283,49 +2303,12 @@ export class RoomEngine {
           "ILLEGAL_MOVE",
         );
       }
-      const replayEventCount = snapshotReplay(this.game).events.length;
-      const lastMove = clone(this.game.lastMove);
-      const currentPlayer = this.game.currentPlayer;
-      const consecutivePasses = this.game.consecutivePasses;
       const loser = payload.color ?? member.color;
       if (!VALID_COLORS.has(loser)) {
         throw new RoomEngineError("Resigning color is invalid.", 400, "BAD_REQUEST");
       }
       this.assertController(member, loser);
-      const winner = loser === BLACK ? WHITE : BLACK;
-      while (this.game.phase === PHASE_PLAY) {
-        const pass = this.game.pass();
-        if (!pass.ok) break;
-      }
-      const compatibleFinish = this.game.finishScoring();
-      if (!compatibleFinish.ok) {
-        throw new RoomEngineError(
-          "当前无法记录认输结果。",
-          409,
-          "ILLEGAL_MOVE",
-        );
-      }
-      const terminalFingerprint = compatibleTerminalFingerprint(this.game);
-      this.state.resignationOutcome = {
-        winner,
-        loser,
-        reason: "resign",
-        resignation: true,
-        currentPlayer,
-        consecutivePasses,
-        finishedAt: now,
-        replayEventCount,
-        lastMove,
-        terminalFingerprint,
-        roomRevision: this.state.revision + 1,
-      };
-      move = {
-        ok: true,
-        type: "resign",
-        color: loser,
-        ...publicResignationResult(this.state.resignationOutcome),
-        phase: PHASE_FINISHED,
-      };
+      move = this.recordResignation(loser, now);
     } else if (action === "toggle_dead") {
       this.assertAnyController(member);
       const row = validateCoordinate(payload.row, "行");
@@ -2997,6 +2980,81 @@ export class RoomEngine {
     this.state.match.status = MATCH_STATUS_FINISHED;
     this.state.match.finishedAt = result?.finishedAt ?? now;
     return true;
+  }
+
+  /**
+   * A friend game whose seats are fixed: started, at least one move played,
+   * and not yet decided (scoring still counts as in progress). Before the
+   * first move people may still come and go, which also keeps rooms created
+   * with an immediately playing round joinable.
+   */
+  friendRoundInProgress() {
+    return this.state.match?.status === MATCH_STATUS_PLAYING &&
+      this.state.match.mode === MATCH_MODE_FRIEND &&
+      this.state.moveCount > 0 &&
+      this.game.phase !== PHASE_FINISHED &&
+      !this.currentRoundResult();
+  }
+
+  assertSeatsUnlocked() {
+    // The clock only runs while both seats are filled, and a refilled seat
+    // could resign for the absent player; neither may change mid-game.
+    if (this.friendRoundInProgress()) {
+      throw new RoomEngineError(
+        "本局进行中，不能更换座位；请等本局结束后再操作。",
+        409,
+        "GAME_IN_PROGRESS",
+      );
+    }
+  }
+
+  recordResignation(loser, now) {
+    if (this.game.phase === PHASE_SCORING) {
+      // Only a departure resigns during scoring. Reopen play first so the
+      // stored outcome keeps the play-phase snapshot that restore validates.
+      const resumed = this.game.resumePlay(this.game.currentPlayer);
+      if (!resumed?.ok) {
+        throw new RoomEngineError("当前无法记录认输结果。", 409, "ILLEGAL_MOVE");
+      }
+    }
+    const replayEventCount = snapshotReplay(this.game).events.length;
+    const lastMove = clone(this.game.lastMove);
+    const currentPlayer = this.game.currentPlayer;
+    const consecutivePasses = this.game.consecutivePasses;
+    const winner = loser === BLACK ? WHITE : BLACK;
+    while (this.game.phase === PHASE_PLAY) {
+      const pass = this.game.pass();
+      if (!pass.ok) break;
+    }
+    const compatibleFinish = this.game.finishScoring();
+    if (!compatibleFinish.ok) {
+      throw new RoomEngineError(
+        "当前无法记录认输结果。",
+        409,
+        "ILLEGAL_MOVE",
+      );
+    }
+    const terminalFingerprint = compatibleTerminalFingerprint(this.game);
+    this.state.resignationOutcome = {
+      winner,
+      loser,
+      reason: "resign",
+      resignation: true,
+      currentPlayer,
+      consecutivePasses,
+      finishedAt: now,
+      replayEventCount,
+      lastMove,
+      terminalFingerprint,
+      roomRevision: this.state.revision + 1,
+    };
+    return {
+      ok: true,
+      type: "resign",
+      color: loser,
+      ...publicResignationResult(this.state.resignationOutcome),
+      phase: PHASE_FINISHED,
+    };
   }
 
   archiveCurrentRound(now) {
