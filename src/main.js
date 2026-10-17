@@ -677,6 +677,11 @@ function liveDisplayedGame() {
   return isNextGameSetup() && rematchPreviewGame ? rematchPreviewGame : game;
 }
 
+/** The board the views currently show: the replay frame, else the live game. */
+function displayedBoardState() {
+  return replaySession?.frames?.[replaySession.index] ?? liveDisplayedGame();
+}
+
 function displayedTopology() {
   return replaySession?.frames?.[replaySession.index]?.topology ??
     liveDisplayedGame()?.topology;
@@ -5242,13 +5247,14 @@ function applyReviewCandidateAction(action, candidates) {
     });
   elements.aiVariationPreview.hidden = !active;
   if (active) {
+    // Replays may be rectangular boards of a different size than the live
+    // game, so every coordinate uses the displayed frame's height.
+    const height = boardHeight(displayedBoardState());
     const rankLabel = active.manual ? "自选点" : `候选 ${active.rank}`;
-    elements.aiVariationTitle.textContent = `${rankLabel} · ${formatReviewMove(active.move)}`;
-    elements.aiVariationLine.textContent = formatReviewVariation(active, {
-      height: replaySession
-        ? boardHeight(replaySession.frames[replaySession.index])
-        : boardHeight(),
-    }) || "当前搜索没有返回更长的变化。";
+    elements.aiVariationTitle.textContent =
+      `${rankLabel} · ${formatReviewMove(active.move, height)}`;
+    elements.aiVariationLine.textContent = formatReviewVariation(active, { height }) ||
+      "当前搜索没有返回更长的变化。";
   }
   renderCurrentAnalysisPosition();
 }
@@ -5720,6 +5726,15 @@ function handleBoardPoint({ row, col }) {
     return;
   }
   if (chatPointPicking && hasOnlineSession()) {
+    const replayFrame = replaySession?.frames?.[replaySession.index];
+    if (
+      replayFrame &&
+      (!sameBoardDimensions(replayFrame, game) || replayFrame.topology !== game.topology)
+    ) {
+      // Chat coordinates always name a point on the room's own board.
+      setChatStatus("当前复盘的棋盘与房间棋盘不同，不能从这里引用棋点。", true);
+      return;
+    }
     insertPickedChatPoint(row, col);
     return;
   }
@@ -5760,7 +5775,10 @@ function handleBoardPoint({ row, col }) {
           { type: "toggle-pin", candidate: manual },
           candidates,
         );
-        liveAnalysis.message = `已在本页选择 ${formatReviewMove(manual.move)}；该分支不会发送到房间。`;
+        liveAnalysis.message = `已在本页选择 ${formatReviewMove(
+          manual.move,
+          boardHeight(displayedBoardState()),
+        )}；该分支不会发送到房间。`;
         liveAnalysis.error = false;
         syncAIReviewUI();
       } catch (error) {
@@ -5923,7 +5941,9 @@ function handleHover(point) {
     elements.coordinateHint.textContent = "";
     return;
   }
-  const displayedGame = liveDisplayedGame();
+  // During replay the views show the replay frame, whose dimensions can
+  // differ from the live game's.
+  const displayedGame = displayedBoardState();
   const letter = COORDINATE_LETTERS[point.col] || String(point.col + 1);
   const coordinate = `${letter}${boardHeight(displayedGame) - point.row}`;
   const seamNotes = [];
@@ -6218,7 +6238,7 @@ function setViewMode(mode) {
   const cylinderActive = cylinder && activeViewMode === "3d";
   const torusActive = torus && activeViewMode === "3d";
   const mobiusActive = mobius && activeViewMode === "3d";
-  const displayed = replaySession?.frames?.[replaySession.index] ?? liveDisplayedGame();
+  const displayed = displayedBoardState();
   const viewOptions = {
     width: boardWidth(displayed), height: boardHeight(displayed),
     onPoint: handleBoardPoint, onHover: handleHover,

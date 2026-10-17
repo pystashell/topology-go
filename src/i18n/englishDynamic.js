@@ -489,6 +489,8 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "正在发送…": "Sending…",
   "消息发送失败，请稍后重试。": "Message failed to send. Try again shortly.",
   "这条位置引用已经失效。": "This board reference has expired.",
+  "当前复盘的棋盘与房间棋盘不同，不能从这里引用棋点。":
+    "This replay uses a different board from the room, so its points cannot be referenced in chat.",
   "没有识别到这个棋点。": "That board point was not recognized.",
   "表情包": "Sticker",
   "发送表情包：{label}": "Send sticker: {label}",
