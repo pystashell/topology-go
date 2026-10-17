@@ -684,6 +684,11 @@ function capturedPhrase(rawValue) {
   return value;
 }
 
+/** "1 move" / "2 moves": English count phrases for a captured number. */
+function countOf(count, singular, plural = `${singular}s`) {
+  return `${count} ${String(count) === "1" ? singular : plural}`;
+}
+
 // "b10 · WEBGL · 搜索 120 次"-style lists of independently translated parts.
 function segmentsPhrase(value) {
   return String(value ?? "").split(" · ").map((part) => capturedPhrase(part)).join(" · ");
@@ -868,7 +873,8 @@ export const ENGLISH_PATTERNS = Object.freeze([
   },
   {
     pattern: /^实战 (.+) 未进入本次 (\d+) 个已搜索候选；这不等于它一定是坏棋。$/u,
-    replace: "The played move $1 was not among the $2 searched candidates; that does not necessarily make it a bad move.",
+    replace: (_, move, count) =>
+      `The played move ${move} was not among the ${countOf(count, "searched candidate")}; that does not necessarily make it a bad move.`,
   },
   {
     pattern: /^首选搜索估值 (\d+)%（当前行棋方视角）。$/u,
@@ -922,7 +928,7 @@ export const ENGLISH_PATTERNS = Object.freeze([
     pattern: /^已导入 (.+)，共 (\d+) 手；可播放、切换视图或做 AI 分析。(.*)$/u,
     replace: (_, filename, moves, notes) => {
       const noteCopy = notes.trim();
-      return `Imported ${filename} with ${moves} moves. You can replay, change views, or run AI analysis.${noteCopy ? ` ${capturedPhrase(noteCopy)}` : ""}`;
+      return `Imported ${filename} with ${countOf(moves, "move")}. You can replay, change views, or run AI analysis.${noteCopy ? ` ${capturedPhrase(noteCopy)}` : ""}`;
     },
   },
   {
@@ -980,11 +986,13 @@ export const ENGLISH_PATTERNS = Object.freeze([
   },
   {
     pattern: /^黑：活子 ([\d.]+) ＋ 地 ([\d.]+)；白：活子 ([\d.]+) ＋ 地 ([\d.]+) ＋ 贴目 ([\d.]+)；公气 ([\d.]+)$/u,
-    replace: "Black: $1 live stones + $2 territory; White: $3 live stones + $4 territory + $5 komi; neutral: $6",
+    replace: (_, blackStones, blackTerritory, whiteStones, whiteTerritory, komi, neutral) =>
+      `Black: ${countOf(blackStones, "live stone")} + ${blackTerritory} territory; White: ${countOf(whiteStones, "live stone")} + ${whiteTerritory} territory + ${komi} komi; neutral: ${neutral}`,
   },
   {
     pattern: /^黑：地 ([\d.]+) ＋ 提子 ([\d.]+) ＋ 死子 ([\d.]+)；白：地 ([\d.]+) ＋ 提子 ([\d.]+) ＋ 死子 ([\d.]+) ＋ 贴目 ([\d.]+)；公气 ([\d.]+)$/u,
-    replace: "Black: $1 territory + $2 captures + $3 dead stones; White: $4 territory + $5 captures + $6 dead stones + $7 komi; neutral: $8",
+    replace: (_, blackTerritory, blackCaptures, blackDead, whiteTerritory, whiteCaptures, whiteDead, komi, neutral) =>
+      `Black: ${blackTerritory} territory + ${countOf(blackCaptures, "capture")} + ${countOf(blackDead, "dead stone")}; White: ${whiteTerritory} territory + ${countOf(whiteCaptures, "capture")} + ${countOf(whiteDead, "dead stone")} + ${komi} komi; neutral: ${neutral}`,
   },
   {
     pattern: /^(黑方|白方)这块棋已(标为死子|恢复为活棋)。$/u,
@@ -1013,15 +1021,15 @@ export const ENGLISH_PATTERNS = Object.freeze([
     replace: "New board: Möbius (left and right connect in reverse; top and bottom remain a boundary) · $1 × $2. The current game progress will be cleared.",
   },
   { pattern: /^第 (\d+) 手$/u, replace: "Move $1" },
-  { pattern: /^(\d+) 手$/u, replace: "$1 moves" },
+  { pattern: /^(\d+) 手$/u, replace: (_, moves) => countOf(moves, "move") },
   { pattern: /^第 (\d+) \/ (\d+) 手$/u, replace: "Move $1 / $2" },
   { pattern: /^复盘 · 第 (\d+) \/ (\d+) 手$/u, replace: "Replay · move $1 / $2" },
-  { pattern: /^(\d+) 手 · 对局结束$/u, replace: "$1 moves · game over" },
-  { pattern: /^(\d+) 手 · 计时结束$/u, replace: "$1 moves · clock ended" },
+  { pattern: /^(\d+) 手 · 对局结束$/u, replace: (_, moves) => `${countOf(moves, "move")} · game over` },
+  { pattern: /^(\d+) 手 · 计时结束$/u, replace: (_, moves) => `${countOf(moves, "move")} · clock ended` },
   { pattern: /^候选 (\d+)$/u, replace: "Candidate $1" },
-  { pattern: /^搜索 (\d+) 次$/u, replace: "$1 search iterations" },
+  { pattern: /^搜索 (\d+) 次$/u, replace: (_, count) => countOf(count, "search iteration") },
   { pattern: /^搜索访问占比 (\d+)%$/u, replace: "$1% of search visits" },
-  { pattern: /^读秒 · 剩 (\d+) 次$/u, replace: "$1 byo-yomi periods left" },
+  { pattern: /^读秒 · 剩 (\d+) 次$/u, replace: (_, count) => `${countOf(count, "byo-yomi period")} left` },
   { pattern: /^其后 (\d+) × (\d+) 秒$/u, replace: "then $1 × $2 sec" },
   { pattern: /^(\d+) 分钟 \+ (\d+)×(\d+) 秒$/u, replace: "$1 min + $2×$3 sec" },
   {
@@ -1053,7 +1061,7 @@ export const ENGLISH_PATTERNS = Object.freeze([
   { pattern: /^已撤回(.+)的上一手。$/u, replace: (_, color) => `Undid ${capturedPhrase(color)}'s last move.` },
   { pattern: /^(.+)已确认当前点目，等待另一方。$/u, replace: (_, color) => `${capturedPhrase(color)} confirmed the score; waiting for the other player.` },
   { pattern: /^(.+)已确认；请核对后确认，或继续修改死子。$/u, replace: (_, color) => `${capturedPhrase(color)} confirmed. Review and confirm, or keep editing dead stones.` },
-  { pattern: /^(.+) · (\d+) 人观战$/u, replace: (_, message, count) => `${capturedPhrase(message)} · ${count} spectators` },
+  { pattern: /^(.+) · (\d+) 人观战$/u, replace: (_, message, count) => `${capturedPhrase(message)} · ${countOf(count, "spectator")}` },
   { pattern: /^房间 ([A-Z0-9]{6}) 已创建，把邀请链接发给朋友吧。$/u, replace: "Room $1 created. Send the invitation link to your friend." },
   { pattern: /^房间 ([A-Z0-9]{6}) 已恢复上次建房请求，房主为 (.+)；请核对棋盘设置。$/u, replace: "Room $1 was recovered from the previous creation request. Host: $2. Check the board settings." },
   { pattern: /^房间 ([A-Z0-9]{6}) 已创建，但浏览器未保存房主凭据；请勿刷新，并检查浏览器存储设置。$/u, replace: "Room $1 was created, but your browser did not save the host credentials. Do not refresh; check browser storage settings." },
@@ -1069,7 +1077,7 @@ export const ENGLISH_PATTERNS = Object.freeze([
   { pattern: /^房间预览已更新为 (\d+) × (\d+)；邀请对局时会使用这套设置。$/u, replace: "Room preview updated to $1 × $2. The invitation will use these settings." },
   { pattern: /^下一局预览已更新为 (\d+) × (\d+)；确认后会使用这套设置。$/u, replace: "Next-game preview updated to $1 × $2. These settings will be used after confirmation." },
   { pattern: /^(\d+) × (\d+) (.+)棋盘已准备好，黑方先行。$/u, replace: (_, width, height, topology) => `${width} × ${height} ${capturedPhrase(topology)} board is ready. Black plays first.` },
-  { pattern: /^(\d+) × (\d+) · (\d+) 点 · (.+)$/u, replace: (_, width, height, points, topology) => `${width} × ${height} · ${points} points · ${capturedPhrase(topology)}` },
+  { pattern: /^(\d+) × (\d+) · (\d+) 点 · (.+)$/u, replace: (_, width, height, points, topology) => `${width} × ${height} · ${countOf(points, "point")} · ${capturedPhrase(topology)}` },
   { pattern: /^(\d+) × (\d+) 棋盘预览暂不可用$/u, replace: "$1 × $2 board preview is unavailable" },
   { pattern: /^(.+)棋盘规则说明$/u, replace: (_, topology) => `${capturedPhrase(topology)} board rules` },
   { pattern: /^📍 (.+) · 查看棋盘$/u, replace: "📍 $1 · Show on board" },
@@ -1087,7 +1095,7 @@ export const ENGLISH_PATTERNS = Object.freeze([
   { pattern: /^已导出 (.+)。$/u, replace: "Exported $1." },
   { pattern: /^导入 SGF 失败：(.+)$/u, replace: (_, reason) => `SGF import failed: ${capturedPhrase(reason)}` },
   { pattern: /^导出 SGF 失败：(.+)$/u, replace: (_, reason) => `SGF export failed: ${capturedPhrase(reason)}` },
-  { pattern: /^整局快速分析完成：共分析 (\d+) 个实战局面。$/u, replace: "Full-game analysis complete: $1 played positions analyzed." },
+  { pattern: /^整局快速分析完成：共分析 (\d+) 个实战局面。$/u, replace: (_, count) => `Full-game analysis complete: ${countOf(count, "played position")} analyzed.` },
   { pattern: /^已切换到 (.+)；请重新分析当前局面。$/u, replace: "Switched to $1. Analyze this position again." },
   { pattern: /^已切换到 (.+)；不同模型的分析结果会分别保留。$/u, replace: "Switched to $1. Results from each model are kept separately." },
   {

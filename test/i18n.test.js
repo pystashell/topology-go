@@ -507,3 +507,79 @@ test("locale subscriptions fire only for an actual language change", () => {
   assert.deepEqual(changes, [[LOCALE_CHINESE, LOCALE_ENGLISH]]);
   assert.equal(getLocale(), LOCALE_ENGLISH);
 });
+
+test("English count phrases agree with their number", () => {
+  initializeI18n({
+    storage: memoryStorage(),
+    languages: ["en-US"],
+    document: fakeDocument([]),
+    observe: false,
+  });
+  const cases = [
+    ["读秒 · 剩 1 次", "1 byo-yomi period left"],
+    ["读秒 · 剩 3 次", "3 byo-yomi periods left"],
+    ["1 手 · 对局结束", "1 move · game over"],
+    ["0 手 · 对局结束", "0 moves · game over"],
+    ["1 手 · 计时结束", "1 move · clock ended"],
+    ["1 手", "1 move"],
+    ["搜索 1 次", "1 search iteration"],
+    ["搜索 640 次", "640 search iterations"],
+    ["轮到你了。 · 1 人观战", "Your turn. · 1 spectator"],
+    ["整局快速分析完成：共分析 1 个实战局面。", "Full-game analysis complete: 1 played position analyzed."],
+    ["黑方胜 1 目", "Black wins by 1 point"],
+    ["已导入 a.sgf，共 1 手；可播放、切换视图或做 AI 分析。", "Imported a.sgf with 1 move. You can replay, change views, or run AI analysis."],
+    [
+      "实战 D4 未进入本次 1 个已搜索候选；这不等于它一定是坏棋。",
+      "The played move D4 was not among the 1 searched candidate; that does not necessarily make it a bad move.",
+    ],
+    [
+      "黑：地 3 ＋ 提子 1 ＋ 死子 1；白：地 4 ＋ 提子 2 ＋ 死子 0 ＋ 贴目 6.5；公气 0",
+      "Black: 3 territory + 1 capture + 1 dead stone; White: 4 territory + 2 captures + 0 dead stones + 6.5 komi; neutral: 0",
+    ],
+  ];
+  for (const [source, expected] of cases) {
+    assert.equal(translateText(source), expected, source);
+  }
+});
+
+test("captured phrases inside patterns are translated, not copied", () => {
+  initializeI18n({
+    storage: memoryStorage(),
+    languages: ["en-US"],
+    document: fakeDocument([]),
+    observe: false,
+  });
+  const cases = [
+    [
+      "黑方 KataGo b10 竹筒混合 AI 落子（神经判断 420 ms）。",
+      "Black KataGo b10 Cylinder hybrid AI plays (420 ms neural evaluation).",
+    ],
+    ["KataGo b18 莫比乌斯混合 AI 正在思考…", "KataGo b18 Möbius hybrid AI is thinking…"],
+    ["候选 2 · D5", "Candidate 2 · D5"],
+    ["自选点 · K10", "Selected point · K10"],
+    [
+      "当前局面已有本地 AI 参考 · b10 · WEBGL · 搜索 320 次。",
+      "The current position has a local AI review · b10 · WEBGL · 320 search iterations.",
+    ],
+    [
+      "实战 D4 是本次搜索候选第 2。 首选搜索估值 55%（当前行棋方视角）。",
+      "The played move D4 ranked 2 among this search's candidates. Top-choice search estimate: 55% from the current player's perspective.",
+    ],
+    ["D4 · A列与末列相邻 · 最上行与最下行相邻", "D4 · Column A joins the last column · Top and bottom rows connect"],
+    ["9 × 9 竹筒", "9 × 9 Cylinder"],
+    ["轮到你落子", "Your turn"],
+    ["已申请撤回上一手，正在等待对方回应", "You asked to undo the last move. Waiting for your opponent."],
+    [
+      "王五 提到了 📍 D4，已标记；点击坐标可转到该处。",
+      "王五 mentioned 📍 D4. It is marked; select the coordinate to go there.",
+    ],
+    ["导入 SGF 失败：文件不是可识别的 SGF 棋谱", "SGF import failed: The file is not a recognizable SGF record"],
+    [
+      "来自 导入的 SGF；可随时切换平面或立体视图。",
+      "From the imported SGF; you can switch to flat or 3D views at any time.",
+    ],
+  ];
+  for (const [source, expected] of cases) {
+    assert.equal(translateText(source), expected, source);
+  }
+});
