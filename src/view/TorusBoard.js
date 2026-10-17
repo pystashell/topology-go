@@ -3,9 +3,13 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import {
   TAU,
+  TORUS_STONE_HALF_THICKNESS,
+  TORUS_STONE_LIFT,
+  TORUS_STONE_RADIUS,
   torusFrame,
   torusGridFrame,
   torusGridPointFromCartesian,
+  torusRadii,
 } from "./torusGeometry.js";
 import {
   invalidatePendingTapOnAdditionalPointer,
@@ -231,11 +235,9 @@ export class TorusBoard {
     this.width = width;
     this.height = height;
     this.size = width === height ? width : undefined;
-    this.minorRadius = (height * CELL) / TAU;
-    this.majorRadius = Math.max(
-      (width * CELL * 2.1) / TAU,
-      this.minorRadius * 1.15,
-    );
+    const { majorRadius, minorRadius } = this.boardRadii(width, height);
+    this.minorRadius = minorRadius;
+    this.majorRadius = majorRadius;
     this.radialSegments = Math.max(64, height * 4);
     this.tubularSegments = Math.max(128, width * 8);
     this.board = Array.from({ length: height }, () => Array(width).fill(null));
@@ -269,6 +271,10 @@ export class TorusBoard {
     this.controls.minDistance = (this.majorRadius + this.minorRadius) * 1.04;
     this.controls.maxDistance = (this.majorRadius + this.minorRadius) * 7;
     this.resize();
+  }
+
+  boardRadii(width, height) {
+    return torusRadii({ width, height, cell: CELL });
   }
 
   createSurface() {
@@ -399,7 +405,11 @@ export class TorusBoard {
     this.hoverWhiteMaterial.opacity = 0.6;
     this.hoverWhiteMaterial.depthWrite = false;
     this.hoverStone = new THREE.Mesh(this.stoneGeometry, this.hoverBlackMaterial);
-    this.hoverStone.scale.set(0.38, 0.12, 0.38);
+    this.hoverStone.scale.set(
+      TORUS_STONE_RADIUS,
+      TORUS_STONE_HALF_THICKNESS,
+      TORUS_STONE_RADIUS,
+    );
     this.hoverStone.visible = false;
     this.boardGroup.add(this.hoverStone);
   }
@@ -572,9 +582,13 @@ export class TorusBoard {
   }
 
   positionStone(stone, row, col) {
-    const frame = this.frame(row, col, 0.125);
+    const frame = this.frame(row, col, TORUS_STONE_LIFT);
     stone.position.copy(frame.position);
-    stone.scale.set(0.38, 0.12, 0.38);
+    stone.scale.set(
+      TORUS_STONE_RADIUS,
+      TORUS_STONE_HALF_THICKNESS,
+      TORUS_STONE_RADIUS,
+    );
     stone.quaternion.setFromUnitVectors(LOCAL_UP, frame.normal);
   }
 

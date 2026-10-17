@@ -57,6 +57,16 @@ export class MobiusBoard extends TorusBoard {
     );
   }
 
+  boardRadii(width, height) {
+    // The Mobius band sizes its strip from the major radius alone (see
+    // mobiusBoardLayout); keep its established proportions.
+    const minorRadius = height / MOBIUS_TAU;
+    return {
+      minorRadius,
+      majorRadius: Math.max((width * 2.1) / MOBIUS_TAU, minorRadius * 1.15),
+    };
+  }
+
   createSurface() {
     // Keep the standard circular embedding free of self-intersections. Grid
     // rows sit slightly inside the physical edge so stones on the boundary are
