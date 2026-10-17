@@ -405,7 +405,7 @@ let lobbyPreviewObserver = null;
 let lobbyPreviewRenderer = null;
 let lobbyStatusFilter = "all";
 let lobbyLoading = false;
-let lobbyLoadError = "";
+let lobbyLoadError = null;
 let lobbyLastRefreshAt = 0;
 let lobbyPollTimer = null;
 let lobbyModulesPromise = null;
@@ -3290,9 +3290,15 @@ function lobbyCountText(shown, total) {
 
 /** The status line counts the rooms the filters leave visible. */
 function syncLobbyStatus(shown) {
-  const text = lobbyLoadError || lobbyCountText(shown, lobbyRooms.length);
-  // An unchanged count must not re-announce in this live region every poll.
-  if (elements.lobbyStatus.textContent !== text) elements.lobbyStatus.textContent = text;
+  // The error is kept as an object so a language switch re-renders it.
+  const text = lobbyLoadError
+    ? localizedErrorMessage(lobbyLoadError, "暂时无法读取在线大厅。")
+    : lobbyCountText(shown, lobbyRooms.length);
+  // An unchanged count must not re-announce in this live region every poll;
+  // compare with the rendered (possibly translated) text.
+  if (elements.lobbyStatus.textContent !== translateText(text)) {
+    elements.lobbyStatus.textContent = text;
+  }
   elements.lobbyStatus.classList.toggle("error", Boolean(lobbyLoadError));
 }
 
@@ -3330,10 +3336,10 @@ async function refreshLobby({ announce = false } = {}) {
   try {
     const { fetchLobbyRooms } = await loadLobbyModules();
     lobbyRooms = await fetchLobbyRooms({ signal: request.signal });
-    lobbyLoadError = "";
+    lobbyLoadError = null;
   } catch (error) {
     if (error?.cause?.name === "AbortError" || request.signal.aborted) return;
-    lobbyLoadError = localizedErrorMessage(error, "暂时无法读取在线大厅。");
+    lobbyLoadError = error ?? new Error("");
     if (error?.code === "RATE_LIMITED" || error?.status === 429) {
       nextPollMs = Math.max(
         LOBBY_RATE_LIMIT_BACKOFF_MS,

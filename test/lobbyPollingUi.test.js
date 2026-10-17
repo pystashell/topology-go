@@ -44,7 +44,7 @@ function harness({ rooms = [], fetchImpl } = {}) {
     elements: { lobbyStatus: status, lobbyRefresh: { disabled: false } },
     appRouteMode: "lobby",
     lobbyLoading: false,
-    lobbyLoadError: "",
+    lobbyLoadError: null,
     lobbyLastRefreshAt: 0,
     lobbyPollTimer: null,
     lobbyRefreshController: null,
@@ -52,6 +52,7 @@ function harness({ rooms = [], fetchImpl } = {}) {
     shown: null,
     loadLobbyModules: async () => ({ fetchLobbyRooms: fetchImpl ?? (async () => rooms) }),
     localizedErrorMessage: (error, fallback) => error?.message || fallback,
+    translateText: (text) => text,
   };
   // The real renderer filters the cards; here a fixed filter keeps one room.
   context.renderLobbyRooms = async () => {
