@@ -30,8 +30,13 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
-    "miniflare": "5.20260930.0-alpha",
+    "miniflare": "5.20261012.1-beta",
     "vite": "^8.1.4",
-    "wrangler": "4.145.0"
+    "wrangler": "4.151.1"
+  },
+  "overrides": {
+    "@tensorflow/tfjs": {
+      "argparse": "^2.0.1"
+    }
   }
 }
