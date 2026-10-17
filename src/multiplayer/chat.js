@@ -5,6 +5,7 @@ import {
   MIN_BOARD_DIMENSION,
   parseGoColumn,
 } from "../game/boardDimensions.js";
+import { stripUnsafeTextCharacters } from "./protocol.js";
 
 export const COORDINATE_LETTERS = GO_COLUMN_LABELS;
 
@@ -140,7 +141,9 @@ function normalizeText(value) {
   if (typeof value !== "string") {
     throw new ChatValidationError("聊天内容格式不正确。");
   }
-  const text = value.replace(/\r\n?/gu, "\n").trim();
+  // Bidi controls, zero-width characters and line separators could disguise
+  // a message or sidestep the line limit; ordinary line feeds stay.
+  const text = stripUnsafeTextCharacters(value.replace(/\r\n?/gu, "\n")).trim();
   if (!text) throw new ChatValidationError("请输入聊天内容。", "EMPTY_CHAT");
   if ([...text].length > CHAT_TEXT_MAX_CODE_POINTS) {
     throw new ChatValidationError(

@@ -5,6 +5,7 @@ import {
   isRecord,
   isRoomCode,
   isRoomRole,
+  stripUnsafeNameCharacters,
 } from "../src/multiplayer/protocol.js";
 import { hashRoomToken } from "../src/multiplayer/roomEngine.js";
 
@@ -59,7 +60,7 @@ function hasAllowedOrigin(request) {
 
 function normalizeName(value) {
   if (typeof value !== "string") return null;
-  const name = value.replace(/\s+/g, " ").trim();
+  const name = stripUnsafeNameCharacters(value).replace(/\s+/g, " ").trim();
   return name && [...name].length <= 20 ? name : null;
 }
 

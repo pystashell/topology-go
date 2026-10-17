@@ -33,7 +33,11 @@ import {
   normalizeChatPayload,
   trimStoredChatHistories,
 } from "./chat.js";
-import { isRoomCode, isRoomRole } from "./protocol.js";
+import {
+  isRoomCode,
+  isRoomRole,
+  stripUnsafeNameCharacters,
+} from "./protocol.js";
 
 export const ROOM_TTL_MS = 24 * 60 * 60 * 1_000;
 export const MAX_SPECTATORS = 32;
@@ -171,12 +175,23 @@ function normalizeName(value) {
   if (typeof value !== "string") {
     throw new RoomEngineError("请填写名字。", 400, "BAD_REQUEST");
   }
-  const name = value.replace(/\s+/g, " ").trim();
+  // Names are public in the room and lobby; drop characters that hide or
+  // reorder what other people see.
+  const name = stripUnsafeNameCharacters(value).replace(/\s+/g, " ").trim();
   if (!name) throw new RoomEngineError("请填写名字。", 400, "BAD_REQUEST");
   if ([...name].length > 20) {
     throw new RoomEngineError("名字最多 20 个字。", 400, "BAD_REQUEST");
   }
   return name;
+}
+
+function validateStoredName(value) {
+  // Stored names predate character stripping; restore cleans them instead of
+  // rejecting a room over a name that was accepted when it was saved.
+  const name = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  if (!name || [...name].length > 20) {
+    throw new RoomEngineError("房间成员状态无效。", 500, "BAD_ROOM_STATE");
+  }
 }
 
 function normalizePlayerId(value) {
@@ -853,7 +868,7 @@ function validateSerializedState(state) {
   let spectators = 0;
   for (const member of state.members) {
     normalizePlayerId(member.playerId);
-    normalizeName(member.name);
+    validateStoredName(member.name);
     normalizeTokenHash(member.tokenHash);
     if (member.role === "player") {
       if (!VALID_COLORS.has(member.color) || colors.has(member.color)) {
@@ -1138,6 +1153,8 @@ export class RoomEngine {
     }
     state.receipts = state.receipts.slice(-MAX_COMMAND_RECEIPTS);
     for (const member of state.members) {
+      const cleanName = stripUnsafeNameCharacters(member.name).replace(/\s+/g, " ").trim();
+      if (cleanName) member.name = cleanName;
       member.lastSequence ??= 0;
       member.chatBucket = restoredChatBucket(
         member.chatBucket,

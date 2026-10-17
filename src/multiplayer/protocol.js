@@ -45,6 +45,25 @@ export function sanitizeRoomCode(value) {
     .slice(0, 6);
 }
 
+// Bidi embeddings/overrides/isolates, zero-width and joiner characters,
+// line/paragraph separators and the BOM can disguise or reorder text shown to
+// other people. C0/C1 controls never belong in it either.
+const UNSAFE_NAME_CHARACTERS =
+  /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/gu;
+// Message text keeps tabs and line feeds (carriage returns are normalized to
+// line feeds first) and the zero-width (non-)joiners that emoji sequences and
+// some scripts need, but drops the other hidden characters.
+const UNSAFE_TEXT_CHARACTERS =
+  /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/gu;
+
+export function stripUnsafeNameCharacters(value) {
+  return value.replace(UNSAFE_NAME_CHARACTERS, "");
+}
+
+export function stripUnsafeTextCharacters(value) {
+  return value.replace(UNSAFE_TEXT_CHARACTERS, "");
+}
+
 export function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
