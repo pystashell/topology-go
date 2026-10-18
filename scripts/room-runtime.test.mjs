@@ -19,6 +19,7 @@ test("SQLite Durable Object validation, rollback, post-commit failure and restar
     "src/game/goEngine.js",
     "src/game/boardDimensions.js",
     "src/game/mobiusTopology.js",
+    "src/topology/cover.js",
     "src/game/timeControl.js",
   ];
   const modules = Object.fromEntries(await Promise.all(paths.map(async (path) => [
