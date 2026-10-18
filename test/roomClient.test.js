@@ -1720,3 +1720,66 @@ test("destroying a client stops listening for network and visibility changes", a
   network.dispatchEvent(new Event("online"));
   assert.equal(MockWebSocket.instances.length, 1);
 });
+
+test("pages announce multi-game support and name the game they act on", async () => {
+  MockWebSocket.instances = [];
+  const requests = [];
+  const client = new RoomClient({
+    baseUrl: "https://baduk.example/",
+    storage: createMemoryStorage(),
+    attemptStorage: createMemoryStorage(),
+    WebSocketImpl: MockWebSocket,
+    commandAckTimeoutMs: 0,
+    idFactory: (() => { let next = 0; return () => `command-${next += 1}`; })(),
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      requests.push(body);
+      return entryResponse(body, body.roomCode ?? "AB23CD");
+    },
+  });
+  await client.createRoom({ name: "Host", options: { gameType: "gomoku", ruleSet: "renju" } });
+  assert.equal(requests[0].multiGame, true);
+  assert.equal(requests[0].gameType, "gomoku");
+  assert.equal(requests[0].ruleSet, "renju");
+  const socket = MockWebSocket.instances[0];
+  socket.open();
+
+  const sent = () => JSON.parse(socket.sent.at(-1)).payload;
+  // Unacknowledged commands are rejected when the client disconnects.
+  const ignore = (promise) => promise.catch(() => {});
+  socket.message({ type: "state", room: {
+    code: client.code, revision: 2, moveCount: 3, positionToken: "pos-gomoku",
+    game: { gameType: "gomoku", ruleSet: "renju", phase: "play" },
+  } });
+  ignore(client.command("play", { row: 1, col: 2 }));
+  assert.deepEqual(sent(), {
+    expectedMoveCount: 3, expectedPositionToken: "pos-gomoku", gameType: "gomoku", row: 1, col: 2,
+  });
+
+  socket.message({ type: "state", room: {
+    code: client.code, revision: 3, moveCount: 0, positionToken: "pos-go",
+    game: { phase: "finished" },
+    match: { status: "invited", request: { requestRevision: 3, settings: { gameType: "othello" } } },
+  } });
+  ignore(client.command("resign"));
+  assert.deepEqual(sent(), { expectedMoveCount: 0, expectedPositionToken: "pos-go" });
+  ignore(client.command("respond_game", { accept: true, requestRevision: 3 }));
+  assert.deepEqual(sent(), { gameType: "othello", accept: true, requestRevision: 3 });
+  ignore(client.command("cancel_game_request", { requestRevision: 3 }));
+  assert.deepEqual(sent(), { requestRevision: 3 });
+  client.disconnect();
+
+  const joiner = new RoomClient({
+    storage: createMemoryStorage(),
+    attemptStorage: createMemoryStorage(),
+    WebSocketImpl: MockWebSocket,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      requests.push(body);
+      return entryResponse(body, "AB23CD");
+    },
+  });
+  await joiner.joinRoom("AB23CD", { name: "Guest" });
+  assert.equal(requests.at(-1).multiGame, true);
+  joiner.disconnect();
+});

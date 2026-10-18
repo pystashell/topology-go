@@ -1511,7 +1511,13 @@ export class RoomEngine {
    */
   requiresMultiGameClient() {
     return this.currentGameType() !== GAME_GO ||
-      gameTypeOf(this.state.match?.request?.settings) !== GAME_GO;
+      (this.requestedGameType() ?? GAME_GO) !== GAME_GO;
+  }
+
+  /** The game of the pending invitation, or null without one. */
+  requestedGameType() {
+    const request = this.state.match?.request;
+    return request ? gameTypeOf(request.settings) : null;
   }
 
   bumpDirectoryRevision() {

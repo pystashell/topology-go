@@ -187,6 +187,10 @@ async function createRoom(request, env) {
         komi: body.komi,
         scoringRule: body.scoringRule,
         topology: body.topology,
+        // Absent for Go-only clients, whose rooms stay Go.
+        gameType: body.gameType,
+        ruleSet: body.ruleSet,
+        multiGame: body.multiGame === true,
         playerId,
         tokenHash,
         // Online rooms open in reusable setup state until an invitation starts a round.
@@ -272,7 +276,11 @@ async function joinRoom(request, env, roomCode) {
     result = await callRoom(stub, new Request(new URL("/internal/join", request.url), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, role, playerId, tokenHash }),
+      // Pages that can draw games other than Go say so; the room turns
+      // older pages away from a round of another game.
+      body: JSON.stringify({
+        name, role, playerId, tokenHash, multiGame: body.multiGame === true,
+      }),
     }));
   } catch (error) {
     console.error("Room join response failed", error);
