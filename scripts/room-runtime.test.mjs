@@ -7,23 +7,23 @@ import { Miniflare, Log, LogLevel } from "miniflare";
 test("SQLite Durable Object validation, rollback, post-commit failure and restart", async (t) => {
   const root = new URL("../", import.meta.url);
   const entry = "scripts/fixtures/room-runtime-worker.mjs";
-  // Miniflare 5 requires an explicit module graph instead of discovering imports.
-  const paths = [
-    entry,
-    "worker/BadukRoom.js",
-    "src/multiplayer/roomEngine.js",
-    "src/multiplayer/protocol.js",
-    "src/multiplayer/chat.js",
-    "src/multiplayer/lobby.js",
-    "src/multiplayer/lobbyPreview.js",
-    "src/game/goEngine.js",
-    "src/game/boardDimensions.js",
-    "src/game/mobiusTopology.js",
-    "src/game/timeControl.js",
-  ];
-  const modules = Object.fromEntries(await Promise.all(paths.map(async (path) => [
-    path, { type: "esm", contents: await readFile(new URL(path, root), "utf8") },
-  ])));
+  // Miniflare 5 requires an explicit module graph instead of discovering
+  // imports, so follow the relative static imports from the entry. New game
+  // engines behind the rules registry join the graph without edits here.
+  const modules = {};
+  const pending = [entry];
+  while (pending.length > 0) {
+    const path = pending.pop();
+    if (modules[path]) continue;
+    const contents = await readFile(new URL(path, root), "utf8");
+    modules[path] = { type: "esm", contents };
+    for (const match of contents.matchAll(
+      /(?:^|\n)\s*(?:import|export)\s[^;]*?from\s*"(\.{1,2}\/[^"]+)"|(?:^|\n)\s*import\s*"(\.{1,2}\/[^"]+)"/gu,
+    )) {
+      const resolved = new URL(match[1] ?? match[2], new URL(path, root));
+      pending.push(resolved.href.slice(root.href.length));
+    }
+  }
   const mf = new Miniflare({
     workers: [{ config: {
       name: "room-runtime-test",

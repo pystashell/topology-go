@@ -1,4 +1,4 @@
-import { mobiusPointFromCover } from "./mobiusTopology.js";
+import { getTopology } from "../topology/index.js";
 import {
   MAX_BOARD_DIMENSION,
   MIN_BOARD_DIMENSION,
@@ -304,6 +304,7 @@ function isPositionHashForDimensions(hash, width, height) {
 
 export class GoEngine {
   #recordHistory = true;
+  #adjacency = null;
   /**
    * @param {object} [options]
    * @param {number} [options.size] Legacy square board dimension.
@@ -382,6 +383,16 @@ export class GoEngine {
       base: this.#replayBaseSnapshot(),
       events: [],
     };
+  }
+
+  /**
+   * Game identity for the multi-game rules registry. A prototype getter, so
+   * it never appears in getState(), exportState() or serialize(): Go states
+   * stay byte-identical and anything without a gameType is Go.
+   * @returns {'go'}
+   */
+  get gameType() {
+    return "go";
   }
 
   /**
@@ -1156,45 +1167,31 @@ export class GoEngine {
    * Orthogonal neighbours. Cylinders and tori join columns without changing
    * rows. A Mobius strip joins the column seam after reversing the row. Rows
    * wrap only on a torus; cylinders and Mobius strips retain one boundary.
+   * The order (left, right, up, down; first occurrence kept) is persisted
+   * behaviour: it fixes capture order and therefore saved states.
    *
    * @returns {Point[]}
    */
   neighbors(row, col) {
-    if (!this.#validPoint(row, col)) return [];
+    return this.#boardTopology().neighbors4(row, col);
+  }
 
-    const candidates = this.topology === TOPOLOGY_MOBIUS
-      ? [col - 1, col + 1].map((coverColumn) => {
-          const point = mobiusPointFromCover(
-            row,
-            coverColumn,
-            this.width,
-            this.height,
-          );
-          return { row: point.row, col: point.col };
-        })
-      : [
-          { row, col: (col - 1 + this.width) % this.width },
-          { row, col: (col + 1) % this.width },
-        ];
-    if (this.topology === TOPOLOGY_TORUS) {
-      candidates.push(
-        { row: (row - 1 + this.height) % this.height, col },
-        { row: (row + 1) % this.height, col },
-      );
-    } else {
-      if (row > 0) candidates.push({ row: row - 1, col });
-      if (row < this.height - 1) candidates.push({ row: row + 1, col });
+  /**
+   * The shared adjacency for this board shape. Re-resolved if the public
+   * dimension fields are ever reassigned, so it can never go stale.
+   */
+  #boardTopology() {
+    const cached = this.#adjacency;
+    if (
+      cached !== null &&
+      cached.kind === this.topology &&
+      cached.width === this.width &&
+      cached.height === this.height
+    ) {
+      return cached;
     }
-
-    // The minimum board size is three, but keeping this deduplication makes the
-    // topology explicit and prevents future small-board variants double-counting.
-    const seen = new Set();
-    return candidates.filter((point) => {
-      const key = pointKey(point.row, point.col);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    this.#adjacency = getTopology(this.topology, this.width, this.height);
+    return this.#adjacency;
   }
 
   #collectGroup(row, col, board = this.board) {
@@ -1392,6 +1389,16 @@ export class GoEngine {
     return !(
       this.phase === PHASE_FINISHED && this.result?.reason === "resign"
     ) && this.undoHistory.length > 0;
+  }
+
+  /**
+   * Colours of the plays and passes held in the bounded undo history, oldest
+   * first (at most UNDO_HISTORY_LIMIT). Rooms read it to find how many moves
+   * an undo request must take back without reaching into undoHistory.
+   * @returns {Array<'black'|'white'>}
+   */
+  undoMoveColors() {
+    return this.undoHistory.map((entry) => entry.move.color);
   }
 
   /**

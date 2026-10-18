@@ -1,4 +1,10 @@
 import {
+  GAME_GO,
+  GAME_GOMOKU,
+  GOMOKU_RULE_SETS,
+  isGameType,
+} from "../game/gameTypes.js";
+import {
   encodeLobbyBoardPreview,
   isLobbyBoardPreview,
   isLobbyLastMove,
@@ -27,6 +33,32 @@ const VALID_STATUSES = new Set([
 ]);
 const VALID_MODES = new Set(LOBBY_MATCH_MODES);
 const VALID_TOPOLOGIES = new Set(["cylinder", "torus", "mobius"]);
+
+/** The game of a lobby summary or room settings; absent means Go. */
+export function lobbyRoomGameType(value) {
+  return isGameType(value?.gameType) ? value.gameType : GAME_GO;
+}
+
+/**
+ * Game fields of a summary. Go summaries keep their original shape (no
+ * gameType, with komi and scoring rule); other games name their game and
+ * rule set instead.
+ */
+function lobbyGameFields(publicGame) {
+  const gameType = lobbyRoomGameType(publicGame);
+  if (gameType === GAME_GO) {
+    return {
+      scoringRule: publicGame?.scoringRule === "japanese" ? "japanese" : "chinese",
+      komi: Number.isFinite(publicGame?.komi) ? publicGame.komi : 7.5,
+    };
+  }
+  return {
+    gameType,
+    ...(gameType === GAME_GOMOKU && GOMOKU_RULE_SETS.includes(publicGame?.ruleSet)
+      ? { ruleSet: publicGame.ruleSet }
+      : {}),
+  };
+}
 
 function finiteTimestamp(value, fallback) {
   return Number.isFinite(value) ? value : fallback;
@@ -253,8 +285,7 @@ export function lobbySummaryFromRoom(room, now = Date.now()) {
     topology: ["cylinder", "torus", "mobius"].includes(publicGame?.topology)
       ? publicGame.topology
       : "cylinder",
-    scoringRule: publicGame?.scoringRule === "japanese" ? "japanese" : "chinese",
-    komi: Number.isFinite(publicGame?.komi) ? publicGame.komi : 7.5,
+    ...lobbyGameFields(publicGame),
     timed,
     moveCount: requestedSettings
       ? 0
@@ -301,6 +332,10 @@ export function isLobbySummary(value) {
     Number.isInteger(value.width) &&
     Number.isInteger(value.height) &&
     VALID_TOPOLOGIES.has(value.topology) &&
+    // Summaries without a game predate other games and are Go.
+    (value.gameType === undefined || isGameType(value.gameType)) &&
+    (value.ruleSet === undefined ||
+      (value.gameType === GAME_GOMOKU && GOMOKU_RULE_SETS.includes(value.ruleSet))) &&
     isLobbyBoardPreview(value.boardPreview, value.width, value.height) &&
     isLobbyLastMove(value.lastMove, value.width, value.height) &&
     Number.isFinite(value.updatedAt),
@@ -338,6 +373,7 @@ export function filterLobbyRooms(rooms, filters = {}) {
       !["all", "joinable"].includes(filters.status) &&
       room.status !== filters.status
     ) return false;
+    if (filters.game && filters.game !== "all" && lobbyRoomGameType(room) !== filters.game) return false;
     if (filters.topology && filters.topology !== "all" && room.topology !== filters.topology) return false;
     if (filters.mode && filters.mode !== "all" && room.mode !== filters.mode) return false;
     if (filters.size && filters.size !== "all") {

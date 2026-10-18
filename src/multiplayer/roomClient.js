@@ -898,6 +898,7 @@ export class RoomClient {
         ...gameOptions,
         ...requestConfig,
         name,
+        multiGame: true,
       };
       let pending = this._pendingCreate();
       const resumedPending = Boolean(pending);
@@ -1044,6 +1045,9 @@ export class RoomClient {
         role,
         playerId: pending.playerId,
         token: pending.token,
+        // This page can draw every game; rooms of other games refuse pages
+        // that cannot.
+        multiGame: true,
       });
       signal?.throwIfAborted();
       const session = responseSession(response, code, name);
@@ -1557,8 +1561,18 @@ export class RoomClient {
       payload = {
         expectedMoveCount: this.room.moveCount,
         expectedPositionToken: this.room.positionToken,
+        // Name the game this page sees; rooms of games other than Go refuse
+        // older pages, which never send it. Go states carry no gameType.
+        ...(typeof this.room.game?.gameType === "string"
+          ? { gameType: this.room.game.gameType }
+          : {}),
         ...payload,
       };
+    } else if (
+      action === "respond_game" &&
+      typeof this.room?.match?.request?.settings?.gameType === "string"
+    ) {
+      payload = { gameType: this.room.match.request.settings.gameType, ...payload };
     }
     const id = String(options.id ?? this.idFactory());
     if (this._pendingCommands.has(id)) {

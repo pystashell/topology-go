@@ -42,6 +42,15 @@ GitHub Release 正文会记录 commit、来源分支和两个 Cloudflare ID。�
 - 对进行中的点目房间，不应直接回滚到不校验 token 的版本。应先准备包含这项保护的回滚版本，再核对恢复后的双方确认状态。
 - 合并前验证可在本地运行；正式发布仍须核对 `topology-go` 的实际 Worker Version、Deployment 和 `/version.json`，并在预发布环境验证新旧页面共存及发布切换时的断线恢复。
 
+### 多棋类房间（五子棋、黑白棋）的兼容与回滚
+
+- 房间存档按内容双写版本：只下过围棋的房间（当前对局、待回应邀请和全部对局存档都是围棋）继续写 `schemaVersion: 2`，内容与旧版本逐字节一致，旧版本照常恢复；只要其中出现五子棋或黑白棋就写 `schemaVersion: 3`。新版本两种都能读取；`schemaVersion: 2` 中出现其他棋类视为损坏（`BAD_ROOM_STATE`）。
+- 回滚到只支持围棋的版本时，schema 3 房间会按“未知 schema”处理：停止该房间服务（`ROOM_RESTORE_FAILED`）并保留原始存储，不会删档或误读；重新部署多棋类版本后原样恢复。围棋房间不受影响。房间切回围棋后，只要存档里还有其他棋类的对局，就仍保持 schema 3。
+- 因此回滚前应确认没有进行中的五子棋/黑白棋对局，或接受这些房间在回滚期间暂停；不要为了“修复”而手工改写 `schemaVersion`。
+- 旧页面不认识其他棋类，只会回传局面令牌。新页面建房和加入时发送 `multiGame: true`，在其他棋类的房间里落子、认输、申请悔棋以及接受其他棋类的邀请时携带 `gameType`；缺少时房间返回 426 `PROTOCOL_UPGRADE_REQUIRED`，旧页面加入此类房间同样收到 426，提示刷新。围棋房间对旧页面的行为不变，WebSocket 子协议和 `BADUK_PROTOCOL_VERSION` 不变。
+- 其他棋类只支持好友对局和同机对局；`pass`、点目和 AI 相关操作返回 409 `UNSUPPORTED_FOR_GAME`，AI 对局模式返回 400 `UNSUPPORTED_FOR_GAME`。
+- 发布后可用 `npm run test:live -- <地址>` 验证；服务器支持五子棋房间时，冒烟脚本还会验证旧页面被拒绝并下完一局五连，否则在输出中标记 `"gomoku": {"status": "skipped"}`。
+
 只读查看计划（允许工作区尚未提交）：
 
 ```powershell

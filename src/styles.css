@@ -328,7 +328,7 @@ summary:focus-visible {
 
 .lobby-filters {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-top: 15px;
 }
@@ -466,6 +466,36 @@ summary:focus-visible {
 .lobby-room-status-badge.playing {
   border-color: rgba(112, 201, 155, 0.42);
   color: #8be2b5;
+}
+
+.lobby-room-card-badges {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Which game a lobby room plays. */
+.lobby-room-game-badge {
+  padding: 4px 8px;
+  border: 1px solid rgba(215, 169, 91, 0.32);
+  border-radius: 999px;
+  color: #f3e4c6;
+  background: rgba(215, 169, 91, 0.1);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.lobby-room-game-badge.gomoku {
+  border-color: rgba(150, 178, 232, 0.45);
+  color: #c9d8f7;
+  background: rgba(110, 140, 210, 0.12);
+}
+
+.lobby-room-game-badge.othello {
+  border-color: rgba(112, 201, 155, 0.5);
+  color: #a6ecc6;
+  background: rgba(42, 133, 81, 0.18);
 }
 
 .lobby-room-meta {
@@ -2295,6 +2325,66 @@ select:disabled {
 
 .topology-buttons {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* Game choice (Go, Gomoku, Othello) in settings and the two dialogs. */
+.game-type-buttons,
+.dialog-game-picker {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.game-type-buttons button,
+.dialog-game-picker button {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.dialog-game-picker button {
+  min-height: 38px;
+  color: var(--muted);
+}
+
+.dialog-game-picker button.active {
+  color: #17130d;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.online-board-summary .dialog-game-picker,
+.online-board-summary .dialog-rule-field {
+  grid-column: 1 / -1;
+}
+
+.dialog-rule-field select {
+  min-height: 36px;
+}
+
+.gomoku-rule-field {
+  margin-bottom: 10px;
+}
+
+.gomoku-rule-field select {
+  max-width: 168px;
+}
+
+.board-limit-note {
+  margin: 4px 0 8px;
+  color: var(--accent-strong);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.invite-ai-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.rules-note .game-rules {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
 }
 
 .size-buttons button {

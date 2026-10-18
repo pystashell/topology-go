@@ -22,16 +22,6 @@ import {
 const LOCAL_UP = new THREE.Vector3(0, 1, 0);
 const LOCAL_FORWARD = new THREE.Vector3(0, 0, 1);
 
-function starIndices(size) {
-  if (size === 19) return [3, 9, 15];
-  if (size === 13) return [3, 6, 9];
-  if (size === 9) return [2, 4, 6];
-  const center = Math.floor(size / 2);
-  if (size < 7) return [center];
-  const offset = Math.max(2, Math.round(size * 0.28));
-  return [center - offset, center, center + offset];
-}
-
 /**
  * A Mobius Go surface that deliberately reuses TorusBoard's renderer,
  * controls, pointer gesture handling, materials, lifecycle and setPosition
@@ -99,10 +89,7 @@ export class MobiusBoard extends TorusBoard {
       vSegments: Math.max(18, this.height * 2),
     });
     const material = new THREE.MeshStandardMaterial({
-      color: 0xb57b3d,
-      map: this.woodTexture,
-      roughness: 0.78,
-      metalness: 0.02,
+      ...this.surfaceMaterialOptions(),
       side: THREE.DoubleSide,
     });
     this.surface = new THREE.Mesh(geometry, material);
@@ -112,7 +99,7 @@ export class MobiusBoard extends TorusBoard {
 
   createGrid() {
     const gridMaterial = new THREE.MeshStandardMaterial({
-      color: 0x302117,
+      color: this.gridColor(),
       roughness: 0.88,
     });
     const seamMaterial = new THREE.MeshStandardMaterial({
@@ -192,16 +179,14 @@ export class MobiusBoard extends TorusBoard {
       roughness: 0.65,
     });
     const starRadius = Math.max(0.035, this.mobiusStoneRadius * 0.2);
-    for (const row of starIndices(this.height)) {
-      for (const col of starIndices(this.width)) {
-        const frame = this.frame(row, col);
-        const star = new THREE.Mesh(
-          new THREE.SphereGeometry(starRadius, 12, 8),
-          starMaterial,
-        );
-        star.position.copy(frame.position);
-        this.boardGroup.add(star);
-      }
+    for (const { row, col } of this.starPoints()) {
+      const frame = this.frame(row, col);
+      const star = new THREE.Mesh(
+        new THREE.SphereGeometry(starRadius, 12, 8),
+        starMaterial,
+      );
+      star.position.copy(frame.position);
+      this.boardGroup.add(star);
     }
 
     // Keep canonical points as a fallback for renderers that do not expose
@@ -260,6 +245,26 @@ export class MobiusBoard extends TorusBoard {
       // A Mobius band has two locally visible sides but no global front side.
       // Mirrored instances keep ownership readable from either camera side.
       paired: true,
+    };
+  }
+
+  gameMarkerOptions() {
+    return {
+      stoneRadius: this.mobiusStoneRadius,
+      surfaceOffset: Math.max(0.012, this.mobiusStoneThickness * 0.34),
+      // Clear the star points, which sit centred on the two-sided surface.
+      raisedOffset: Math.max(0.035, this.mobiusStoneRadius * 0.2) + 0.01,
+      // Both sides of the band are visible; mirror every marker.
+      paired: true,
+    };
+  }
+
+  gameMarkerFrame(row, col) {
+    const frame = this.frame(row, col);
+    return {
+      position: frame.position,
+      normal: frame.normal,
+      up: frame.tangentV,
     };
   }
 

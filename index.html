@@ -90,6 +90,15 @@
 
           <div class="lobby-filters">
             <label>
+              <span>棋类</span>
+              <select id="lobby-game-filter">
+                <option value="all">全部棋类</option>
+                <option value="go">围棋</option>
+                <option value="gomoku">五子棋</option>
+                <option value="othello">黑白棋</option>
+              </select>
+            </label>
+            <label>
               <span>棋盘形状</span>
               <select id="lobby-topology-filter">
                 <option value="all">全部形状</option>
@@ -102,8 +111,10 @@
               <span>棋盘尺寸</span>
               <select id="lobby-size-filter">
                 <option value="all">全部尺寸</option>
+                <option value="8">8 × 8</option>
                 <option value="9">9 × 9</option>
                 <option value="13">13 × 13</option>
+                <option value="15">15 × 15</option>
                 <option value="19">19 × 19</option>
                 <option value="custom">自定义长宽</option>
               </select>
@@ -450,12 +461,12 @@
           <section class="score-strip" aria-label="提子数" hidden>
             <div>
               <span class="stone black small" aria-hidden="true"></span>
-              <span>黑方提子</span>
+              <span id="black-count-label">黑方提子</span>
               <strong id="black-captures">0</strong>
             </div>
             <div>
               <span class="stone white small" aria-hidden="true"></span>
-              <span>白方提子</span>
+              <span id="white-count-label">白方提子</span>
               <strong id="white-captures">0</strong>
             </div>
           </section>
@@ -615,6 +626,26 @@
               </button>
             </section>
 
+            <div id="game-type-field" class="field-group game-type-field">
+              <span class="field-label">棋类</span>
+              <div class="size-buttons game-type-buttons" role="group" aria-label="棋类选择">
+                <button type="button" data-game-type="go" class="active" aria-pressed="true">围棋</button>
+                <button type="button" data-game-type="gomoku" aria-pressed="false">五子棋</button>
+                <button type="button" data-game-type="othello" aria-pressed="false">黑白棋</button>
+              </div>
+            </div>
+
+            <label id="gomoku-rule-field" class="input-row gomoku-rule-field" for="gomoku-rule" data-game-only="gomoku" hidden>
+              <span>
+                <strong>五子棋规则</strong>
+                <small>禁手只限制黑方</small>
+              </span>
+              <select id="gomoku-rule" data-gomoku-rule>
+                <option value="freestyle">自由规则</option>
+                <option value="renju">禁手规则（连珠）</option>
+              </select>
+            </label>
+
             <div class="field-group">
               <span class="field-label">棋盘形状</span>
               <div class="size-buttons topology-buttons" role="group" aria-label="棋盘形状选择">
@@ -633,9 +664,13 @@
             <div class="field-group">
               <span class="field-label">快捷尺寸</span>
               <div class="size-buttons" role="group" aria-label="棋盘尺寸快捷选择">
-                <button type="button" data-board-size="9">9 × 9</button>
-                <button type="button" data-board-size="13">13 × 13</button>
-                <button type="button" data-board-size="19" class="active" aria-pressed="true">19 × 19</button>
+                <button type="button" data-board-size="9" data-size-games="go">9 × 9</button>
+                <button type="button" data-board-size="13" data-size-games="go">13 × 13</button>
+                <button type="button" data-board-size="15" data-size-games="gomoku" hidden>15 × 15</button>
+                <button type="button" data-board-size="19" data-size-games="go gomoku" class="active" aria-pressed="true">19 × 19</button>
+                <button type="button" data-board-size="6" data-size-games="othello" hidden>6 × 6</button>
+                <button type="button" data-board-size="8" data-size-games="othello" hidden>8 × 8</button>
+                <button type="button" data-board-size="10" data-size-games="othello" hidden>10 × 10</button>
               </div>
             </div>
 
@@ -643,20 +678,21 @@
               <label class="input-row" for="custom-width">
                 <span>
                   <strong>宽度</strong>
-                  <small>横向列数 · 5–30</small>
+                  <small id="custom-width-range">横向列数 · 5–30</small>
                 </span>
                 <input id="custom-width" type="number" min="5" max="30" step="1" value="19" inputmode="numeric" />
               </label>
               <label class="input-row" for="custom-height">
                 <span>
                   <strong>高度</strong>
-                  <small>纵向行数 · 5–30</small>
+                  <small id="custom-height-range">纵向行数 · 5–30</small>
                 </span>
                 <input id="custom-height" type="number" min="5" max="30" step="1" value="19" inputmode="numeric" />
               </label>
             </div>
+            <p id="board-limit-note" class="board-limit-note" hidden></p>
 
-            <label class="input-row" for="scoring-rule">
+            <label class="input-row" for="scoring-rule" data-game-only="go">
               <span>
                 <strong>点目规则</strong>
                 <small>新棋盘时生效</small>
@@ -666,9 +702,9 @@
                 <option value="japanese">简化领地计分 · 数目</option>
               </select>
             </label>
-            <p class="scoring-rule-note">简化领地计分按领地与提子计分，尚未排除双活中的眼，不等同于完整日本规则。</p>
+            <p class="scoring-rule-note" data-game-only="go">简化领地计分按领地与提子计分，尚未排除双活中的眼，不等同于完整日本规则。</p>
 
-            <label class="input-row" for="komi">
+            <label class="input-row" for="komi" data-game-only="go">
               <span>
                 <strong>贴目</strong>
                 <small>白方补偿</small>
@@ -719,24 +755,40 @@
               <li>桌面端右键横向拖动平面与弧面，触屏则用单指拖动；这些操作只改变展开起点，不改变棋子位置。</li>
               <li>弧面视图把完整一圈弯向玩家，左右边缘仍然相邻。</li>
               <li>上下两圈仍是棋盘边界，没有传统棋盘的四个角。</li>
-              <li>禁自杀并采用位置超级劫，禁止重复任何旧局面。</li>
-              <li>双方连续停一手后进入点目，可先标记死子。</li>
             </ul>
             <ul id="torus-rules" hidden>
               <li>同一行最左与最右相邻，同一列最上与最下也相邻。</li>
               <li>每一个棋点都有四个方向，没有边、角和一线。</li>
               <li>桌面端右键、触屏单指可向上下左右或斜向拖动平面，改变两个方向的展开起点。</li>
               <li>立体视图就是甜甜圈；数学上叫环面，内圈格子会比外圈更密。</li>
-              <li>禁自杀并采用位置超级劫，提子、连通与点目都跨越四条接缝计算。</li>
-              <li>双方连续停一手后进入点目，可先标记死子。</li>
             </ul>
             <ul id="mobius-rules" hidden>
               <li>最左与最右反向相接：左侧第 1 行连接右侧末行，左侧第 2 行连接右侧倒数第 2 行。</li>
               <li>上下仍是同一圈棋盘边界，因此边界点有三口气；原来的四个角不再是角。</li>
               <li>桌面端右键、触屏单指可横向拖动平面；滑过完整一圈后棋盘会上下翻转，再滑一圈才恢复方向。</li>
               <li>立体视图是一条只有一个面的莫比乌斯带，可旋转观察棋子如何跨越扭转接缝。</li>
-              <li>禁自杀并采用位置超级劫，提子、连通、AI 判断与点目都按反向接缝计算。</li>
-              <li>双方连续停一手后进入点目，可先标记死子；复盘可在平面与立体视图间切换。</li>
+            </ul>
+            <ul id="go-rules" class="game-rules">
+              <li data-rules-topology="cylinder">禁自杀并采用位置超级劫，禁止重复任何旧局面。</li>
+              <li data-rules-topology="torus" hidden>禁自杀并采用位置超级劫，提子、连通与点目都跨越四条接缝计算。</li>
+              <li data-rules-topology="mobius" hidden>禁自杀并采用位置超级劫，提子、连通、AI 判断与点目都按反向接缝计算。</li>
+              <li data-rules-topology="cylinder torus">双方连续停一手后进入点目，可先标记死子。</li>
+              <li data-rules-topology="mobius" hidden>双方连续停一手后进入点目，可先标记死子；复盘可在平面与立体视图间切换。</li>
+            </ul>
+            <ul id="gomoku-rules" class="game-rules" hidden>
+              <li>黑方先行，双方轮流在空点落一子，不能停一手。</li>
+              <li>横、竖或斜向连成五子即获胜；连线跨越接缝照样计算。</li>
+              <li data-rules-set="freestyle">自由规则：五子或更长的连线都算获胜，双方都没有禁手。</li>
+              <li data-rules-set="renju" hidden>禁手规则（连珠）：黑方只有恰好五子才获胜，三三、四四和长连都是禁手，落在禁手点会被拒绝；白方没有禁手，长连也算获胜。</li>
+              <li data-rules-topology="torus mobius" hidden>首尾相接成一整圈的同色棋子按长连计算。</li>
+              <li>棋盘下满仍无人连成五子则为和棋。</li>
+            </ul>
+            <ul id="othello-rules" class="game-rules" hidden>
+              <li>开局中央交叉摆放黑白各两子，黑方先行。</li>
+              <li>落子必须沿横、竖或斜向夹住至少一枚对方棋子，夹住的棋子全部翻成己方颜色。</li>
+              <li>夹子的直线可以跨越接缝；绕回落子点的一整圈不会翻转任何棋子。</li>
+              <li>一方无子可下时自动跳过，由另一方继续；双方都无子可下时对局结束。</li>
+              <li>终局时棋子多的一方获胜，数量相同为和棋。棋盘宽高须为 6–30 的偶数。</li>
             </ul>
           </details>
 
@@ -761,6 +813,19 @@
         <h2 id="invite-dialog-title">邀请一场对局</h2>
         <p id="invite-dialog-intro">选择对手类型。只有确认设置并准备就绪后，棋局才会正式开始。</p>
 
+        <div class="size-buttons dialog-game-picker" role="group" aria-label="选择棋类">
+          <button type="button" data-game-type="go" class="active" aria-pressed="true">围棋</button>
+          <button type="button" data-game-type="gomoku" aria-pressed="false">五子棋</button>
+          <button type="button" data-game-type="othello" aria-pressed="false">黑白棋</button>
+        </div>
+        <label class="dialog-field dialog-rule-field" data-game-only="gomoku" hidden>
+          <span>五子棋规则</span>
+          <select data-gomoku-rule aria-label="五子棋规则">
+            <option value="freestyle">自由规则</option>
+            <option value="renju">禁手规则（连珠）</option>
+          </select>
+        </label>
+
         <section class="invite-settings-summary" aria-label="本局设置">
           <span>本局设置</span>
           <strong id="invite-settings-summary">19 × 19 · 竹筒 · 中国规则 · 贴目 7.5 · 不计时</strong>
@@ -770,7 +835,7 @@
         <div class="invite-choice-group" role="group" aria-labelledby="invite-choice-title">
           <h3 id="invite-choice-title">选择对手</h3>
           <div class="invite-choice-grid">
-            <button id="invite-ai" class="invite-choice" type="button">
+            <button id="invite-ai" class="invite-choice" type="button" data-game-only="go">
               <span class="invite-choice-icon" aria-hidden="true">AI</span>
               <span>
                 <strong>与 AI 对弈</strong>
@@ -791,7 +856,7 @@
                 <small>两个人在同一台设备轮流落子</small>
               </span>
             </button>
-            <button id="invite-self-play" class="invite-choice" type="button">
+            <button id="invite-self-play" class="invite-choice" type="button" data-game-only="go">
               <span class="invite-choice-icon" aria-hidden="true">AI²</span>
               <span>
                 <strong>AI 自对弈</strong>
@@ -799,6 +864,7 @@
               </span>
             </button>
           </div>
+          <p class="invite-ai-note" data-game-only="gomoku othello" hidden>五子棋和黑白棋暂不支持 AI，请选择好友或本地双人对局。</p>
         </div>
 
         <div class="dialog-actions">
@@ -814,6 +880,18 @@
         <p id="online-dialog-intro">创建房间，或以玩家、观众身份进入已有房间。</p>
 
         <section id="online-board-summary-section" class="online-board-summary" aria-label="即将创建的棋盘">
+          <div class="size-buttons dialog-game-picker" role="group" aria-label="选择棋类">
+            <button type="button" data-game-type="go" class="active" aria-pressed="true">围棋</button>
+            <button type="button" data-game-type="gomoku" aria-pressed="false">五子棋</button>
+            <button type="button" data-game-type="othello" aria-pressed="false">黑白棋</button>
+          </div>
+          <label class="dialog-field dialog-rule-field" data-game-only="gomoku" hidden>
+            <span>五子棋规则</span>
+            <select data-gomoku-rule aria-label="五子棋规则">
+              <option value="freestyle">自由规则</option>
+              <option value="renju">禁手规则（连珠）</option>
+            </select>
+          </label>
           <span>创建房间将使用</span>
           <strong id="online-board-summary">19 × 19 · 竹筒 · 中国规则 · 贴目 7.5 · 不计时</strong>
           <button id="online-modify-settings" class="text-button" type="button">修改棋盘设置</button>

@@ -76,7 +76,23 @@ export function controllerOperatorsFromRoom(room) {
   return operators;
 }
 
+/**
+ * What the current game offers, from its rules' capabilities. Omitted
+ * entries are allowed, so Go (and any caller predating other games) keeps
+ * every action.
+ */
+function normalizeGameCapabilities(value) {
+  return Object.freeze({
+    pass: value?.pass !== false,
+    scoring: value?.scoring !== false,
+    undo: value?.undo !== false,
+    resign: value?.resign !== false,
+    ai: value?.ai !== false,
+  });
+}
+
 export function createMatchSession(input = {}) {
+  const gameCapabilities = normalizeGameCapabilities(input.gameCapabilities);
   const transport = input.transport === MATCH_TRANSPORT_ONLINE
     ? MATCH_TRANSPORT_ONLINE
     : MATCH_TRANSPORT_LOCAL;
@@ -152,23 +168,30 @@ export function createMatchSession(input = {}) {
     // legal move (or pass) as an implicit decline of the pending request.
     play: started && interactive && phase === "play" && bothSeats && actionReady && !ownUndoPending &&
       canActAsHuman,
-    pass: started && interactive && phase === "play" && bothSeats && actionReady && !ownUndoPending &&
+    pass: gameCapabilities.pass &&
+      started && interactive && phase === "play" && bothSeats && actionReady && !ownUndoPending &&
       canActAsHuman,
-    undo: started && interactive && phase === "play" && bothSeats && actionReady && undoAvailable &&
+    undo: gameCapabilities.undo &&
+      started && interactive && phase === "play" && bothSeats && actionReady && undoAvailable &&
       (transport === MATCH_TRANSPORT_LOCAL || (player && controlledColors.length > 0)),
-    resign: started && interactive && phase === "play" && bothSeats && actionReady &&
+    resign: gameCapabilities.resign &&
+      started && interactive && phase === "play" && bothSeats && actionReady &&
       (transport === MATCH_TRANSPORT_ONLINE
         ? player && controlledColors.length > 0
         : !localAiSelfPlay),
     new_game: started && !input.replaying && !input.undoRequest && actionReady &&
       (transport === MATCH_TRANSPORT_LOCAL || (player && identity.color === "black")),
-    toggle_dead: started && interactive && phase === "scoring" && actionReady &&
+    toggle_dead: gameCapabilities.scoring &&
+      started && interactive && phase === "scoring" && actionReady &&
       (transport === MATCH_TRANSPORT_LOCAL || (player && controlledColors.length > 0)),
-    finish_scoring: started && interactive && phase === "scoring" && actionReady &&
+    finish_scoring: gameCapabilities.scoring &&
+      started && interactive && phase === "scoring" && actionReady &&
       (transport === MATCH_TRANSPORT_LOCAL || (player && controlledColors.length > 0)),
-    resume_play: started && interactive && phase === "scoring" && actionReady &&
+    resume_play: gameCapabilities.scoring &&
+      started && interactive && phase === "scoring" && actionReady &&
       (transport === MATCH_TRANSPORT_LOCAL || (player && controlledColors.length > 0)),
-    attach_ai: started && transport === MATCH_TRANSPORT_ONLINE && onlineReady && player &&
+    attach_ai: gameCapabilities.ai &&
+      started && transport === MATCH_TRANSPORT_ONLINE && onlineReady && player &&
       identity.color === "black" && phase === "play" &&
       (!input.whiteSeat || Boolean(automatedSeat(input.room, "white"))),
     detach_ai: started && transport === MATCH_TRANSPORT_ONLINE && onlineReady && player &&
@@ -177,6 +200,7 @@ export function createMatchSession(input = {}) {
 
   return {
     transport,
+    gameCapabilities,
     controllerByColor,
     controllerOperatorByColor,
     controlledColors,
@@ -235,7 +259,9 @@ export function routeMatchAction(session, action, payload = {}, options = {}) {
   if (actor === MATCH_CONTROLLER_AI) {
     if (
       session.started === false ||
+      session.gameCapabilities?.ai === false ||
       ![MATCH_ACTION_PLAY, MATCH_ACTION_PASS].includes(action) ||
+      (action === MATCH_ACTION_PASS && session.gameCapabilities?.pass === false) ||
       session.phase !== "play" ||
       session.controllerByColor?.[session.currentPlayer] !== MATCH_CONTROLLER_AI
     ) {
