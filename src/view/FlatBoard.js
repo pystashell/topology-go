@@ -22,6 +22,25 @@ import {
   TERRITORY_MARKER_STYLES,
   territoryPointsForPosition,
 } from "./territoryMarkers.js";
+import {
+  DISC_STYLE,
+  FELT_STYLE,
+  boardUsesDiscs,
+  boardUsesFelt,
+  normalizeBoardStyle,
+  starPointsFor,
+} from "./boardStyle.js";
+import {
+  EMPTY_GAME_MARKERS,
+  GAME_MARKER_STYLES,
+  flipPulseLook,
+  flipPulseProgress,
+  gameMarkerKey,
+  gameMarkerPointsSignature,
+  lineSegmentsOnScreen,
+  normalizeGameMarkers,
+  prefersReducedMotion,
+} from "./gameMarkers.js";
 
 const TAU = Math.PI * 2;
 const DRAG_THRESHOLD = 6;
@@ -48,16 +67,6 @@ function normalizeTopology(topology) {
   return ["cylinder", "torus", "mobius"].includes(topology)
     ? topology
     : "cylinder";
-}
-
-function starIndices(size) {
-  if (size === 19) return [3, 9, 15];
-  if (size === 13) return [3, 6, 9];
-  if (size === 9) return [2, 4, 6];
-  const center = Math.floor(size / 2);
-  if (size < 7) return [center];
-  const offset = Math.max(2, Math.round(size * 0.28));
-  return [center - offset, center, center + offset];
 }
 
 export class FlatBoard {
@@ -88,6 +97,13 @@ export class FlatBoard {
     this.referencePoint = null;
     this.deadKeys = new Set();
     this.territoryPoints = [];
+    this.gameMarkers = EMPTY_GAME_MARKERS;
+    this.forbiddenKeys = new Set();
+    this.flippedSignature = "";
+    this.flipPulseStartedAt = null;
+    this.flipPulseFrame = null;
+    this.boardStyle = normalizeBoardStyle();
+    this.feltPattern = null;
     this.hoveredPoint = null;
     this.offsetColumns = 0;
     this.offsetRows = 0;
@@ -156,6 +172,10 @@ export class FlatBoard {
     this.referencePoint = null;
     this.deadKeys.clear();
     this.territoryPoints = [];
+    this.gameMarkers = EMPTY_GAME_MARKERS;
+    this.forbiddenKeys = new Set();
+    this.flippedSignature = "";
+    this.cancelFlipPulse();
     this.offsetColumns = 0;
     this.offsetRows = 0;
     this.hoveredPoint = null;
@@ -199,6 +219,8 @@ export class FlatBoard {
     analysisCandidates = [],
     analysisVariation = [],
     referencePoint = null,
+    gameMarkers = null,
+    boardStyle = null,
   }) {
     const nextWidth = width ?? size ?? this.width;
     const nextHeight = height ?? size ?? this.height;
@@ -239,7 +261,52 @@ export class FlatBoard {
       board,
       deadStones,
     });
+    this.boardStyle = normalizeBoardStyle(boardStyle);
+    this.setGameMarkers(gameMarkers, board);
     this.draw();
+  }
+
+  setGameMarkers(gameMarkers, board) {
+    this.gameMarkers = normalizeGameMarkers(gameMarkers, {
+      width: this.width,
+      height: this.height,
+      board,
+    });
+    this.forbiddenKeys = new Set(this.gameMarkers.forbidden.map(gameMarkerKey));
+    const flippedSignature = gameMarkerPointsSignature(this.gameMarkers.flipped);
+    if (flippedSignature !== this.flippedSignature) {
+      this.flippedSignature = flippedSignature;
+      if (flippedSignature) this.startFlipPulse();
+      else this.cancelFlipPulse();
+    }
+  }
+
+  /** A short pulse on newly flipped discs; frames stop when it ends. */
+  startFlipPulse() {
+    this.cancelFlipPulse();
+    if (!this.active || prefersReducedMotion()) return;
+    this.flipPulseStartedAt = performance.now();
+    const step = (now) => {
+      this.flipPulseFrame = null;
+      if (flipPulseProgress(this.flipPulseStartedAt, now) === null) {
+        this.flipPulseStartedAt = null;
+      }
+      this.draw();
+      if (this.flipPulseStartedAt !== null) {
+        this.flipPulseFrame = requestAnimationFrame(step);
+      }
+    };
+    this.flipPulseFrame = requestAnimationFrame(step);
+  }
+
+  cancelFlipPulse() {
+    if (this.flipPulseFrame !== null) cancelAnimationFrame(this.flipPulseFrame);
+    this.flipPulseFrame = null;
+    this.flipPulseStartedAt = null;
+  }
+
+  isForbiddenPoint(point) {
+    return Boolean(point) && this.forbiddenKeys.has(gameMarkerKey(point));
   }
 
   setActive(active) {
@@ -252,6 +319,7 @@ export class FlatBoard {
       this.container.classList.remove("dragging");
       this.setHoveredPoint(null);
       this.cancelSnap();
+      this.cancelFlipPulse();
     }
   }
 
@@ -698,7 +766,9 @@ export class FlatBoard {
     this.drawGrid(context);
     this.drawStarPoints(context);
     this.drawTerritory(context);
+    this.drawPointMarkers(context);
     this.drawStones(context);
+    this.drawStoneMarkers(context);
     this.drawHover(context);
     this.drawAnalysisCandidates(context);
     this.drawAnalysisMove(context);
@@ -709,6 +779,7 @@ export class FlatBoard {
   }
 
   drawBoardSurface(context) {
+    const felt = boardUsesFelt(this.boardStyle);
     context.save();
     context.shadowColor = "rgba(0, 0, 0, 0.34)";
     context.shadowBlur = 26;
@@ -719,9 +790,16 @@ export class FlatBoard {
       this.frameX + this.boardPixelsWidth,
       this.frameY + this.boardPixelsHeight,
     );
-    gradient.addColorStop(0, "#d19a56");
-    gradient.addColorStop(0.5, "#b97c3b");
-    gradient.addColorStop(1, "#9a5f2e");
+    if (felt) {
+      const [start, middle, end] = FELT_STYLE.flatGradient;
+      gradient.addColorStop(0, start);
+      gradient.addColorStop(0.5, middle);
+      gradient.addColorStop(1, end);
+    } else {
+      gradient.addColorStop(0, "#d19a56");
+      gradient.addColorStop(0.5, "#b97c3b");
+      gradient.addColorStop(1, "#9a5f2e");
+    }
     context.fillStyle = gradient;
     context.fillRect(
       this.frameX,
@@ -730,6 +808,11 @@ export class FlatBoard {
       this.boardPixelsHeight,
     );
     context.restore();
+
+    if (felt) {
+      this.drawFeltNap(context);
+      return;
+    }
 
     context.save();
     context.beginPath();
@@ -759,6 +842,37 @@ export class FlatBoard {
     context.restore();
   }
 
+  /** Fine speckle over the felt, from a small cached repeating tile. */
+  drawFeltNap(context) {
+    if (!this.feltPattern) {
+      const tile = document.createElement("canvas");
+      tile.width = 96;
+      tile.height = 96;
+      const tileContext = tile.getContext("2d");
+      let seed = 0x0f17;
+      const random = () => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        return seed / 4294967296;
+      };
+      for (let index = 0; index < 900; index += 1) {
+        tileContext.fillStyle =
+          random() < 0.55 ? FELT_STYLE.flatSpeckleDark : FELT_STYLE.flatSpeckleLight;
+        tileContext.fillRect(random() * 96, random() * 96, 1.2, 1.2);
+      }
+      this.feltPattern = context.createPattern(tile, "repeat");
+    }
+    if (!this.feltPattern) return;
+    context.save();
+    context.fillStyle = this.feltPattern;
+    context.fillRect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
+    context.restore();
+  }
+
   drawGrid(context) {
     context.save();
     context.beginPath();
@@ -769,7 +883,9 @@ export class FlatBoard {
       this.boardPixelsHeight,
     );
     context.clip();
-    context.strokeStyle = "rgba(39, 25, 17, 0.88)";
+    context.strokeStyle = boardUsesFelt(this.boardStyle)
+      ? FELT_STYLE.flatGrid
+      : "rgba(39, 25, 17, 0.88)";
     context.lineWidth = clamp(this.cell * 0.035, 0.8, 1.45);
 
     for (let row = 0; row < this.height; row += 1) {
@@ -796,8 +912,12 @@ export class FlatBoard {
   }
 
   drawStarPoints(context) {
-    const rowStars = starIndices(this.height);
-    const columnStars = starIndices(this.width);
+    const stars = starPointsFor({
+      width: this.width,
+      height: this.height,
+      gameType: this.boardStyle.gameType,
+    });
+    if (stars.length === 0) return;
     context.save();
     context.beginPath();
     context.rect(
@@ -809,19 +929,17 @@ export class FlatBoard {
     context.clip();
     context.fillStyle = "#28190f";
     const radius = clamp(this.cell * 0.105, 1.7, 4.2);
-    for (const row of rowStars) {
-      for (const col of columnStars) {
-        this.forEachLogicalPoint(
-          row,
-          col,
-          radius,
-          (x, y) => {
-            context.beginPath();
-            context.arc(x, y, radius, 0, TAU);
-            context.fill();
-          },
-        );
-      }
+    for (const { row, col } of stars) {
+      this.forEachLogicalPoint(
+        row,
+        col,
+        radius,
+        (x, y) => {
+          context.beginPath();
+          context.arc(x, y, radius, 0, TAU);
+          context.fill();
+        },
+      );
     }
     context.restore();
   }
@@ -943,7 +1061,149 @@ export class FlatBoard {
     context.restore();
   }
 
+  /**
+   * Othello legal-move dots and Renju forbidden crosses, both on empty
+   * points, drawn under the stone layer.
+   */
+  drawPointMarkers(context) {
+    const { legal, forbidden } = this.gameMarkers;
+    if (legal.length === 0 && forbidden.length === 0) return;
+    context.save();
+    context.beginPath();
+    context.rect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
+    context.clip();
+
+    const dotRadius = clamp(this.cell * 0.12, 2.5, 7);
+    context.fillStyle =
+      GAME_MARKER_STYLES.legal[this.currentPlayer === "white" ? "white" : "black"].fill;
+    for (const { row, col } of legal) {
+      this.forEachLogicalPoint(row, col, dotRadius, (x, y) => {
+        context.beginPath();
+        context.arc(x, y, dotRadius, 0, TAU);
+        context.fill();
+      });
+    }
+
+    const arm = clamp(this.cell * 0.16, 3, 9);
+    context.strokeStyle = GAME_MARKER_STYLES.forbidden.stroke;
+    context.lineWidth = clamp(this.cell * 0.065, 1.4, 3.2);
+    context.lineCap = "round";
+    for (const { row, col } of forbidden) {
+      this.forEachLogicalPoint(row, col, arm, (x, y) => {
+        this.strokeCross(context, x, y, arm);
+      });
+    }
+    context.restore();
+  }
+
+  strokeCross(context, x, y, arm) {
+    context.beginPath();
+    context.moveTo(x - arm, y - arm);
+    context.lineTo(x + arm, y + arm);
+    context.moveTo(x + arm, y - arm);
+    context.lineTo(x - arm, y + arm);
+    context.stroke();
+  }
+
+  /** Every on-screen image of a point, including those just past an edge. */
+  pointImages(row, col, margin) {
+    const images = [];
+    this.forEachLogicalPoint(row, col, margin, (x, y) => images.push({ x, y }));
+    return images;
+  }
+
+  /**
+   * Flipped-disc outlines (with their brief pulse) and the winning line: a
+   * glow ring on each winning stone plus a stroke joining neighbouring
+   * stones. The stroke is drawn pair by pair between images that are
+   * neighbours on screen, so it stays correct across wrapped edges and the
+   * Mobius flip.
+   */
+  drawStoneMarkers(context) {
+    const { winLine, flipped } = this.gameMarkers;
+    if (winLine.length === 0 && flipped.length === 0) return;
+    const stoneRadius = this.cell * 0.41;
+    context.save();
+    context.beginPath();
+    context.rect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
+    context.clip();
+
+    if (flipped.length > 0) {
+      const style = GAME_MARKER_STYLES.flipped;
+      const progress = flipPulseProgress(this.flipPulseStartedAt, performance.now());
+      const pulse = progress === null ? null : flipPulseLook(progress);
+      const lineWidth = clamp(this.cell * 0.06, 1.5, 3);
+      for (const { row, col } of flipped) {
+        this.forEachLogicalPoint(row, col, stoneRadius * 1.9, (x, y) => {
+          context.strokeStyle = style.stroke;
+          context.lineWidth = lineWidth;
+          context.beginPath();
+          context.arc(x, y, stoneRadius * 1.07, 0, TAU);
+          context.stroke();
+          if (pulse) {
+            context.save();
+            context.globalAlpha = pulse.opacity;
+            context.strokeStyle = style.pulse;
+            context.lineWidth = lineWidth * 1.3;
+            context.beginPath();
+            context.arc(x, y, stoneRadius * 1.07 * pulse.scale, 0, TAU);
+            context.stroke();
+            context.restore();
+          }
+        });
+      }
+    }
+
+    if (winLine.length > 0) {
+      const style = GAME_MARKER_STYLES.win;
+      context.save();
+      context.shadowColor = style.glow;
+      context.shadowBlur = Math.max(4, this.cell * 0.32);
+      context.strokeStyle = style.ring;
+      context.lineWidth = clamp(this.cell * 0.075, 1.6, 3.4);
+      for (const { row, col } of winLine) {
+        this.forEachLogicalPoint(row, col, stoneRadius * 1.3, (x, y) => {
+          context.beginPath();
+          context.arc(x, y, stoneRadius * 1.08, 0, TAU);
+          context.stroke();
+        });
+      }
+      // A neighbour across a seam lies at most one cell past the frame.
+      const margin = this.cell * 1.05;
+      const segments = lineSegmentsOnScreen(
+        winLine,
+        (row, col) => this.pointImages(row, col, margin),
+        { step: this.cell },
+      );
+      context.strokeStyle = style.stroke;
+      context.lineWidth = clamp(this.cell * 0.11, 2, 6);
+      context.lineCap = "round";
+      for (const { from, to } of segments) {
+        context.beginPath();
+        context.moveTo(from.x, from.y);
+        context.lineTo(to.x, to.y);
+        context.stroke();
+      }
+      context.restore();
+    }
+    context.restore();
+  }
+
   drawStone(context, x, y, radius, color, dead) {
+    if (!dead && boardUsesDiscs(this.boardStyle)) {
+      this.drawDisc(context, x, y, radius, color);
+      return;
+    }
     context.save();
     context.globalAlpha *= dead ? 0.28 : 1;
     context.shadowColor = dead ? "transparent" : "rgba(0, 0, 0, 0.36)";
@@ -985,6 +1245,32 @@ export class FlatBoard {
       context.stroke();
       context.restore();
     }
+  }
+
+  /** A flat Othello disc: a darker edge under the face suggests thickness. */
+  drawDisc(context, x, y, radius, color) {
+    const style = DISC_STYLE[color === "white" ? "white" : "black"];
+    context.save();
+    context.shadowColor = "rgba(0, 0, 0, 0.34)";
+    context.shadowBlur = radius * 0.32;
+    context.shadowOffsetY = radius * 0.14;
+    context.fillStyle = style.edge;
+    context.beginPath();
+    context.arc(x, y + radius * 0.05, radius, 0, TAU);
+    context.fill();
+    context.restore();
+
+    context.save();
+    context.fillStyle = style.face;
+    context.beginPath();
+    context.arc(x, y - radius * 0.03, radius * 0.93, 0, TAU);
+    context.fill();
+    context.strokeStyle = style.rim;
+    context.lineWidth = Math.max(1, radius * 0.07);
+    context.beginPath();
+    context.arc(x, y - radius * 0.03, radius * 0.7, 0, TAU);
+    context.stroke();
+    context.restore();
   }
 
   drawAnalysisMove(context) {
@@ -1193,6 +1479,10 @@ export class FlatBoard {
     ) {
       return;
     }
+    if (this.isForbiddenPoint(point)) {
+      this.drawForbiddenHover(context, point);
+      return;
+    }
     const radius = this.cell * 0.4;
     context.save();
     context.beginPath();
@@ -1219,6 +1509,33 @@ export class FlatBoard {
         );
       },
     );
+    context.restore();
+  }
+
+  /** Hovering a forbidden point shows a cross instead of a ghost stone. */
+  drawForbiddenHover(context, point) {
+    const style = GAME_MARKER_STYLES.forbidden;
+    const radius = this.cell * 0.36;
+    const arm = radius * 0.62;
+    context.save();
+    context.beginPath();
+    context.rect(
+      this.frameX,
+      this.frameY,
+      this.boardPixelsWidth,
+      this.boardPixelsHeight,
+    );
+    context.clip();
+    context.lineCap = "round";
+    this.forEachLogicalPoint(point.row, point.col, radius, (x, y) => {
+      context.fillStyle = style.hoverFill;
+      context.beginPath();
+      context.arc(x, y, radius, 0, TAU);
+      context.fill();
+      context.strokeStyle = style.hoverStroke;
+      context.lineWidth = clamp(this.cell * 0.1, 2, 4.5);
+      this.strokeCross(context, x, y, arm);
+    });
     context.restore();
   }
 
@@ -1596,6 +1913,7 @@ export class FlatBoard {
     this.destroyed = true;
     this.active = false;
     this.cancelSnap();
+    this.cancelFlipPulse();
     this.resizeObserver.disconnect();
     this.canvas.removeEventListener("pointerdown", this.handlePointerDown);
     this.canvas.removeEventListener("pointermove", this.handlePointerMove);
