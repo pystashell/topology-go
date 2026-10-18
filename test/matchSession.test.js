@@ -418,3 +418,39 @@ test("the browser controlling an online AI must not enter replay or analysis on 
     false,
   );
 });
+
+test("a game's rules capabilities remove pass, scoring, AI and their routes", () => {
+  const base = {
+    transport: MATCH_TRANSPORT_ONLINE,
+    controllerByColor: { black: "human", white: "human" },
+    identity: { id: "host", role: "player", color: "black" },
+    currentPlayer: "black",
+    connected: true,
+    roomReady: true,
+    bothSeats: true,
+    undoAvailable: true,
+  };
+  const noPass = { pass: false, scoring: false, undo: true, resign: true, ai: false };
+  const gomoku = createMatchSession({ ...base, phase: "play", gameCapabilities: noPass });
+  assert.equal(gomoku.capabilities.play, true);
+  assert.equal(gomoku.capabilities.pass, false);
+  assert.equal(gomoku.capabilities.undo, true);
+  assert.equal(gomoku.capabilities.resign, true);
+  assert.equal(gomoku.capabilities.attach_ai, false);
+  assert.equal(routeMatchAction(gomoku, "pass").allowed, false);
+  assert.equal(routeMatchAction(gomoku, "play", { row: 1, col: 1 }).allowed, true);
+  assert.equal(routeMatchAction(gomoku, "play", {}, { actor: "ai" }).allowed, false);
+
+  const scoring = createMatchSession({ ...base, phase: "scoring", gameCapabilities: noPass });
+  for (const action of ["toggle_dead", "finish_scoring", "resume_play"]) {
+    assert.equal(scoring.capabilities[action], false, action);
+  }
+
+  // Without capabilities (Go and older callers) every action stays available.
+  const go = createMatchSession({ ...base, phase: "play" });
+  assert.equal(go.capabilities.pass, true);
+  assert.equal(go.capabilities.attach_ai, true);
+  assert.deepEqual(go.gameCapabilities, {
+    pass: true, scoring: true, undo: true, resign: true, ai: true,
+  });
+});

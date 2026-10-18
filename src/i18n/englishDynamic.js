@@ -13,6 +13,20 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "点目时请点击棋子来标记死活。": "During scoring, select a stone to mark its group dead or alive.",
   "现在没有可以撤回的棋步。": "There are no moves to undo.",
   "这一手不能下。": "That move is not legal.",
+  // Room messages for games other than Go (src/multiplayer/roomEngine.js).
+  "这个棋类暂不支持这种对局方式。": "This game does not support that kind of match yet.",
+  "棋类无效。": "That game is not available.",
+  "持久化棋类无效。": "The stored game type is invalid.",
+  "对局规则设置无效。": "The game rule settings are invalid.",
+  "五子棋棋盘宽高必须是 11 到 30 之间的整数。":
+    "Gomoku boards need whole-number sides from 11 to 30.",
+  "黑白棋棋盘宽高必须是 6 到 30 之间的偶数。":
+    "Othello boards need even sides from 6 to 30.",
+  "黑方禁手，不能落在这里。": "That point is forbidden for Black.",
+  "黑方禁手：长连。": "Forbidden for Black: overline.",
+  "黑方禁手：四四。": "Forbidden for Black: double four.",
+  "黑方禁手：三三。": "Forbidden for Black: double three.",
+  "必须夹住至少一枚对方棋子。": "A move must outflank at least one disc.",
   "这里不能标记。": "That point cannot be marked.",
   "当前不能认输。": "You cannot resign right now.",
   "当前状态不能执行这个操作。": "That action is unavailable in the current state.",

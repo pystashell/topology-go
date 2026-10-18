@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
 import { BadukRoom } from "../worker/BadukRoom.js";
 import worker from "../worker/index.js";
 import { RoomEngine } from "../src/multiplayer/roomEngine.js";
+import { installFakeGames } from "./fixtures/fakeGames.js";
+
+// Rooms of other games are driven by the test-only fake engines.
+after(installFakeGames());
 
 function savedRoom() {
   const now = Date.now();
@@ -499,4 +503,106 @@ test("create requires a complete client-generated identity before touching a roo
     assert.equal(response.status, 400);
     assert.equal((await response.json()).code, "BAD_REQUEST");
   }
+});
+
+function savedGameRoom(gameType, { invite = null } = {}) {
+  const now = Date.now();
+  const engine = RoomEngine.create({ code: "BAM234", name: "Black", gameType,
+    playerId: "black", tokenHash: "a".repeat(64), startImmediately: false, now });
+  engine.join({ name: "White", role: "player", playerId: "white", tokenHash: "b".repeat(64), now });
+  const requested = engine.applyAction({ playerId: "black", action: "request_game",
+    payload: { mode: "friend", ...(invite ?? {}) }, now });
+  if (!invite) {
+    engine.applyAction({ playerId: "white", action: "respond_game",
+      payload: { accept: true, requestRevision: requested.room.match.request.requestRevision }, now });
+  }
+  return engine.serialize();
+}
+
+const whiteAttachment = { connectionId: "white-socket", identity: { playerId: "white", role: "player", color: "white" } };
+
+for (const gameType of ["gomoku", "othello"]) {
+  test(`${gameType} rooms ask pages that do not name the game to refresh`, async (t) => {
+    t.mock.method(console, "error", () => {});
+    const { room, storage } = await durable(savedGameRoom(gameType));
+    for (const [sequence, named] of [[1, undefined], [2, "go"]]) {
+      const client = socket();
+      const move = freshCommand(room);
+      await room.handleCommand(client, attachment, {
+        ...move, id: `move-${sequence}`, sequence,
+        payload: { ...move.payload, row: 2, col: 2, gameType: named },
+      });
+      assert.equal(client.messages[0].type, "error");
+      assert.equal(client.messages[0].code, "PROTOCOL_UPGRADE_REQUIRED");
+      assert.equal(room.engine.game.board[2][2], null);
+    }
+    const client = socket();
+    const move = freshCommand(room);
+    await room.handleCommand(client, attachment, {
+      ...move, id: "new-page", sequence: 3, payload: { ...move.payload, row: 2, col: 2, gameType },
+    });
+    assert.equal(client.messages.at(-1).type, "ack");
+    assert.equal(storage.value.game.board[2][2], "black");
+    assert.equal(storage.value.schemaVersion, 3);
+  });
+}
+
+test("accepting an invitation to another game needs a multi-game page; declining does not", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const stored = savedGameRoom("go", { invite: { gameType: "othello" } });
+  assert.equal(stored.schemaVersion, 3);
+  const requestRevision = stored.match.request.requestRevision;
+  const { room } = await durable(stored);
+  const oldPage = socket();
+  await room.handleCommand(oldPage, whiteAttachment, {
+    id: "accept-old", sequence: 1, action: "respond_game", payload: { accept: true, requestRevision },
+  });
+  assert.equal(oldPage.messages[0].code, "PROTOCOL_UPGRADE_REQUIRED");
+  assert.equal(room.engine.state.match.status, "invited");
+  const newPage = socket();
+  await room.handleCommand(newPage, whiteAttachment, {
+    id: "accept-new", sequence: 2, action: "respond_game",
+    payload: { accept: true, requestRevision, gameType: "othello" },
+  });
+  assert.equal(newPage.messages.at(-1).type, "ack");
+  assert.equal(room.engine.currentGameType(), "othello");
+
+  const declined = await durable(stored);
+  const decliner = socket();
+  await declined.room.handleCommand(decliner, whiteAttachment, {
+    id: "decline-old", sequence: 1, action: "respond_game", payload: { accept: false, requestRevision },
+  });
+  assert.equal(decliner.messages.at(-1).type, "ack");
+  assert.equal(declined.room.engine.state.match.status, "setup");
+});
+
+test("old pages cannot join a room of another game, and the worker forwards the game", async () => {
+  const { room, storage } = await durable(null);
+  const env = publicRoom(room);
+  const created = await worker.fetch(createRequest({
+    roomCode: "BAM234", playerId: "123e4567-e89b-42d3-a456-426614174010",
+    token: "c".repeat(64), size: 11, gameType: "gomoku", ruleSet: "renju", multiGame: true,
+  }), env);
+  assert.equal(created.status, 201);
+  assert.equal((await created.json()).room.game.gameType, "gomoku");
+  assert.equal(room.engine.game.ruleSet, "renju");
+  assert.equal(storage.value.schemaVersion, 3);
+
+  const credentials = { playerId: "123e4567-e89b-42d3-a456-426614174011", token: "d".repeat(64) };
+  const legacy = await worker.fetch(joinRequest(credentials), env);
+  assert.equal(legacy.status, 426);
+  assert.equal((await legacy.json()).code, "PROTOCOL_UPGRADE_REQUIRED");
+  assert.equal(storage.value.members.length, 1);
+  const spectator = await room.fetch(internalJoin({
+    name: "Old spectator", role: "spectator", playerId: "old", tokenHash: "e".repeat(64),
+  }));
+  assert.equal(spectator.status, 426);
+  const joined = await worker.fetch(joinRequest({ ...credentials, multiGame: true }), env);
+  assert.equal(joined.status, 201);
+  assert.equal((await joined.json()).session.color, "white");
+
+  // Go rooms keep admitting pages that predate other games.
+  const goRoom = await durable(savedHostRoom());
+  const goJoin = await worker.fetch(joinRequest(credentials), publicRoom(goRoom.room));
+  assert.equal(goJoin.status, 201);
 });

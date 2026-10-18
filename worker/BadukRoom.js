@@ -15,6 +15,7 @@ import {
   RoomEngineError,
 } from "../src/multiplayer/roomEngine.js";
 import { CHAT_CHANNEL_SPECTATORS } from "../src/multiplayer/chat.js";
+import { GAME_GO } from "../src/game/gameTypes.js";
 import { lobbySummaryFromRoom } from "../src/multiplayer/lobby.js";
 
 const STORAGE_KEY = "room";
@@ -331,6 +332,13 @@ export class BadukRoom {
     let changed;
     try {
       const body = await request.json();
+      if (body?.multiGame !== true && this.engine.requiresMultiGameClient()) {
+        // A page without multi-game support would draw this round as Go.
+        return jsonResponse({
+          error: "客户端版本过旧，请刷新页面后重新加入。",
+          code: "PROTOCOL_UPGRADE_REQUIRED",
+        }, 426);
+      }
       const revisionBefore = this.engine.state.revision;
       enteredJoin = true;
       result = this.engine.join(body);
@@ -590,6 +598,14 @@ export class BadukRoom {
           );
         }
         this.engine.assertFreshPosition(command.payload);
+        this.assertMultiGameClient(command, this.engine.currentGameType());
+      }
+      if (
+        command.action === "respond_game" &&
+        command.payload.accept === true &&
+        this.engine.member(playerId)?.role === "player"
+      ) {
+        this.assertMultiGameClient(command, this.engine.requestedGameType());
       }
       result = command.action === "chat"
         ? this.engine.postChat({
@@ -686,6 +702,21 @@ export class BadukRoom {
       console.error("Unable to notify committed room command", error);
     }
     await this.scheduleAlarmAfterCommit();
+  }
+
+  /**
+   * Older pages echo only the position token, so in a round of another game
+   * they would act on a board they draw as Go. Multi-game pages name the game
+   * they see (gameType) on every position-bound command and when accepting an
+   * invitation; Go needs no name.
+   */
+  assertMultiGameClient(command, gameType) {
+    if (!gameType || gameType === GAME_GO || command.payload.gameType === gameType) return;
+    throw new RoomEngineError(
+      "客户端版本过旧，请刷新页面后重试。",
+      426,
+      "PROTOCOL_UPGRADE_REQUIRED",
+    );
   }
 
   async disconnectSocket(socket) {

@@ -1,6 +1,5 @@
 import {
   BLACK,
-  GoEngine,
   PHASE_FINISHED,
   PHASE_PLAY,
   PHASE_SCORING,
@@ -13,6 +12,17 @@ import {
   MAX_BOARD_DIMENSION,
   MIN_BOARD_DIMENSION,
 } from "../game/boardDimensions.js";
+import {
+  BOARD_LIMITS,
+  FORBIDDEN_REASONS,
+  GAME_GO,
+  GAME_GOMOKU,
+  GAME_MOVE_ERRORS,
+  GAME_OTHELLO,
+  GameSettingsError,
+  isGameType,
+} from "../game/gameTypes.js";
+import { gameTypeOf, rulesFor } from "../game/rules/index.js";
 import {
   advanceTimeControl,
   completeTimeControlTurn,
@@ -34,6 +44,7 @@ import {
   trimStoredChatHistories,
 } from "./chat.js";
 import {
+  ROOM_ACTIONS,
   isRoomCode,
   isRoomRole,
   stripUnsafeNameCharacters,
@@ -61,7 +72,16 @@ export const CHAT_MEMBER_REFILL_MS = 1_200;
 export const CHAT_ROOM_BURST = 12;
 export const CHAT_ROOM_REFILL_MS = 300;
 
-const SERIALIZED_SCHEMA_VERSION = 2;
+// Rooms that only ever held Go keep schema 2, byte for byte, so a rollback to
+// a Go-only release can still restore them. Any other game in the current
+// round, a pending invitation or the round archive writes schema 3, which
+// Go-only releases refuse (keeping the stored value) instead of misreading.
+const GO_SCHEMA_VERSION = 2;
+const MULTI_GAME_SCHEMA_VERSION = 3;
+const SUPPORTED_SCHEMA_VERSIONS = new Set([
+  GO_SCHEMA_VERSION,
+  MULTI_GAME_SCHEMA_VERSION,
+]);
 export const MATCH_STATUS_SETUP = "setup";
 export const MATCH_STATUS_INVITED = "invited";
 export const MATCH_STATUS_PLAYING = "playing";
@@ -114,7 +134,33 @@ const GAME_ERROR_MESSAGES = Object.freeze({
   superko: "这一步违反全局同形规则。",
   game_not_scoring: "当前还没有进入点目阶段。",
   empty_point: "空点不能标记为死子。",
+  [GAME_MOVE_ERRORS.FORBIDDEN]: "黑方禁手，不能落在这里。",
+  [GAME_MOVE_ERRORS.NO_FLIPS]: "必须夹住至少一枚对方棋子。",
+  [GAME_MOVE_ERRORS.UNSUPPORTED_ACTION]: "这个棋类不支持这个操作。",
 });
+
+// Renju moves rejected for Black name the forbidden pattern.
+const FORBIDDEN_MOVE_MESSAGES = Object.freeze({
+  [FORBIDDEN_REASONS.OVERLINE]: "黑方禁手：长连。",
+  [FORBIDDEN_REASONS.DOUBLE_FOUR]: "黑方禁手：四四。",
+  [FORBIDDEN_REASONS.DOUBLE_THREE]: "黑方禁手：三三。",
+});
+
+const GAME_NAMES = Object.freeze({
+  [GAME_GO]: "围棋",
+  [GAME_GOMOKU]: "五子棋",
+  [GAME_OTHELLO]: "黑白棋",
+});
+
+const KNOWN_ROOM_ACTIONS = new Set(ROOM_ACTIONS);
+
+function moveErrorMessage(move) {
+  const reason = move?.reason ?? "illegal_move";
+  if (reason === GAME_MOVE_ERRORS.FORBIDDEN) {
+    return FORBIDDEN_MOVE_MESSAGES[move.forbidden] ?? GAME_ERROR_MESSAGES[reason];
+  }
+  return GAME_ERROR_MESSAGES[reason] ?? "这一步不合法。";
+}
 
 function timeControlError(error, persisted = false) {
   if (error instanceof RoomEngineError) return error;
@@ -275,14 +321,93 @@ function normalizeMatchMode(value, persisted = false) {
   return mode;
 }
 
-function roundSettingsFromGame(game, timeControl) {
-  const clock = timeControlConfig(timeControl);
+function normalizeGameType(value, persisted = false) {
+  const gameType = value ?? GAME_GO;
+  if (!isGameType(gameType)) {
+    throw new RoomEngineError(
+      persisted ? "持久化棋类无效。" : "棋类无效。",
+      persisted ? 500 : 400,
+      persisted ? "BAD_ROOM_STATE" : "BAD_REQUEST",
+    );
+  }
+  return gameType;
+}
+
+function gameSettingsError(gameType, error) {
+  if (!(error instanceof GameSettingsError)) return error;
+  if (["width", "height", "size"].includes(error.field)) {
+    const { min, max, parity } = BOARD_LIMITS[gameType];
+    return new RoomEngineError(
+      `${GAME_NAMES[gameType]}棋盘宽高必须是 ${min} 到 ${max} 之间的${parity === "even" ? "偶数" : "整数"}。`,
+      400,
+      "BAD_REQUEST",
+    );
+  }
+  if (error.field === "topology") {
+    return new RoomEngineError("棋盘形状无效。", 400, "BAD_REQUEST");
+  }
+  return new RoomEngineError("对局规则设置无效。", 400, "BAD_REQUEST");
+}
+
+/**
+ * Board settings of a game other than Go, validated by that game's rules.
+ * Only the board fields are passed on: komi and scoring rules are Go's, and
+ * clocks are the room's. `previous` holds the settings of the previous game
+ * when it was the same game, otherwise the target game's defaults apply.
+ */
+function normalizeGameBoardSettings(gameType, raw, previous) {
+  const requested = {};
+  for (const key of ["width", "height", "size", "topology", "ruleSet"]) {
+    if (raw?.[key] !== undefined && raw[key] !== null) requested[key] = raw[key];
+  }
+  let normalized;
+  try {
+    normalized = rulesFor(gameType).normalizeSettings(requested, previous);
+  } catch (error) {
+    throw gameSettingsError(gameType, error);
+  }
   return {
+    gameType,
+    ...(normalized.ruleSet === undefined ? {} : { ruleSet: normalized.ruleSet }),
+    width: normalized.width,
+    height: normalized.height,
+    ...(normalized.width === normalized.height ? { size: normalized.width } : {}),
+    topology: normalized.topology,
+  };
+}
+
+/**
+ * The board fields of a non-Go game or its settings, named by game so its
+ * rules accept them as the previous game's settings.
+ */
+function gameBoardSettings(game) {
+  return {
+    gameType: gameTypeOf(game),
     width: game.width,
     height: game.height,
     ...(game.width === game.height ? { size: game.width } : {}),
-    komi: game.komi,
-    scoringRule: game.scoringRule,
+    topology: game.topology,
+    ...(game.ruleSet === undefined ? {} : { ruleSet: game.ruleSet }),
+  };
+}
+
+/**
+ * Settings describing a game and its clock. Go keeps its original shape (no
+ * gameType: anything without one is Go); other games name their game and rule
+ * set and carry no komi or scoring rule.
+ */
+function roundSettingsFromGame(game, timeControl) {
+  const gameType = gameTypeOf(game);
+  const clock = timeControlConfig(timeControl);
+  if (gameType === GAME_GO) {
+    return rulesFor(GAME_GO).settingsFromGame(game, clock);
+  }
+  return {
+    gameType,
+    ...(game.ruleSet === undefined ? {} : { ruleSet: game.ruleSet }),
+    width: game.width,
+    height: game.height,
+    ...(game.width === game.height ? { size: game.width } : {}),
     topology: game.topology ?? TOPOLOGY_CYLINDER,
     mainTimeSeconds: clock?.mainTimeSeconds ?? 0,
     byoYomiPeriods: clock?.byoYomiPeriods ?? 0,
@@ -290,48 +415,83 @@ function roundSettingsFromGame(game, timeControl) {
   };
 }
 
+/**
+ * Settings for the next round. A payload without gameType keeps the current
+ * game (old Go-only clients never send one). Board and rule fields fall back
+ * to the current game only when the game stays the same; switching games
+ * starts from the target game's defaults. Clocks always carry over.
+ */
 function normalizeRoundSettings(payload, game, timeControl) {
+  const currentGameType = gameTypeOf(game);
+  const gameType = payload.gameType === undefined
+    ? currentGameType
+    : normalizeGameType(payload.gameType);
+  const sameGame = gameType === currentGameType;
+  const previousTimeControl = timeControlConfig(timeControl);
+  const clock = () => {
+    const requestedTimeControl = roomTimeControlConfig({
+      mainTimeSeconds:
+        payload.mainTimeSeconds ?? previousTimeControl?.mainTimeSeconds ?? 0,
+      byoYomiPeriods:
+        payload.byoYomiPeriods ?? previousTimeControl?.byoYomiPeriods ?? 0,
+      byoYomiSeconds:
+        payload.byoYomiSeconds ?? previousTimeControl?.byoYomiSeconds ?? 0,
+    });
+    return {
+      mainTimeSeconds: requestedTimeControl?.mainTimeSeconds ?? 0,
+      byoYomiPeriods: requestedTimeControl?.byoYomiPeriods ?? 0,
+      byoYomiSeconds: requestedTimeControl?.byoYomiSeconds ?? 0,
+    };
+  };
+  if (gameType !== GAME_GO) {
+    const board = normalizeGameBoardSettings(
+      gameType,
+      payload,
+      sameGame ? gameBoardSettings(game) : null,
+    );
+    return { ...board, ...clock() };
+  }
+  const previous = sameGame ? game : {};
   const requestedWidth = normalizeDimension(
-    payload.width ?? payload.size ?? game.width,
+    payload.width ?? payload.size ?? previous.width,
     "棋盘宽度",
   );
   const requestedHeight = normalizeDimension(
-    payload.height ?? payload.size ?? game.height,
+    payload.height ?? payload.size ?? previous.height,
     "棋盘高度",
   );
-  const previousTimeControl = timeControlConfig(timeControl);
-  const requestedTimeControl = roomTimeControlConfig({
-    mainTimeSeconds:
-      payload.mainTimeSeconds ?? previousTimeControl?.mainTimeSeconds ?? 0,
-    byoYomiPeriods:
-      payload.byoYomiPeriods ?? previousTimeControl?.byoYomiPeriods ?? 0,
-    byoYomiSeconds:
-      payload.byoYomiSeconds ?? previousTimeControl?.byoYomiSeconds ?? 0,
-  });
+  const { mainTimeSeconds, byoYomiPeriods, byoYomiSeconds } = clock();
   return {
     width: requestedWidth,
     height: requestedHeight,
     ...(requestedWidth === requestedHeight ? { size: requestedWidth } : {}),
-    komi: normalizeKomi(payload.komi ?? game.komi),
-    scoringRule: normalizeScoringRule(payload.scoringRule ?? game.scoringRule),
+    komi: normalizeKomi(payload.komi ?? previous.komi),
+    scoringRule: normalizeScoringRule(payload.scoringRule ?? previous.scoringRule),
     topology: normalizeTopology(
-      payload.topology ?? game.topology ?? TOPOLOGY_CYLINDER,
+      payload.topology ?? previous.topology ?? TOPOLOGY_CYLINDER,
     ),
-    mainTimeSeconds: requestedTimeControl?.mainTimeSeconds ?? 0,
-    byoYomiPeriods: requestedTimeControl?.byoYomiPeriods ?? 0,
-    byoYomiSeconds: requestedTimeControl?.byoYomiSeconds ?? 0,
+    mainTimeSeconds,
+    byoYomiPeriods,
+    byoYomiSeconds,
   };
 }
 
+/** A fresh game for round settings, built by that game's rules. */
 function gameFromRoundSettings(settings) {
-  return new GoEngine({
-    ...(settings.width === settings.height ? { size: settings.width } : {}),
-    width: settings.width,
-    height: settings.height,
-    komi: settings.komi,
-    scoringRule: settings.scoringRule,
-    topology: settings.topology,
-  });
+  const gameType = gameTypeOf(settings);
+  if (gameType === GAME_GO) return rulesFor(GAME_GO).create(settings);
+  return rulesFor(normalizeGameType(gameType)).create(gameBoardSettings(settings));
+}
+
+/** Games without an AI offer only friend and same-browser rounds. */
+function assertMatchModeForGame(mode, settings) {
+  if (!rulesFor(gameTypeOf(settings)).matchModes.includes(mode)) {
+    throw new RoomEngineError(
+      "这个棋类暂不支持这种对局方式。",
+      400,
+      "UNSUPPORTED_FOR_GAME",
+    );
+  }
 }
 
 function timeControlFromRoundSettings(settings, now) {
@@ -498,11 +658,25 @@ function fingerprint(prefix, value) {
   ].join("-");
 }
 
-function positionToken(game, roomState) {
-  const state = game.getState();
+function automatedSeatFingerprint(roomState) {
   const automated = roomState.members.find(
     (member) => member.role === "player" && member.automated === true,
   );
+  return automated
+    ? {
+        playerId: automated.playerId,
+        controllerId: automated.controllerId,
+        modelId: automated.modelId,
+      }
+    : null;
+}
+
+/**
+ * Go-only: the legacy position token, byte for byte. It hashes the superko
+ * history, which only Go keeps.
+ */
+function goPositionToken(game, roomState) {
+  const state = game.getState();
   return fingerprint("pos", {
     positionEpoch: roomState.positionEpoch,
     roundId: roomState.match?.roundId ?? 1,
@@ -521,14 +695,73 @@ function positionToken(game, roomState) {
     deadStones: state.deadStones,
     lastMove: state.lastMove,
     positionHistory: [...(game.positionHistory ?? [])].sort(),
-    automatedSeat: automated
-      ? {
-          playerId: automated.playerId,
-          controllerId: automated.controllerId,
-          modelId: automated.modelId,
-        }
-      : null,
+    automatedSeat: automatedSeatFingerprint(roomState),
   });
+}
+
+/**
+ * The position token of every other game, from the engine's public state and
+ * its rules' own fingerprint input.
+ */
+function gamePositionToken(game, roomState, rulesInput) {
+  const state = game.getState();
+  return fingerprint("pos", {
+    positionEpoch: roomState.positionEpoch,
+    roundId: roomState.match?.roundId ?? 1,
+    roundStatus: roomState.match?.status ?? MATCH_STATUS_PLAYING,
+    controllers: roomState.match?.controllers ?? null,
+    gameType: gameTypeOf(game),
+    ruleSet: state.ruleSet ?? null,
+    width: state.width,
+    height: state.height,
+    topology: state.topology,
+    currentPlayer: state.currentPlayer,
+    phase: state.phase,
+    board: state.board,
+    lastMove: state.lastMove ?? null,
+    eventCount: snapshotReplay(game).events.length,
+    rules: rulesInput ?? null,
+    automatedSeat: automatedSeatFingerprint(roomState),
+  });
+}
+
+/** Go-only: binds a score confirmation to the exact scoring proposal. */
+function goScoringToken(game, roomState) {
+  return fingerprint("score", {
+    room: roomState.code,
+    createdAt: roomState.createdAt,
+    roundId: roomState.match.roundId,
+    revision: roomState.scoringRevision,
+    width: game.width,
+    height: game.height,
+    topology: game.topology,
+    rule: game.scoringRule,
+    komi: game.komi,
+    board: game.board,
+    captures: game.captures,
+    deadStones: [...game.deadStones].sort(),
+  });
+}
+
+/**
+ * Go-only: a scoring session starts after a pass and ends with resume or
+ * finish, so its marks are exactly the trailing toggle events of the replay.
+ */
+function goDeadStoneTogglesThisScoring(game) {
+  const events = game.replay?.events ?? [];
+  let count = 0;
+  while (count < events.length && events[events.length - 1 - count].type === "toggle_dead") {
+    count += 1;
+  }
+  return count;
+}
+
+function positionToken(game, roomState) {
+  const gameType = gameTypeOf(game);
+  const rulesInput = rulesFor(gameType).positionFingerprint(game, roomState);
+  return gameType === GAME_GO && rulesInput === null
+    ? goPositionToken(game, roomState)
+    : gamePositionToken(game, roomState, rulesInput);
 }
 
 function compatibleTerminalFingerprint(game) {
@@ -600,6 +833,12 @@ function validResignationOutcome(outcome) {
 function assertResignationPersistence(state, game) {
   const outcome = state.resignationOutcome;
   if (!outcome) return;
+  if (gameTypeOf(game) !== GAME_GO) {
+    // Only Go records resignations outside its engine (for rc.2 readers);
+    // every other game stores them as an ordinary engine result.
+    state.resignationOutcome = null;
+    return;
+  }
 
   // rc.2 ignores the optional resignation field. It can therefore replace the
   // game with a new play, scoring, or finished position while preserving stale
@@ -625,37 +864,14 @@ function restoreGame(value) {
       "BAD_ROOM_STATE",
     );
   }
-  if (!Object.prototype.hasOwnProperty.call(snapshot, "topology")) {
+  const gameType = normalizeGameType(gameTypeOf(snapshot), true);
+  if (
+    gameType === GAME_GO &&
+    !Object.prototype.hasOwnProperty.call(snapshot, "topology")
+  ) {
     snapshot.topology = TOPOLOGY_CYLINDER;
   }
-
-  if (typeof GoEngine.fromState === "function") {
-    return GoEngine.fromState(snapshot);
-  }
-
-  const game = new GoEngine({
-    ...(Number.isInteger(snapshot.size) ? { size: snapshot.size } : {}),
-    width: snapshot.width ?? snapshot.size,
-    height: snapshot.height ?? snapshot.size,
-    komi: snapshot.komi,
-    scoringRule: snapshot.scoringRule,
-    initialBoard: snapshot.board,
-    currentPlayer: snapshot.currentPlayer,
-  });
-  game.phase = snapshot.phase;
-  game.consecutivePasses = snapshot.consecutivePasses;
-  game.captures = clone(snapshot.captures);
-  game.deadStones = new Set(
-    (snapshot.deadStones ?? []).map((point) =>
-      typeof point === "string" ? point : `${point.row},${point.col}`,
-    ),
-  );
-  game.lastMove = clone(snapshot.lastMove);
-  game.result = clone(snapshot.result);
-  if (Array.isArray(snapshot.positionHistory)) {
-    game.positionHistory = new Set(snapshot.positionHistory);
-  }
-  return game;
+  return rulesFor(gameType).fromState(snapshot);
 }
 
 function validateCoordinate(value, label) {
@@ -702,7 +918,7 @@ function spendChatToken(bucket, capacity, refillMs, now) {
 function migrateSerializedState(value) {
   const state = clone(value);
   if (!state || typeof state !== "object") return state;
-  if (state.schemaVersion === SERIALIZED_SCHEMA_VERSION) return state;
+  if (SUPPORTED_SCHEMA_VERSIONS.has(state.schemaVersion)) return state;
   if (state.schemaVersion !== 1) return state;
 
   const host = state.members?.find(
@@ -725,7 +941,7 @@ function migrateSerializedState(value) {
   const resigned = Boolean(state.resignationOutcome);
   const finished = gamePhase === PHASE_FINISHED || timedOut || resigned;
   const mode = automated ? MATCH_MODE_HUMAN_AI : MATCH_MODE_FRIEND;
-  state.schemaVersion = SERIALIZED_SCHEMA_VERSION;
+  state.schemaVersion = GO_SCHEMA_VERSION;
   state.match = {
     roundId: 1,
     status: finished ? MATCH_STATUS_FINISHED : MATCH_STATUS_PLAYING,
@@ -832,10 +1048,44 @@ function validateMatchState(state) {
   }
 }
 
+/**
+ * Game types of everything a room stores: the current game, a pending
+ * invitation and every archived round. Absent means Go.
+ */
+function storedGameTypes(state) {
+  return [
+    gameTypeOf(state.game),
+    gameTypeOf(state.match?.request?.settings),
+    ...(state.roundArchive ?? []).flatMap((round) => [
+      gameTypeOf(round?.settings),
+      gameTypeOf(round?.replay?.base),
+    ]),
+  ];
+}
+
+function onlyGo(gameTypes) {
+  return gameTypes.every((gameType) => gameType === GAME_GO);
+}
+
+function validateStoredGameTypes(state) {
+  const gameTypes = storedGameTypes(state);
+  if (
+    gameTypes.some((gameType) => !isGameType(gameType)) ||
+    // Schema 2 predates other games; such a value is corrupt, not old.
+    (state.schemaVersion === GO_SCHEMA_VERSION && !onlyGo(gameTypes))
+  ) {
+    throw new RoomEngineError(
+      "持久化棋类无效。",
+      500,
+      "BAD_ROOM_STATE",
+    );
+  }
+}
+
 function validateSerializedState(state) {
   if (
     !state ||
-    state.schemaVersion !== SERIALIZED_SCHEMA_VERSION ||
+    !SUPPORTED_SCHEMA_VERSIONS.has(state.schemaVersion) ||
     !isRoomCode(state.code) ||
     !Number.isSafeInteger(state.revision) ||
     state.revision < 1 ||
@@ -862,6 +1112,7 @@ function validateSerializedState(state) {
   }
 
   validateMatchState(state);
+  validateStoredGameTypes(state);
 
   const colors = new Set();
   let automatedPlayers = 0;
@@ -992,7 +1243,9 @@ export class RoomEngine {
     byoYomiSeconds,
     komi = 6.5,
     scoringRule = "japanese",
-    topology = TOPOLOGY_CYLINDER,
+    topology,
+    gameType,
+    ruleSet,
     playerId,
     tokenHash,
     startImmediately = true,
@@ -1005,8 +1258,19 @@ export class RoomEngine {
     const normalizedName = normalizeName(name);
     const normalizedPlayerId = normalizePlayerId(playerId);
     const normalizedTokenHash = normalizeTokenHash(tokenHash);
-    const normalizedWidth = normalizeDimension(width ?? size ?? height ?? 19, "棋盘宽度");
-    const normalizedHeight = normalizeDimension(height ?? size ?? width ?? 19, "棋盘高度");
+    const normalizedGameType = normalizeGameType(gameType);
+    const isGo = normalizedGameType === GAME_GO;
+    // Go validates in its historical order (board, clock, komi, rule, shape).
+    const board = isGo
+      ? {
+          width: normalizeDimension(width ?? size ?? height ?? 19, "棋盘宽度"),
+          height: normalizeDimension(height ?? size ?? width ?? 19, "棋盘高度"),
+        }
+      : normalizeGameBoardSettings(
+          normalizedGameType,
+          { width, height, size, topology, ruleSet },
+          null,
+        );
     const timeControl = freshRoomTimeControl(
       roomTimeControlConfig({
         mainTimeSeconds,
@@ -1015,14 +1279,14 @@ export class RoomEngine {
       }),
       now,
     );
-    const game = new GoEngine({
-      ...(normalizedWidth === normalizedHeight ? { size: normalizedWidth } : {}),
-      width: normalizedWidth,
-      height: normalizedHeight,
-      komi: normalizeKomi(komi),
-      scoringRule: normalizeScoringRule(scoringRule),
-      topology: normalizeTopology(topology),
-    });
+    const game = gameFromRoundSettings(isGo
+      ? {
+          ...board,
+          komi: normalizeKomi(komi),
+          scoringRule: normalizeScoringRule(scoringRule),
+          topology: normalizeTopology(topology),
+        }
+      : board);
     if (typeof startImmediately !== "boolean") {
       throw new RoomEngineError(
         "startImmediately must be a boolean.",
@@ -1044,7 +1308,7 @@ export class RoomEngine {
       aiAutoplayPaused: false,
     };
     const state = {
-      schemaVersion: SERIALIZED_SCHEMA_VERSION,
+      schemaVersion: isGo ? GO_SCHEMA_VERSION : MULTI_GAME_SCHEMA_VERSION,
       code,
       revision: 1,
       directoryRevision: 1,
@@ -1225,7 +1489,39 @@ export class RoomEngine {
   }
 
   serialize() {
-    return clone({ ...this.state, game: serializeGame(this.game) });
+    return clone({
+      ...this.state,
+      schemaVersion: this.serializedSchemaVersion(),
+      game: serializeGame(this.game),
+    });
+  }
+
+  /** 2 while the room has only ever held Go (see GO_SCHEMA_VERSION), else 3. */
+  serializedSchemaVersion() {
+    return onlyGo(storedGameTypes({ ...this.state, game: this.game }))
+      ? GO_SCHEMA_VERSION
+      : MULTI_GAME_SCHEMA_VERSION;
+  }
+
+  /** The game of the current round. */
+  currentGameType() {
+    return gameTypeOf(this.game);
+  }
+
+  /**
+   * Whether only a multi-game client may take part: the current round or a
+   * pending invitation is a game other than Go. Older pages would render it
+   * as Go.
+   */
+  requiresMultiGameClient() {
+    return this.currentGameType() !== GAME_GO ||
+      (this.requestedGameType() ?? GAME_GO) !== GAME_GO;
+  }
+
+  /** The game of the pending invitation, or null without one. */
+  requestedGameType() {
+    const request = this.state.match?.request;
+    return request ? gameTypeOf(request.settings) : null;
   }
 
   bumpDirectoryRevision() {
@@ -1238,20 +1534,17 @@ export class RoomEngine {
   }
 
   scoringToken() {
-    return fingerprint("score", {
-      room: this.state.code,
-      createdAt: this.state.createdAt,
-      roundId: this.state.match.roundId,
-      revision: this.state.scoringRevision,
-      width: this.game.width,
-      height: this.game.height,
-      topology: this.game.topology,
-      rule: this.game.scoringRule,
-      komi: this.game.komi,
-      board: this.game.board,
-      captures: this.game.captures,
-      deadStones: [...this.game.deadStones].sort(),
-    });
+    if (this.currentGameType() !== GAME_GO) {
+      // Only Go has a scoring phase; other games get a fixed token per round.
+      return fingerprint("score", {
+        room: this.state.code,
+        createdAt: this.state.createdAt,
+        roundId: this.state.match.roundId,
+        gameType: this.currentGameType(),
+        scoring: false,
+      });
+    }
+    return goScoringToken(this.game, this.state);
   }
 
   publicView(now) {
@@ -1938,6 +2231,7 @@ export class RoomEngine {
     if (action === "release_seat") return this.releaseSeat({ playerId, now });
 
     this.requirePlayer(member);
+    this.assertActionSupported(action);
     const managesSeatsOrStartsGame =
       action === "attach_ai" ||
       action === "detach_ai" ||
@@ -2624,6 +2918,7 @@ export class RoomEngine {
           (this.automatedPlayer() ? MATCH_MODE_HUMAN_AI : this.state.match?.mode),
       );
       const settings = normalizeRoundSettings(payload, this.game, this.state.timeControl);
+      assertMatchModeForGame(legacyMode, settings);
       const controllers = controllersForMode({
         mode: legacyMode,
         hostId: member.playerId,
@@ -2639,12 +2934,7 @@ export class RoomEngine {
     }
 
     if (!move?.ok) {
-      const reason = move?.reason ?? "illegal_move";
-      throw new RoomEngineError(
-        GAME_ERROR_MESSAGES[reason] ?? "这一步不合法。",
-        409,
-        "ILLEGAL_MOVE",
-      );
+      throw new RoomEngineError(moveErrorMessage(move), 409, "ILLEGAL_MOVE");
     }
 
     const invalidatesAIPosition =
@@ -3115,25 +3405,40 @@ export class RoomEngine {
 
   undoCountFor(color) {
     // An undo request takes back the requester's own latest move together
-    // with any reply played since (a pass counts as a move). Turns alternate,
-    // so that is the latest move or the one before it; 0 means none is left
-    // in the undo history.
-    const history = this.game.undoHistory ?? [];
-    for (let count = 1; count <= Math.min(2, history.length); count += 1) {
-      if (history[history.length - count].move?.color === color) return count;
+    // with every move played since (a Go pass counts as a move). In Go turns
+    // alternate, so that is the latest move or the one before it; Othello can
+    // give one colour several moves in a row. 0 means none is left in the
+    // engine's undo history.
+    const colors = typeof this.game.undoMoveColors === "function"
+      ? this.game.undoMoveColors()
+      : [];
+    for (let count = 1; count <= colors.length; count += 1) {
+      if (colors[colors.length - count] === color) return count;
     }
     return 0;
   }
 
   deadStoneTogglesThisScoring() {
-    // A scoring session starts after a pass and ends with resume/finish, so
-    // its marks are exactly the trailing toggle events of the replay.
-    const events = this.game.replay?.events ?? [];
-    let count = 0;
-    while (count < events.length && events[events.length - 1 - count].type === "toggle_dead") {
-      count += 1;
+    return this.currentGameType() === GAME_GO
+      ? goDeadStoneTogglesThisScoring(this.game)
+      : 0;
+  }
+
+  /**
+   * Each game accepts only its own room actions (Gomoku and Othello have no
+   * pass, scoring or AI). Unknown actions keep their BAD_REQUEST answer.
+   */
+  assertActionSupported(action) {
+    if (
+      KNOWN_ROOM_ACTIONS.has(action) &&
+      !rulesFor(this.currentGameType()).roomActions.has(action)
+    ) {
+      throw new RoomEngineError(
+        "这个棋类不支持这个操作。",
+        409,
+        "UNSUPPORTED_FOR_GAME",
+      );
     }
-    return count;
   }
 
   assertSeatsUnlocked() {
@@ -3149,6 +3454,23 @@ export class RoomEngine {
   }
 
   recordResignation(loser, now) {
+    if (this.currentGameType() === GAME_GO) {
+      return this.recordGoResignation(loser, now);
+    }
+    // Other games resign through their engine: the result and the replay's
+    // resign event are part of the stored game, with no room-level overlay.
+    const resigned = this.game.resign(loser);
+    if (!resigned?.ok) {
+      throw new RoomEngineError("当前无法记录认输结果。", 409, "ILLEGAL_MOVE");
+    }
+    return resigned;
+  }
+
+  /**
+   * Go-only: rc.2 cannot read a resign event, so the stored game ends with
+   * passes and a finished count while the room keeps the real outcome.
+   */
+  recordGoResignation(loser, now) {
     if (this.game.phase === PHASE_SCORING) {
       // Only a departure resigns during scoring. Reopen play first so the
       // stored outcome keeps the play-phase snapshot that restore validates.
@@ -3261,6 +3583,7 @@ export class RoomEngine {
     }
     const mode = normalizeMatchMode(payload.mode ?? this.state.match?.mode);
     const settings = normalizeRoundSettings(payload, this.game, this.state.timeControl);
+    assertMatchModeForGame(mode, settings);
     const controllers = controllersForMode({
       mode,
       hostId: member.playerId,
