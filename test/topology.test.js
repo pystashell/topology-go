@@ -334,6 +334,18 @@ test("a narrow Mobius diagonal returns to its start and stops before it", () => 
   assert.equal(line.cells[line.origin].row, 4);
   assert.equal(new Set(line.cells.map(key)).size, line.cells.length);
   assert.equal(line.length, line.cells.length);
+  // From the top edge the folded diagonal crosses (8,0) twice, mirrored the
+  // second time, before it returns to its start.
+  const folded = topology.ray(0, 0, 1, 1);
+  assert.equal(folded.end, "start");
+  assert.deepEqual(
+    folded.cells.map(({ row, col }) => `${row},${col}`),
+    ["1,1", "2,2", "3,3", "8,0", "7,1", "6,2", "5,3", "8,0", "9,1", "10,2", "11,3"],
+  );
+  assert.deepEqual(
+    [folded.cells[3].dRow, folded.cells[7].dRow],
+    [-1, 1],
+  );
   // The same diagonal from a wide strip simply reaches the boundary.
   assert.equal(getTopology("mobius", 13, 13).ray(4, 0, 1, 1).end, "boundary");
 });

@@ -89,6 +89,8 @@ export const DIRECTIONS_8 = Object.freeze([
  * @property {(row: number, coverColumn: number) => {row: number, col: number, copyIndex: number}} fromCover
  */
 
+// Left, right, up, down: the persisted Go neighbour order.
+const ORTHOGONAL = DIRECTIONS_8.slice(0, 4);
 const CACHE_LIMIT = 32;
 const cache = new Map();
 
@@ -173,9 +175,10 @@ function createTopology(kind, width, height) {
     ) {
       return null;
     }
-    // `+ 0` normalizes -0 so results compare equal with Object.is.
     const nextRow = row + dRow;
     const coverColumn = col + dCol;
+    // `+ 0` and `0 -` never produce -0, so results compare equal with
+    // Object.is (and deepStrictEqual) whatever sign of zero callers pass.
     if (wrapsRows) {
       return {
         row: positiveModulo(nextRow, height),
@@ -226,11 +229,7 @@ function createTopology(kind, width, height) {
   for (let cell = 0; cell < pointCount; cell += 1) {
     start[cell] = indexList.length;
     const row = Math.floor(cell / width);
-    for (const neighbour of collectNeighbors(
-      row,
-      cell - row * width,
-      DIRECTIONS_8.slice(0, 4),
-    )) {
+    for (const neighbour of collectNeighbors(row, cell - row * width, ORTHOGONAL)) {
       indexList.push(neighbour.row * width + neighbour.col);
     }
   }
