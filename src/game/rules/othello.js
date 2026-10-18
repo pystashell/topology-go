@@ -5,12 +5,12 @@ import {
   SGF_GAME_CODES,
   readonlySet,
 } from "../gameTypes.js";
+import { OthelloEngine } from "../othelloEngine.js";
 import { NON_GO_ROOM_ACTIONS } from "./shared.js";
 
 /**
- * Othello rules. PLACEHOLDER: the static description follows the
- * multi-game plan; the engine-facing methods throw until the Othello engine
- * lands.
+ * Othello rules. The engine-facing methods are live; the settings, room and
+ * view hooks that still throw follow with the rest of the adapter.
  */
 
 function notImplemented(method) {
@@ -41,9 +41,10 @@ export const othelloRules = Object.freeze({
   roomActions: readonlySet(NON_GO_ROOM_ACTIONS),
   matchModes: Object.freeze([MATCH_MODES.FRIEND, MATCH_MODES.LOCAL]),
   normalizeSettings: notImplemented("normalizeSettings"),
-  create: notImplemented("create"),
-  fromState: notImplemented("fromState"),
-  hydratePublic: notImplemented("hydratePublic"),
+  create: ({ width, height, topology } = {}) =>
+    new OthelloEngine({ width, height, topology }),
+  fromState: (state) => OthelloEngine.fromState(state),
+  hydratePublic: (state) => OthelloEngine.fromPublicState(state),
   settingsFromGame: notImplemented("settingsFromGame"),
   positionFingerprint: notImplemented("positionFingerprint"),
   viewMarkers: notImplemented("viewMarkers"),

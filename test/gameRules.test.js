@@ -187,6 +187,7 @@ test("Gomoku and Othello placeholders describe the plan but cannot run yet", () 
     for (const action of ["play", "resign", "request_undo", "new_game", "chat", "sync", "leave"]) {
       assert.equal(rules.roomActions.has(action), true, `${gameType} ${action}`);
     }
+    if (gameType === GAME_OTHELLO) continue; // implemented; see othelloRules.test.js
     for (const method of ["create", "fromState", "hydratePublic", "normalizeSettings"]) {
       assert.throws(() => rules[method]({}), /not implemented/u, `${gameType}.${method}`);
     }
@@ -393,7 +394,12 @@ test("replays dispatch on the base's game type", () => {
     JSON.stringify(buildReplayStateAtStep(replay, 3)),
     JSON.stringify(afterThree.exportState({ includeReplay: false })),
   );
-  for (const gameType of ["gomoku", "othello"]) {
+  // Othello's rules refuse this Go base; see othelloRules.test.js.
+  assert.throws(
+    () => buildReplayFrames({ ...replay, base: { ...replay.base, gameType: "othello" } }),
+    RangeError,
+  );
+  for (const gameType of ["gomoku"]) {
     const typed = { ...replay, base: { ...replay.base, gameType } };
     assert.throws(() => buildReplayFrames(typed), /not implemented/u);
     assert.throws(() => buildReplayStateAtStep(typed, 0), /not implemented/u);
