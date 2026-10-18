@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import vm from "node:vm";
 
 import {
   BOARD_LIMITS,
@@ -318,23 +317,56 @@ test("Go fromState is GoEngine.fromState and refuses other games' states", () =>
   assert.throws(() => goRules.fromState({ ...game.exportState(), board: [] }), RangeError);
 });
 
-/** main.js hydratePublicGame and its helpers, evaluated in isolation. */
+/**
+ * The hydratePublicGame that main.js used before multiple games, verbatim.
+ * main.js now delegates to the rules registry (asserted below), so this copy
+ * pins Go's hydration to its historical behaviour.
+ */
 function legacyHydratePublicGame() {
-  const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
-  const slice = (from, to) => {
-    const start = main.indexOf(from);
-    const end = main.indexOf(to, start);
-    assert.ok(start >= 0 && end > start, `expected main.js to contain ${from}`);
-    return main.slice(start, end);
+  const cloneSerializable = (value) => (value == null ? value : JSON.parse(JSON.stringify(value)));
+  const boardWidth = (state, fallback = 19) => {
+    const value = state?.width ?? state?.size;
+    return Number.isInteger(value) ? value : fallback;
   };
-  const source = [
-    slice("function cloneSerializable(value)", "async function loadVersionLabel("),
-    slice("function boardWidth(", "function boardPointCount("),
-    slice("function hydratePublicGame(", "function onlineRoomPath("),
-    "hydratePublicGame",
-  ].join("\n");
-  return vm.runInNewContext(source, { GoEngine, TOPOLOGY_CYLINDER, game: null });
+  const boardHeight = (state, fallback = 19) => {
+    const value = state?.height ?? state?.size;
+    return Number.isInteger(value) ? value : fallback;
+  };
+  return function hydratePublicGame(state) {
+    const hydrated = new GoEngine({
+      ...(Number.isInteger(state.size) ? { size: state.size } : {}),
+      width: boardWidth(state),
+      height: boardHeight(state),
+      topology: state.topology ?? TOPOLOGY_CYLINDER,
+      komi: state.komi,
+      scoringRule: state.scoringRule,
+      initialBoard: state.board,
+      currentPlayer: state.currentPlayer,
+    });
+    hydrated.phase = state.phase;
+    hydrated.consecutivePasses = state.consecutivePasses;
+    hydrated.captures = { ...state.captures };
+    hydrated.deadStones = new Set(
+      (state.deadStones ?? []).map(({ row, col }) => `${row},${col}`),
+    );
+    hydrated.lastMove = cloneSerializable(state.lastMove);
+    hydrated.result = cloneSerializable(state.result);
+    return hydrated;
+  };
 }
+
+test("main.js hydrates public room states through the rules registry", () => {
+  const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+  const start = main.indexOf("function hydratePublicGame(");
+  const end = main.indexOf("\nfunction ", start + 1);
+  assert.ok(start >= 0 && end > start);
+  assert.match(
+    main.slice(start, end),
+    /return rulesFor\(gameTypeOf\(state\)\)\.hydratePublic\(state\);/u,
+  );
+  assert.doesNotMatch(main, /new GoEngine\(/u, "every engine is built by its game's rules");
+  assert.doesNotMatch(main, /GoEngine\.fromState\(/u);
+});
 
 function hydratedFields(engine) {
   return JSON.stringify({
