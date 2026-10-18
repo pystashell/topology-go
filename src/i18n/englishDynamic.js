@@ -27,6 +27,31 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "黑方禁手：四四。": "Forbidden for Black: double four.",
   "黑方禁手：三三。": "Forbidden for Black: double three.",
   "必须夹住至少一枚对方棋子。": "A move must outflank at least one disc.",
+  // Game names, rule sets and results shown by src/ui/gameUi.js.
+  "围棋": "Go",
+  "五子棋": "Gomoku",
+  "黑白棋": "Othello",
+  "自由规则": "Freestyle",
+  "禁手规则（连珠）": "Renju",
+  "棋盘已满，和棋": "Board full: draw",
+  "黑方已无可下之处，和棋": "Black has no legal point left: draw",
+  "棋盘已满，和棋。": "Board full: draw.",
+  "双方和棋。": "Draw.",
+  "黑方已无可下之处，和棋。": "Black has no legal point left: draw.",
+  "黑方子数": "Black discs",
+  "白方子数": "White discs",
+  "五子棋棋盘每边至少 11 路。": "Gomoku boards need at least 11 lines per side.",
+  "黑白棋棋盘宽高须为 6–30 的偶数。": "Othello boards need even sides from 6 to 30.",
+  "这是黑白棋棋谱（GM[2]）；目前只能导入围棋 SGF。":
+    "This is an Othello record (GM[2]); only Go SGF files can be imported for now.",
+  "这是五子棋棋谱（GM[4]）；目前只能导入围棋 SGF。":
+    "This is a Gomoku record (GM[4]); only Go SGF files can be imported for now.",
+  "这个棋类暂不支持 AI 对手、AI 分析或 SGF 棋谱。":
+    "This game does not support AI opponents, AI analysis or SGF records yet.",
+  "五子棋和黑白棋暂不支持 AI，请选择好友或本地双人对局。":
+    "Gomoku and Othello have no AI yet. Choose a friend or a same-device game.",
+  "这个棋类暂不支持 AI 分析。": "This game does not support AI analysis yet.",
+  "黑方禁手点已用 ✕ 标出。": "Points forbidden for Black are marked with ✕.",
   "这里不能标记。": "That point cannot be marked.",
   "当前不能认输。": "You cannot resign right now.",
   "当前状态不能执行这个操作。": "That action is unavailable in the current state.",
@@ -988,6 +1013,11 @@ export const ENGLISH_PATTERNS = Object.freeze([
       `Replay finished with SGF result ${result}. Standard SGF does not contain this project's unusual-board dead-stone adjudication.${note ? ` ${capturedPhrase(note)}` : ""}`,
   },
   {
+    // Gomoku and Othello replays end without dead-stone scoring.
+    pattern: /^复盘结束：(.+)。$/u,
+    replace: (_, result) => `Replay finished: ${capturedPhrase(result)}.`,
+  },
+  {
     pattern: /^棋谱已播放到点目阶段，最终结果尚未确认。(.*)$/u,
     replace: (_, note) =>
       `The record has reached scoring, but the final result is not confirmed.${note ? ` ${capturedPhrase(note)}` : ""}`,
@@ -1206,5 +1236,74 @@ export const ENGLISH_PATTERNS = Object.freeze([
   {
     pattern: /^([A-Z]{1,2}\d{1,2}) · (.+)$/u,
     replace: (_, coordinate, notes) => `${coordinate} · ${segmentsPhrase(notes)}`,
+  },
+  // Gomoku and Othello results, moves and settings (src/ui/gameUi.js).
+  {
+    pattern: /^(黑方|白方)连成五子获胜(。)?$/u,
+    replace: (_, color, punctuated) =>
+      `${capturedTerm(color)} wins with five in a row${punctuated ? "." : ""}`,
+  },
+  {
+    pattern: /^(黑方|白方)以 (\d+) 子长连获胜(。)?$/u,
+    replace: (_, color, length, punctuated) =>
+      `${capturedTerm(color)} wins with an overline of ${length}${punctuated ? "." : ""}`,
+  },
+  {
+    pattern: /^(黑方|白方)胜 (\d+) 子(。)?$/u,
+    replace: (_, color, margin, punctuated) =>
+      `${capturedTerm(color)} wins by ${countOf(margin, "disc")}${punctuated ? "." : ""}`,
+  },
+  {
+    pattern: /^双方各 (\d+) 子，和棋(。)?$/u,
+    replace: (_, count, punctuated) => `Draw: ${countOf(count, "disc")} each${punctuated ? "." : ""}`,
+  },
+  {
+    pattern: /^(黑方|白方)无子可下，(黑方|白方)继续(。)?$/u,
+    replace: (_, skipped, next, punctuated) =>
+      `${capturedTerm(skipped)} has no legal move; ${capturedTerm(next)} continues${punctuated ? "." : ""}`,
+  },
+  {
+    pattern: /^(黑方|白方)落子，翻转 (\d+) 子。$/u,
+    replace: (_, color, flipped) => `${capturedTerm(color)} plays and flips ${countOf(flipped, "disc")}.`,
+  },
+  {
+    pattern: /^第 (\d+) 手：(黑方|白方)落子，翻转 (\d+) 子。(.*)$/u,
+    replace: (_, move, color, flipped, note) =>
+      `Move ${move}: ${capturedTerm(color)} plays and flips ${countOf(flipped, "disc")}.${
+        note.trim() ? ` ${capturedPhrase(note)}` : ""
+      }`,
+  },
+  {
+    pattern: /^对局结束：(.+)。$/u,
+    replace: (_, result) => `Game over: ${capturedPhrase(result)}.`,
+  },
+  {
+    pattern: /^(\d+) × (\d+) · (竹筒|甜甜圈|莫比乌斯) · (自由规则|禁手规则（连珠）)(?: · (.+))?$/u,
+    replace: (_, width, height, topology, rule, clock) =>
+      `${width} × ${height} · ${capturedTerm(topology)} · ${capturedTerm(rule)}${clock ? ` · ${clockCopy(clock)}` : ""}`,
+  },
+  {
+    pattern: /^(\d+) × (\d+) · (竹筒|甜甜圈|莫比乌斯) · (不计时|\d+ 分钟(?: \+ \d+×\d+ 秒)?)$/u,
+    replace: (_, width, height, topology, clock) =>
+      `${width} × ${height} · ${capturedTerm(topology)} · ${clockCopy(clock)}`,
+  },
+  {
+    pattern: /^(横向列数|纵向行数) · (\d+)–(\d+)( · 偶数)?$/u,
+    replace: (_, axis, min, max, even) =>
+      `${axis === "横向列数" ? "Columns" : "Rows"} · ${min}–${max}${even ? " · even" : ""}`,
+  },
+  {
+    pattern: /^这份 SGF 不是围棋棋谱（GM\[(.*)\]）；目前只能导入围棋 SGF。$/u,
+    replace: "This SGF file is not a Go record (GM[$1]); only Go SGF files can be imported for now.",
+  },
+  // Generic fallbacks: keep these last so the specific sentences win.
+  {
+    pattern: /^(围棋|五子棋|黑白棋) · (.+)$/u,
+    replace: (_, game, rest) => `${capturedTerm(game)} · ${capturedPhrase(rest)}`,
+  },
+  {
+    // Messages that join independent sentences ("A。 B。").
+    pattern: /^(.+?。)\s+(\S[\s\S]*)$/u,
+    replace: (_, first, rest) => `${capturedPhrase(first)} ${capturedPhrase(rest)}`,
   },
 ]);
