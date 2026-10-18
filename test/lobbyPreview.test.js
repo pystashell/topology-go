@@ -132,3 +132,36 @@ test("canvas renderer draws stones, topology seams, last-move marker, and aria t
   assert.equal(attributes.get("role"), "img");
   assert.equal(attributes.get("aria-label"), description);
 });
+
+test("previews of other games lead with the game, and Othello boards are green", () => {
+  assert.equal(
+    describeLobbyBoardPreview(summary({ gameType: "gomoku" })),
+    "五子棋，5 × 3 莫比乌斯棋盘，黑棋 1 子，白棋 1 子。 最后一手：白棋 C2。",
+  );
+  assert.equal(
+    describeLobbyBoardPreview(summary({ gameType: "othello", lastMove: null }), { locale: "en" }),
+    "Othello: 5 by 3 Mobius strip board. 1 black disc and 1 white disc.",
+  );
+  assert.equal(
+    describeLobbyBoardPreview(summary({ gameType: "go" })),
+    describeLobbyBoardPreview(summary()),
+  );
+  assert.throws(() => describeLobbyBoardPreview(summary({ gameType: "chess" })), /game type/u);
+
+  const fills = [];
+  const context = new Proxy({}, {
+    get(target, name) {
+      if (name === "fillRect") return () => fills.push(target.fillStyle);
+      return name in target ? target[name] : () => {};
+    },
+    set(target, name, value) {
+      target[name] = value;
+      return true;
+    },
+  });
+  const canvas = { width: 120, height: 80, getContext: () => context, setAttribute() {} };
+  renderLobbyBoardPreview(canvas, summary({ gameType: "othello" }));
+  renderLobbyBoardPreview(canvas, summary());
+  assert.equal(fills[0], "#2f7a4a");
+  assert.equal(fills[1], "#cda55d");
+});

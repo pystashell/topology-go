@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   filterLobbyRooms,
+  isLobbySummary,
+  lobbyRoomGameType,
   lobbySummaryFromRoom,
   pruneLobbyRooms,
 } from "../src/multiplayer/lobby.js";
@@ -401,4 +403,57 @@ test("only rooms with someone present advertise a seat", () => {
   assert.equal(friendSetup([], [{ online: false }]).joinable, false);
   assert.equal(friendSetup([], [{ online: true }]).joinable, true,
     "people still in a hostless room can take a new host");
+});
+
+test("summaries of other games name the game and leave out Go's komi and scoring rule", () => {
+  const go = lobbySummaryFromRoom(room());
+  assert.equal("gameType" in go, false, "Go summaries keep their original shape");
+  assert.equal(lobbyRoomGameType(go), "go");
+
+  const gomoku = lobbySummaryFromRoom(room({
+    game: {
+      gameType: "gomoku",
+      ruleSet: "renju",
+      width: 15,
+      height: 15,
+      topology: "torus",
+      phase: "play",
+    },
+  }));
+  assert.equal(gomoku.gameType, "gomoku");
+  assert.equal(gomoku.ruleSet, "renju");
+  assert.equal("komi" in gomoku, false);
+  assert.equal("scoringRule" in gomoku, false);
+  assert.equal(isLobbySummary(gomoku), true);
+
+  const invited = lobbySummaryFromRoom(room({
+    match: {
+      status: "invited",
+      mode: "friend",
+      roundId: 2,
+      request: {
+        mode: "friend",
+        settings: { gameType: "othello", width: 8, height: 8, topology: "cylinder" },
+      },
+    },
+  }));
+  assert.equal(invited.gameType, "othello");
+  assert.equal("ruleSet" in invited, false);
+  assert.equal(invited.width, 8);
+  assert.equal(isLobbySummary(invited), true);
+
+  assert.equal(isLobbySummary({ ...gomoku, gameType: "chess" }), false);
+  assert.equal(isLobbySummary({ ...invited, ruleSet: "renju" }), false);
+  assert.equal(isLobbySummary({ ...gomoku, ruleSet: "swap2" }), false);
+  assert.equal(isLobbySummary({ ...go, gameType: "go" }), true);
+
+  const codes = (filters) => filterLobbyRooms([
+    { ...go, code: "GO2345" },
+    { ...gomoku, code: "GMK234" },
+    { ...invited, code: "OTH234" },
+  ], filters).map(({ code }) => code).sort();
+  assert.deepEqual(codes({ game: "gomoku" }), ["GMK234"]);
+  assert.deepEqual(codes({ game: "othello" }), ["OTH234"]);
+  assert.deepEqual(codes({ game: "go" }), ["GO2345"]);
+  assert.deepEqual(codes({ game: "all" }), ["GMK234", "GO2345", "OTH234"]);
 });

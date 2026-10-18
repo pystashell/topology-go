@@ -4,6 +4,13 @@ import {
   formatGoColumn,
 } from "../game/boardDimensions.js";
 
+import {
+  GAME_GO,
+  GAME_GOMOKU,
+  GAME_OTHELLO,
+  isGameType,
+} from "../game/gameTypes.js";
+
 export const LOBBY_BOARD_PREVIEW_ENCODING = "2bit-base64-v1";
 
 const VALID_TOPOLOGIES = new Set(["cylinder", "torus", "mobius"]);
@@ -215,15 +222,27 @@ export function isLobbyLastMove(lastMove, width, height) {
   }
 }
 
+// Every game shares the two-bit board encoding; the name and the board's
+// colour are all a preview needs to tell them apart.
+const GAME_LABELS = Object.freeze({
+  [GAME_GOMOKU]: { zh: "五子棋", en: "Gomoku" },
+  [GAME_OTHELLO]: { zh: "黑白棋", en: "Othello" },
+});
+const BOARD_BACKGROUNDS = Object.freeze({ [GAME_OTHELLO]: "#2f7a4a" });
+
 function requirePreviewSummary(summary) {
   if (!isPlainObject(summary)) throw new TypeError("Lobby room summary is required.");
   const { width, height } = requireDimensions(summary.width, summary.height);
   if (!VALID_TOPOLOGIES.has(summary.topology)) {
     throw new TypeError("Lobby room summary has an invalid topology.");
   }
+  const gameType = summary.gameType ?? GAME_GO;
+  if (!isGameType(gameType)) {
+    throw new TypeError("Lobby room summary has an invalid game type.");
+  }
   const board = decodeLobbyBoardPreview(summary.boardPreview, width, height);
   const lastMove = publicLobbyLastMove(summary.lastMove, width, height);
-  return { width, height, board, lastMove, topology: summary.topology };
+  return { width, height, board, lastMove, topology: summary.topology, gameType };
 }
 
 function topologyLabel(topology, english) {
@@ -235,7 +254,7 @@ function topologyLabel(topology, english) {
 
 /** Build an aria-label/alt-text description without exposing room-private data. */
 export function describeLobbyBoardPreview(summary, options = {}) {
-  const { width, height, board, lastMove, topology } = requirePreviewSummary(summary);
+  const { width, height, board, lastMove, topology, gameType } = requirePreviewSummary(summary);
   let black = 0;
   let white = 0;
   for (const row of board) {
@@ -256,9 +275,12 @@ export function describeLobbyBoardPreview(summary, options = {}) {
       ? ` Last move: ${lastMove.color} passed.`
       : ` 最后一手：${lastMove.color === "black" ? "黑" : "白"}方停一手。`;
   }
+  // Go keeps its original wording; other games lead with their name.
+  const game = GAME_LABELS[gameType];
+  const piece = gameType === GAME_OTHELLO ? "disc" : "stone";
   return english
-    ? `${width} by ${height} ${topologyLabel(topology, true)} board. ${black} black stone${black === 1 ? "" : "s"} and ${white} white stone${white === 1 ? "" : "s"}.${moveText}`
-    : `${width} × ${height} ${topologyLabel(topology, false)}棋盘，黑棋 ${black} 子，白棋 ${white} 子。${moveText}`;
+    ? `${game ? `${game.en}: ` : ""}${width} by ${height} ${topologyLabel(topology, true)} board. ${black} black ${piece}${black === 1 ? "" : "s"} and ${white} white ${piece}${white === 1 ? "" : "s"}.${moveText}`
+    : `${game ? `${game.zh}，` : ""}${width} × ${height} ${topologyLabel(topology, false)}棋盘，黑棋 ${black} 子，白棋 ${white} 子。${moveText}`;
 }
 
 function drawSeamMarker(context, x, y, direction, size) {
@@ -277,7 +299,7 @@ export function renderLobbyBoardPreview(canvas, summary, options = {}) {
   }
   const context = canvas.getContext("2d");
   if (!context) throw new TypeError("A 2D canvas context is required.");
-  const { width, height, board, lastMove, topology } = requirePreviewSummary(summary);
+  const { width, height, board, lastMove, topology, gameType } = requirePreviewSummary(summary);
   const pixelWidth = Number(options.width ?? canvas.width);
   const pixelHeight = Number(options.height ?? canvas.height);
   if (!Number.isFinite(pixelWidth) || pixelWidth <= 0 || !Number.isFinite(pixelHeight) || pixelHeight <= 0) {
@@ -286,7 +308,7 @@ export function renderLobbyBoardPreview(canvas, summary, options = {}) {
 
   context.save();
   context.clearRect(0, 0, pixelWidth, pixelHeight);
-  context.fillStyle = options.background ?? "#cda55d";
+  context.fillStyle = options.background ?? BOARD_BACKGROUNDS[gameType] ?? "#cda55d";
   context.fillRect(0, 0, pixelWidth, pixelHeight);
 
   const margin = Math.max(7, Math.min(pixelWidth, pixelHeight) * 0.09);

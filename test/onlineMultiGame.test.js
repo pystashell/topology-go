@@ -9,6 +9,8 @@ import {
   RoomEngine,
   RoomEngineError,
 } from "../src/multiplayer/roomEngine.js";
+import { isLobbySummary, lobbySummaryFromRoom } from "../src/multiplayer/lobby.js";
+import { decodeLobbyBoardPreview } from "../src/multiplayer/lobbyPreview.js";
 import { installFakeGames } from "./fixtures/fakeGames.js";
 
 // Gomoku and Othello rooms are driven by the test-only fake engines in
@@ -471,4 +473,23 @@ test("a same-browser Othello round undoes one move at a time", () => {
   assert.equal(undone.room.moveCount, 1);
   assert.equal(undone.room.game.currentPlayer, "black");
   assert.equal(undone.room.game.board[2][2], null);
+});
+
+test("the lobby lists rooms of other games with their game and board", () => {
+  const room = friendRoom("othello", { width: 10, height: 6 });
+  play(room, "host", 2, 2, 2_100);
+  const summary = lobbySummaryFromRoom(room.directorySnapshot(2_100), 2_100);
+  assert.equal(summary.gameType, "othello");
+  assert.equal(summary.moveCount, 1);
+  assert.equal(isLobbySummary(summary), true);
+  const board = decodeLobbyBoardPreview(summary.boardPreview, 10, 6);
+  assert.equal(board[2][2], "black");
+  assert.equal(board[2][4], "white");
+  assert.deepEqual(summary.lastMove, { type: "play", color: "black", row: 2, col: 2 });
+
+  const invited = createRoom({ size: 9 });
+  joinWhite(invited);
+  act(invited, "host", "request_game", { mode: "friend", gameType: "gomoku", ruleSet: "renju" }, 1_200);
+  const listed = lobbySummaryFromRoom(invited.directorySnapshot(1_200), 1_200);
+  assert.deepEqual([listed.gameType, listed.ruleSet, listed.width], ["gomoku", "renju", 15]);
 });
