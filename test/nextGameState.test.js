@@ -239,3 +239,36 @@ test("real room timeout snapshots keep their token until the server creates a ne
     setupActive: true,
   }).exitSetup, true);
 });
+
+test("next-game options of other games name the game and rule set without Go's fields", () => {
+  assert.deepEqual(
+    previousGameOptions(
+      { gameType: "gomoku", ruleSet: "renju", width: 15, height: 15, topology: "torus" },
+      { mainTimeSeconds: 600, byoYomiPeriods: 0, byoYomiSeconds: 0 },
+    ),
+    {
+      gameType: "gomoku",
+      ruleSet: "renju",
+      width: 15,
+      height: 15,
+      size: 15,
+      topology: "torus",
+      mainTimeSeconds: 600,
+      byoYomiPeriods: 0,
+      byoYomiSeconds: 0,
+    },
+  );
+  assert.deepEqual(
+    previousGameOptions({ gameType: "othello", width: 10, height: 8, topology: "mobius", komi: 7 }),
+    {
+      gameType: "othello",
+      width: 10,
+      height: 8,
+      topology: "mobius",
+      mainTimeSeconds: 0,
+      byoYomiPeriods: 0,
+      byoYomiSeconds: 0,
+    },
+  );
+  assert.equal("gameType" in previousGameOptions({ gameType: "go", size: 9 }), false);
+});

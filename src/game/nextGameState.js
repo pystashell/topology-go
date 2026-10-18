@@ -1,4 +1,5 @@
 import { AI_MATCH_SELF_PLAY } from "../ai/matchMode.js";
+import { GAME_GO, GAME_GOMOKU } from "./gameTypes.js";
 
 function gameDimension(game, key, fallback = 19) {
   const value = game?.[key] ?? game?.size;
@@ -8,17 +9,29 @@ function gameDimension(game, key, fallback = 19) {
 /**
  * Capture the authoritative options of the game that just ended. Both the
  * immediate and configurable next-game paths use this exact same snapshot.
+ * Go options keep their original shape (no gameType: absent means Go); other
+ * games name their game and rule set and have no komi or scoring rule.
  */
 export function previousGameOptions(game, timeControl = null) {
+  const gameType = game?.gameType ?? GAME_GO;
   const width = gameDimension(game, "width");
   const height = gameDimension(game, "height");
   return {
+    ...(gameType === GAME_GO
+      ? {}
+      : {
+          gameType,
+          ...(gameType === GAME_GOMOKU && game?.ruleSet !== undefined
+            ? { ruleSet: game.ruleSet }
+            : {}),
+        }),
     width,
     height,
     ...(width === height ? { size: width } : {}),
     topology: game?.topology,
-    scoringRule: game?.scoringRule,
-    komi: game?.komi,
+    ...(gameType === GAME_GO
+      ? { scoringRule: game?.scoringRule, komi: game?.komi }
+      : {}),
     mainTimeSeconds: Number(timeControl?.mainTimeSeconds) || 0,
     byoYomiPeriods: Number(timeControl?.byoYomiPeriods) || 0,
     byoYomiSeconds: Number(timeControl?.byoYomiSeconds) || 0,

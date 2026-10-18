@@ -376,9 +376,13 @@ function normalizeGameBoardSettings(gameType, raw, previous) {
   };
 }
 
-/** The board fields of a non-Go game, as its rules' settings fallback. */
+/**
+ * The board fields of a non-Go game or its settings, named by game so its
+ * rules accept them as the previous game's settings.
+ */
 function gameBoardSettings(game) {
   return {
+    gameType: gameTypeOf(game),
     width: game.width,
     height: game.height,
     ...(game.width === game.height ? { size: game.width } : {}),
