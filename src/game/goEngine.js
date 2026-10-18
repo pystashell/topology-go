@@ -386,6 +386,16 @@ export class GoEngine {
   }
 
   /**
+   * Game identity for the multi-game rules registry. A prototype getter, so
+   * it never appears in getState(), exportState() or serialize(): Go states
+   * stay byte-identical and anything without a gameType is Go.
+   * @returns {'go'}
+   */
+  get gameType() {
+    return "go";
+  }
+
+  /**
    * Rebuild an engine from an exported state object or the JSON returned by
    * serialize(). All nested data is validated and copied before it is used.
    */
@@ -1379,6 +1389,16 @@ export class GoEngine {
     return !(
       this.phase === PHASE_FINISHED && this.result?.reason === "resign"
     ) && this.undoHistory.length > 0;
+  }
+
+  /**
+   * Colours of the plays and passes held in the bounded undo history, oldest
+   * first (at most UNDO_HISTORY_LIMIT). Rooms read it to find how many moves
+   * an undo request must take back without reaching into undoHistory.
+   * @returns {Array<'black'|'white'>}
+   */
+  undoMoveColors() {
+    return this.undoHistory.map((entry) => entry.move.color);
   }
 
   /**
