@@ -60,4 +60,22 @@ export function gameTypeOf(value) {
   return value?.gameType ?? GAME_GO;
 }
 
+/**
+ * TEST-ONLY. Replace the rules of a known game type, for tests that drive
+ * rooms, replays or the UI with a small fake engine. Returns a function that
+ * restores the previous rules. Production code must never call it.
+ *
+ * @param {string} gameType One of GAME_TYPES.
+ * @param {GameRules} rules
+ * @returns {() => void}
+ */
+export function registerRulesForTest(gameType, rules) {
+  if (!REGISTRY.has(gameType)) throw new TypeError(`Unknown game type: ${gameType}`);
+  const previous = REGISTRY.get(gameType);
+  REGISTRY.set(gameType, rules);
+  return () => {
+    REGISTRY.set(gameType, previous);
+  };
+}
+
 export { goRules, gomokuRules, othelloRules };
