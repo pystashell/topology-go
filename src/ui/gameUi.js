@@ -130,8 +130,11 @@ export function isOfferedBoardDimension(gameType, value) {
 /** The small caption under the width or height field. */
 export function dimensionRangeText(gameType, axis = "width") {
   const limits = BOARD_LIMITS[normalizeGameType(gameType)];
-  const label = axis === "height" ? "纵向行数" : "横向列数";
-  return `${label} · ${limits.publicMin}–${limits.max}${limits.parity === "even" ? " · 偶数" : ""}`;
+  // Short enough to sit beside the number field ("偶数列 · 6–30").
+  const label = limits.parity === "even"
+    ? axis === "height" ? "偶数行" : "偶数列"
+    : axis === "height" ? "纵向行数" : "横向列数";
+  return `${label} · ${limits.publicMin}–${limits.max}`;
 }
 
 /** Why a typed size was adjusted, for games with their own limits. */

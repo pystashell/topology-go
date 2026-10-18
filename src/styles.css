@@ -2359,6 +2359,10 @@ select:disabled {
   min-height: 36px;
 }
 
+.gomoku-rule-field {
+  margin-bottom: 10px;
+}
+
 .gomoku-rule-field select {
   max-width: 168px;
 }

@@ -1288,9 +1288,13 @@ export const ENGLISH_PATTERNS = Object.freeze([
       `${width} × ${height} · ${capturedTerm(topology)} · ${clockCopy(clock)}`,
   },
   {
-    pattern: /^(横向列数|纵向行数) · (\d+)–(\d+)( · 偶数)?$/u,
-    replace: (_, axis, min, max, even) =>
-      `${axis === "横向列数" ? "Columns" : "Rows"} · ${min}–${max}${even ? " · even" : ""}`,
+    pattern: /^(横向列数|纵向行数|偶数列|偶数行) · (\d+)–(\d+)$/u,
+    replace: (_, axis, min, max) => `${{
+      横向列数: "Columns",
+      纵向行数: "Rows",
+      偶数列: "Even columns",
+      偶数行: "Even rows",
+    }[axis]} · ${min}–${max}`,
   },
   {
     pattern: /^这份 SGF 不是围棋棋谱（GM\[(.*)\]）；目前只能导入围棋 SGF。$/u,

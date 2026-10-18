@@ -96,8 +96,9 @@ test("size captions and limit notes name each game's range", () => {
   assert.equal(dimensionRangeText("go", "width"), "横向列数 · 5–30");
   assert.equal(dimensionRangeText("go", "height"), "纵向行数 · 5–30");
   assert.equal(dimensionRangeText("gomoku", "height"), "纵向行数 · 11–30");
-  assert.equal(dimensionRangeText("othello", "width"), "横向列数 · 6–30 · 偶数");
-  assert.equal(english(dimensionRangeText("othello", "width")), "Columns · 6–30 · even");
+  assert.equal(dimensionRangeText("othello", "width"), "偶数列 · 6–30");
+  assert.equal(english(dimensionRangeText("othello", "width")), "Even columns · 6–30");
+  assert.equal(english(dimensionRangeText("othello", "height")), "Even rows · 6–30");
   assert.equal(english(dimensionRangeText("gomoku", "height")), "Rows · 11–30");
   assert.equal(boardLimitNote("go"), "");
   assert.equal(english(boardLimitNote("gomoku")), "Gomoku boards need at least 11 lines per side.");
