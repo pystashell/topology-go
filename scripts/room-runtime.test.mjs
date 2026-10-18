@@ -18,7 +18,7 @@ test("SQLite Durable Object validation, rollback, post-commit failure and restar
     "src/multiplayer/lobbyPreview.js",
     "src/game/goEngine.js",
     "src/game/boardDimensions.js",
-    "src/game/mobiusTopology.js",
+    "src/topology/index.js",
     "src/topology/cover.js",
     "src/game/timeControl.js",
   ];
