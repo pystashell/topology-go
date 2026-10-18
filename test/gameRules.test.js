@@ -28,6 +28,7 @@ import {
   UNDO_HISTORY_LIMIT,
   WHITE,
 } from "../src/game/goEngine.js";
+import { buildReplayFrames, buildReplayStateAtStep } from "../src/game/replay.js";
 import { gameTypeOf, rulesFor } from "../src/game/rules/index.js";
 import { goRules } from "../src/game/rules/go.js";
 import { timeControlConfig } from "../src/game/timeControl.js";
@@ -379,4 +380,26 @@ test("Go hydratePublic reproduces main.js hydratePublicGame", () => {
   state.lastMove.row = 99;
   assert.notEqual(hydrated.captures.black, 99);
   assert.notEqual(hydrated.lastMove.row, 99);
+});
+
+test("replays dispatch on the base's game type", () => {
+  const game = scoredGame();
+  const replay = game.getReplayState();
+  assert.deepEqual(buildReplayFrames(replay).frames.at(-1), game.getState());
+  const afterThree = playMoves(new GoEngine({ width: 7, height: 5, topology: "mobius" }), [
+    [1, 0], [1, 6], [2, 1],
+  ]);
+  assert.equal(
+    JSON.stringify(buildReplayStateAtStep(replay, 3)),
+    JSON.stringify(afterThree.exportState({ includeReplay: false })),
+  );
+  for (const gameType of ["gomoku", "othello"]) {
+    const typed = { ...replay, base: { ...replay.base, gameType } };
+    assert.throws(() => buildReplayFrames(typed), /not implemented/u);
+    assert.throws(() => buildReplayStateAtStep(typed, 0), /not implemented/u);
+  }
+  assert.throws(
+    () => buildReplayFrames({ ...replay, base: { ...replay.base, gameType: "chess" } }),
+    /Unknown game type: chess/u,
+  );
 });

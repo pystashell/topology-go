@@ -1,12 +1,14 @@
 import {
   BLACK,
-  GoEngine,
   PHASE_FINISHED,
   REPLAY_VERSION,
   WHITE,
 } from "./goEngine.js";
+import { gameTypeOf, rulesFor } from "./rules/index.js";
 
 const VALID_COLORS = new Set([BLACK, WHITE]);
+// Events that only exist in games with dead-stone scoring (Go).
+const SCORING_EVENTS = new Set(["resume_play", "toggle_dead", "finish_scoring"]);
 
 function requireReplayObject(value, label) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -17,6 +19,15 @@ function requireReplayObject(value, label) {
 
 function applyReplayEvent(game, event, index) {
   requireReplayObject(event, `replay.events[${index}]`);
+  const { capabilities, id } = rulesFor(gameTypeOf(game));
+  if (
+    (event.type === "pass" && !capabilities.pass) ||
+    (SCORING_EVENTS.has(event.type) && !capabilities.scoring)
+  ) {
+    throw new TypeError(
+      `replay.events[${index}] type ${event.type} does not exist in ${id}`,
+    );
+  }
   let result;
 
   if (event.type === "play") {
@@ -82,7 +93,33 @@ function createReplayGame(replay) {
   if (!Array.isArray(replay.events)) {
     throw new TypeError("replay.events must be an array");
   }
-  return GoEngine.fromState(replay.base);
+  // Every game shares the replay envelope; the base names its game (absent
+  // for Go, whose states predate multiple games).
+  return rulesFor(gameTypeOf(replay.base)).fromState(replay.base);
+}
+
+/**
+ * The render step for one successful play. Go adds its captured stones;
+ * games that flip discs add the flipped discs and any skipped (auto-passed)
+ * colour reported by the engine.
+ */
+function playStep(result) {
+  const step = {
+    type: "play",
+    color: result.color,
+    row: result.row,
+    col: result.col,
+  };
+  if (Array.isArray(result.captured)) {
+    step.captured = result.captured.map(({ row, col }) => ({ row, col }));
+  }
+  if (Array.isArray(result.flipped)) {
+    step.flipped = result.flipped.map(({ row, col }) => ({ row, col }));
+  }
+  if (Object.prototype.hasOwnProperty.call(result, "skipped")) {
+    step.skipped = result.skipped ?? null;
+  }
+  return step;
 }
 
 function replayOutcomeResult(replay) {
@@ -142,7 +179,8 @@ function finishReplayFrameByOutcome(frame, result) {
  * frames[0] is the starting position and every successful play/pass adds one
  * frame. Scoring and resume-play events update the current frame without
  * incrementing the move number, preserving the exact final result while the
- * transport remains expressed in ordinary Go hands.
+ * transport remains expressed in ordinary Go hands. The replay base's
+ * gameType (absent for Go) selects the rules that rebuild every frame.
  * `steps[index]` describes the move from frames[index] to frames[index + 1].
  */
 export function buildReplayFrames(replay) {
@@ -160,13 +198,7 @@ export function buildReplayFrames(replay) {
 
     frames.push(game.getState());
     if (event.type === "play") {
-      steps.push({
-        type: "play",
-        color: result.color,
-        row: result.row,
-        col: result.col,
-        captured: result.captured.map(({ row, col }) => ({ row, col })),
-      });
+      steps.push(playStep(result));
     } else {
       steps.push({ type: "pass", color: result.color });
     }
