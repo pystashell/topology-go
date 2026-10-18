@@ -34,6 +34,20 @@ import {
   territoryPointsForPosition,
   territoryPointsSignature,
 } from "./territoryMarkers.js";
+import {
+  FELT_STYLE,
+  boardUsesDiscs,
+  boardUsesFelt,
+  createDiscGeometry,
+  createFeltTexture,
+  normalizeBoardStyle,
+  starPointsFor,
+} from "./boardStyle.js";
+import {
+  EMPTY_GAME_MARKERS,
+  GameMarkerOverlay,
+  normalizeGameMarkers,
+} from "./gameMarkers.js";
 
 const CELL = 1;
 const DRAG_THRESHOLD = 6;
@@ -94,16 +108,6 @@ function makeWoodTexture(renderer) {
   return texture;
 }
 
-function starIndices(size) {
-  if (size === 19) return [3, 9, 15];
-  if (size === 13) return [3, 6, 9];
-  if (size === 9) return [2, 4, 6];
-  const center = Math.floor(size / 2);
-  if (size < 7) return [center];
-  const offset = Math.max(2, Math.round(size * 0.28));
-  return [center - offset, center, center + offset];
-}
-
 class TorusGridCurve extends THREE.Curve {
   constructor({ majorRadius, minorRadius, fixedAngle, direction }) {
     super();
@@ -150,6 +154,9 @@ export class TorusBoard {
     this.territoryPoints = [];
     this.territorySignature = "";
     this.territoryGroup = null;
+    this.gameMarkers = EMPTY_GAME_MARKERS;
+    this.gameMarkerOverlay = null;
+    this.boardStyle = normalizeBoardStyle();
     this.pointerStart = null;
     this.hoveredPoint = null;
     this.movePreviewEnabled = true;
@@ -263,6 +270,7 @@ export class TorusBoard {
     this.pointerStart = null;
     this.needsFit = true;
 
+    this.gameMarkerOverlay?.dispose();
     if (this.boardGroup) {
       this.scene.remove(this.boardGroup);
       disposeObject(this.boardGroup);
@@ -277,6 +285,7 @@ export class TorusBoard {
     this.createGrid();
     this.createStoneAssets();
     this.createHoverStone();
+    this.createGameMarkerOverlay();
 
     this.controls.minDistance = (this.majorRadius + this.minorRadius) * 1.04;
     this.controls.maxDistance = (this.majorRadius + this.minorRadius) * 7;
@@ -295,10 +304,7 @@ export class TorusBoard {
       this.tubularSegments,
     );
     const material = new THREE.MeshStandardMaterial({
-      color: 0xb57b3d,
-      map: this.woodTexture,
-      roughness: 0.78,
-      metalness: 0.02,
+      ...this.surfaceMaterialOptions(),
       side: THREE.FrontSide,
     });
     this.surface = new THREE.Mesh(geometry, material);
@@ -306,9 +312,44 @@ export class TorusBoard {
     this.boardGroup.add(this.surface);
   }
 
+  /** Wood for Go and Gomoku, green felt for Othello (shared with Mobius). */
+  surfaceMaterialOptions() {
+    if (!boardUsesFelt(this.boardStyle)) {
+      return {
+        color: 0xb57b3d,
+        map: this.woodTexture,
+        roughness: 0.78,
+        metalness: 0.02,
+      };
+    }
+    this.feltSurfaceTexture ??= createFeltTexture(this.renderer);
+    this.feltSurfaceTexture.repeat.set(
+      Math.max(2, this.width / 4),
+      Math.max(1, this.height / 4),
+    );
+    return {
+      color: FELT_STYLE.surfaceColor,
+      map: this.feltSurfaceTexture,
+      roughness: 0.94,
+      metalness: 0,
+    };
+  }
+
+  gridColor() {
+    return boardUsesFelt(this.boardStyle) ? FELT_STYLE.gridColor : 0x302117;
+  }
+
+  starPoints() {
+    return starPointsFor({
+      width: this.width,
+      height: this.height,
+      gameType: this.boardStyle.gameType,
+    });
+  }
+
   createGrid() {
     const gridMaterial = new THREE.MeshStandardMaterial({
-      color: 0x302117,
+      color: this.gridColor(),
       roughness: 0.88,
     });
     const gridMinorRadius = this.minorRadius + 0.018;
@@ -360,18 +401,14 @@ export class TorusBoard {
       color: 0x1c1510,
       roughness: 0.65,
     });
-    const rowStars = starIndices(this.height);
-    const columnStars = starIndices(this.width);
-    for (const row of rowStars) {
-      for (const col of columnStars) {
-        const frame = this.frame(row, col, 0.052);
-        const star = new THREE.Mesh(
-          new THREE.SphereGeometry(0.074, 12, 8),
-          starMaterial,
-        );
-        star.position.copy(frame.position);
-        this.boardGroup.add(star);
-      }
+    for (const { row, col } of this.starPoints()) {
+      const frame = this.frame(row, col, 0.052);
+      const star = new THREE.Mesh(
+        new THREE.SphereGeometry(0.074, 12, 8),
+        starMaterial,
+      );
+      star.position.copy(frame.position);
+      this.boardGroup.add(star);
     }
   }
 
@@ -380,7 +417,9 @@ export class TorusBoard {
     this.markersGroup = new THREE.Group();
     this.boardGroup.add(this.stonesGroup, this.markersGroup);
 
-    this.stoneGeometry = new THREE.SphereGeometry(1, 28, 16);
+    this.stoneGeometry = boardUsesDiscs(this.boardStyle)
+      ? createDiscGeometry()
+      : new THREE.SphereGeometry(1, 28, 16);
     this.blackMaterial = new THREE.MeshPhysicalMaterial({
       color: 0x111513,
       roughness: 0.25,
@@ -424,6 +463,37 @@ export class TorusBoard {
     this.boardGroup.add(this.hoverStone);
   }
 
+  createGameMarkerOverlay() {
+    this.gameMarkers = EMPTY_GAME_MARKERS;
+    this.gameMarkerOverlay = new GameMarkerOverlay({
+      parent: this.boardGroup,
+      frameAt: (row, col) => this.gameMarkerFrame(row, col),
+      ...this.gameMarkerOptions(),
+    });
+  }
+
+  gameMarkerOptions() {
+    return {
+      stoneRadius: TORUS_STONE_RADIUS,
+      surfaceOffset: 0.06,
+      raisedOffset: 0.13,
+      paired: false,
+    };
+  }
+
+  /** Surface frame plus the in-surface direction along a column. */
+  gameMarkerFrame(row, col) {
+    const frame = this.frame(row, col, 0);
+    const u = (col * TAU) / this.width;
+    const v = (row * TAU) / this.height;
+    frame.up = new THREE.Vector3(
+      -Math.sin(v) * Math.cos(u),
+      -Math.sin(v) * Math.sin(u),
+      Math.cos(v),
+    );
+    return frame;
+  }
+
   frame(row, col, offset = 0) {
     const frame = torusGridFrame({
       row,
@@ -462,10 +532,18 @@ export class TorusBoard {
     analysisCandidates = [],
     analysisVariation = [],
     referencePoint = null,
+    gameMarkers = null,
+    boardStyle = null,
   }) {
     const nextWidth = width ?? size ?? this.width;
     const nextHeight = height ?? size ?? this.height;
-    if (nextWidth !== this.width || nextHeight !== this.height) {
+    const nextStyle = normalizeBoardStyle(boardStyle);
+    if (
+      nextWidth !== this.width ||
+      nextHeight !== this.height ||
+      nextStyle.gameType !== this.boardStyle.gameType
+    ) {
+      this.boardStyle = nextStyle;
       this.rebuild(nextWidth, nextHeight);
     }
     this.board = board;
@@ -558,6 +636,12 @@ export class TorusBoard {
         Boolean(board[this.referencePoint.row]?.[this.referencePoint.col]),
       );
     }
+    this.gameMarkers = normalizeGameMarkers(gameMarkers, {
+      width: this.width,
+      height: this.height,
+      board,
+    });
+    this.gameMarkerOverlay?.sync(this.gameMarkers, { currentPlayer });
     this.refreshHover();
     this.requestRender();
   }
@@ -792,6 +876,19 @@ export class TorusBoard {
     if (!this.hoverStone) return;
     const point = this.hoveredPoint;
     const empty = point && !this.board?.[point.row]?.[point.col];
+    if (
+      this.movePreviewEnabled &&
+      this.phase === "play" &&
+      empty &&
+      this.gameMarkerOverlay?.isForbidden(point)
+    ) {
+      // A forbidden point previews as a cross, never as a playable stone.
+      this.hoverStone.visible = false;
+      this.gameMarkerOverlay.showForbiddenHover(point);
+      this.requestRender();
+      return;
+    }
+    if (this.gameMarkerOverlay?.hideForbiddenHover()) this.requestRender();
     if (!this.movePreviewEnabled || this.phase !== "play" || !empty) {
       if (this.hoverStone.visible) this.requestRender();
       this.hoverStone.visible = false;
@@ -923,6 +1020,8 @@ export class TorusBoard {
       this.controls.target,
       this.majorRadius + this.minorRadius,
     );
+    // The short flip pulse asks for frames only while it is running.
+    if (this.gameMarkerOverlay?.animate()) this.requestRender();
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -940,8 +1039,10 @@ export class TorusBoard {
     canvas.removeEventListener("pointerleave", this.onPointerLeave);
     canvas.removeEventListener("contextmenu", this.onContextMenu);
     this.controls.dispose();
+    this.gameMarkerOverlay?.dispose();
     disposeObject(this.boardGroup);
     this.woodTexture.dispose();
+    this.feltSurfaceTexture?.dispose();
     this.renderer.dispose();
     canvas.remove();
   }
