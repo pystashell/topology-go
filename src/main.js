@@ -2,8 +2,6 @@ import "./styles.css";
 import {
   BLACK,
   WHITE,
-  GoEngine,
-  MOVE_ERRORS,
   oppositeColor,
   PHASE_FINISHED,
   PHASE_PLAY,
@@ -19,6 +17,36 @@ import {
   buildLiveReviewState,
 } from "./game/replay.js";
 import { exportSgf, importSgf, SgfError } from "./game/sgf.js";
+import {
+  BOARD_LIMITS,
+  ENABLE_MULTI_GAME,
+  GAME_GO,
+  GAME_GOMOKU,
+  GAME_OTHELLO,
+  GOMOKU_FREESTYLE,
+  isGameType,
+} from "./game/gameTypes.js";
+import { gameTypeOf, rulesFor } from "./game/rules/index.js";
+import {
+  boardLimitNote,
+  clampBoardDimension,
+  dimensionRangeText,
+  formatGameResult,
+  gameControls,
+  gameMoveMessage,
+  gameName,
+  gameReplayStepMessage,
+  gameSettingsSummary,
+  gameStatusText,
+  isOfferedBoardDimension,
+  joinSentences,
+  lobbyGameLabels,
+  moveErrorMessage,
+  newBoardMessage,
+  normalizeRuleSet,
+  rulesSummaryTitle,
+  sgfOtherGameNote,
+} from "./ui/gameUi.js";
 import {
   MAX_BOARD_DIMENSION,
   PUBLIC_MIN_BOARD_DIMENSION,
@@ -126,6 +154,7 @@ const elements = {
   lobbyJoinRoom: $("#lobby-join-room"),
   lobbyRefresh: $("#lobby-refresh"),
   lobbyStatusButtons: [...document.querySelectorAll("[data-lobby-status]")],
+  lobbyGameFilter: $("#lobby-game-filter"),
   lobbyTopologyFilter: $("#lobby-topology-filter"),
   lobbySizeFilter: $("#lobby-size-filter"),
   lobbyModeFilter: $("#lobby-mode-filter"),
@@ -149,6 +178,8 @@ const elements = {
   message: $("#message"),
   blackCaptures: $("#black-captures"),
   whiteCaptures: $("#white-captures"),
+  blackCountLabel: $("#black-count-label"),
+  whiteCountLabel: $("#white-count-label"),
   scoreStrip: $(".score-strip"),
   playControls: $("#play-controls"),
   passButton: $("#pass-button"),
@@ -169,6 +200,7 @@ const elements = {
   replayLast: $("#replay-last"),
   replaySpeed: $("#replay-speed"),
   replayExit: $("#replay-exit"),
+  recordActions: $(".record-actions"),
   exportSgf: $("#export-sgf"),
   importSgf: $("#import-sgf"),
   importSgfFile: $("#import-sgf-file"),
@@ -202,6 +234,14 @@ const elements = {
   boardTopology: $("#board-topology"),
   customWidth: $("#custom-width"),
   customHeight: $("#custom-height"),
+  customWidthRange: $("#custom-width-range"),
+  customHeightRange: $("#custom-height-range"),
+  boardLimitNote: $("#board-limit-note"),
+  gameTypeField: $("#game-type-field"),
+  gameTypeButtons: [...document.querySelectorAll("[data-game-type]")],
+  dialogGamePickers: [...document.querySelectorAll(".dialog-game-picker")],
+  gomokuRuleSelects: [...document.querySelectorAll("[data-gomoku-rule]")],
+  gameOnlyElements: [...document.querySelectorAll("[data-game-only]")],
   scoringRule: $("#scoring-rule"),
   komi: $("#komi"),
   nextGameSetup: $("#next-game-setup"),
@@ -238,6 +278,11 @@ const elements = {
   cylinderRules: $("#cylinder-rules"),
   torusRules: $("#torus-rules"),
   mobiusRules: $("#mobius-rules"),
+  goRules: $("#go-rules"),
+  gomokuRules: $("#gomoku-rules"),
+  othelloRules: $("#othello-rules"),
+  rulesTopologyItems: [...document.querySelectorAll("[data-rules-topology]")],
+  rulesSetItems: [...document.querySelectorAll("[data-rules-set]")],
   coordinateHint: $("#coordinate-hint"),
   newGameDialog: $("#new-game-dialog"),
   newGameSummary: $("#new-game-summary"),
@@ -257,6 +302,7 @@ const elements = {
   blackClockPeriods: $("#black-clock-periods"),
   whiteClockPeriods: $("#white-clock-periods"),
   sidebarTabs: [...document.querySelectorAll("[data-sidebar-tab]")],
+  analysisTab: $("#sidebar-tab-analysis"),
   sidebarPanels: [...document.querySelectorAll("[data-sidebar-panel]")],
   roomStatusDot: $("#room-status-dot"),
   roomMode: $("#room-mode"),
@@ -365,17 +411,6 @@ const elements = {
   languageButtons: [...document.querySelectorAll("[data-language]")],
 };
 
-const ERROR_MESSAGES = {
-  [MOVE_ERRORS.GAME_NOT_PLAYING]: "现在不能落子。",
-  [MOVE_ERRORS.OUT_OF_BOUNDS]: "这个位置不在棋盘上。",
-  [MOVE_ERRORS.OCCUPIED]: "这里已经有棋子了。",
-  [MOVE_ERRORS.SUICIDE]: "禁入点：落子后这一块棋没有气。",
-  [MOVE_ERRORS.SUPERKO]: "全局同形禁着：不能重复之前出现过的局面。",
-  [MOVE_ERRORS.GAME_NOT_SCORING]: "现在还没有进入点目阶段。",
-  [MOVE_ERRORS.EMPTY_POINT]: "点目时请点击棋子来标记死活。",
-  [MOVE_ERRORS.NOTHING_TO_UNDO]: "现在没有可以撤回的棋步。",
-};
-
 let game;
 let cylinderView;
 let torusView;
@@ -415,6 +450,12 @@ let moveCount = 0;
 let pendingWidth = 19;
 let pendingHeight = 19;
 let pendingTopology = TOPOLOGY_CYLINDER;
+// The game the settings panel prepares (Go unless multiple games are on), its
+// Gomoku rule set, and the last board size chosen for each game this tab.
+let pendingGameType = GAME_GO;
+let pendingRuleSet = GOMOKU_FREESTYLE;
+const pendingDimensionsByGame = new Map();
+const gameMarkerCache = new Map();
 let lastPlayedPoint = null;
 let onlineRoom = null;
 let onlineStateSynchronized = false;
@@ -489,6 +530,8 @@ const AI_MODEL_KEY = "3d-baduk-ai-model";
 const LOBBY_POLL_INTERVAL_MS = 20_000;
 const LOBBY_RATE_LIMIT_BACKOFF_MS = 60_000;
 const LOBBY_BOARD_SETTINGS_KEY = "3d-baduk-lobby-board-settings-v1";
+// The game (and Gomoku rule set) last chosen for a new board.
+const GAME_TYPE_KEY = "3d-baduk-game-type-v1";
 const roomClient = new RoomClient();
 
 function savedSoundEnabled() {
@@ -729,14 +772,88 @@ function formatScore(value) {
 }
 
 function formatResult(result) {
-  if (result?.reason === "timeout") {
-    return `${colorName(result.winner)}胜 · ${colorName(result.loser)}超时`;
+  return formatGameResult(result);
+}
+
+/** A game type the page may use: anything but Go needs multiple games on. */
+function availableGameType(value) {
+  return ENABLE_MULTI_GAME && isGameType(value) ? value : GAME_GO;
+}
+
+/** The rules of a game, engine, state or settings object (absent: Go). */
+function gameRulesOf(value = game) {
+  return rulesFor(availableGameType(gameTypeOf(value)));
+}
+
+/** Controls and counters for the game the board currently shows. */
+function displayedGameControls(state = displayedBoardState()) {
+  const view = typeof state?.getState === "function" ? state.getState() : state;
+  return gameControls(availableGameType(gameTypeOf(view)), view);
+}
+
+/**
+ * A fresh engine for new-game options, built by the options' game. Go keeps
+ * exactly the Go engine the page always built; other games validate their
+ * board settings first.
+ */
+function createGameFromOptions(options) {
+  const rules = gameRulesOf(options);
+  return rules.id === GAME_GO
+    ? rules.create(options)
+    : rules.create(rules.normalizeSettings(options));
+}
+
+function savedGameTypeChoice() {
+  try {
+    const raw = window.localStorage.getItem(GAME_TYPE_KEY);
+    if (!raw) return null;
+    const parsed = raw.startsWith("{") ? JSON.parse(raw) : { gameType: raw };
+    return {
+      gameType: availableGameType(parsed?.gameType),
+      ruleSet: normalizeRuleSet(parsed?.ruleSet),
+    };
+  } catch {
+    return null;
   }
-  if (result?.reason === "resign") {
-    return `${colorName(result.winner)}胜 · ${colorName(result.loser)}认输`;
+}
+
+function rememberGameTypeChoice() {
+  if (!ENABLE_MULTI_GAME) return;
+  try {
+    window.localStorage.setItem(
+      GAME_TYPE_KEY,
+      JSON.stringify({ gameType: pendingGameType, ruleSet: pendingRuleSet }),
+    );
+  } catch {
+    // The choice still applies to this tab when storage is unavailable.
   }
-  if (result.winner === "draw") return "双方和棋";
-  return `${colorName(result.winner)}胜 ${formatScore(result.margin)} 目`;
+}
+
+/**
+ * Board markers for a position: Gomoku's winning row and Renju points
+ * forbidden for Black, Othello's legal moves (when `hints`) and last flips.
+ * Go draws its own markers. Results are cached by position, so a render loop
+ * never rebuilds the Renju analysis for an unchanged board.
+ */
+function gameMarkersForState(state, { hints = false } = {}) {
+  const gameType = availableGameType(gameTypeOf(state));
+  if (gameType === GAME_GO || !Array.isArray(state?.board)) return null;
+  const key = JSON.stringify([
+    gameType, state.ruleSet ?? "", state.width, state.height, state.topology,
+    state.currentPlayer, state.phase, hints, state.lastMove, state.result?.reason ?? "",
+    state.board.map((row) => row.map((value) => value?.[0] ?? "-").join("")).join("/"),
+  ]);
+  if (gameMarkerCache.has(key)) return gameMarkerCache.get(key);
+  let markers = null;
+  try {
+    const rules = rulesFor(gameType);
+    markers = rules.viewMarkers(rules.hydratePublic(state), { hints });
+  } catch (error) {
+    console.error("Unable to compute board markers", error);
+  }
+  if (gameMarkerCache.size >= 8) gameMarkerCache.delete(gameMarkerCache.keys().next().value);
+  gameMarkerCache.set(key, markers);
+  return markers;
 }
 
 function projectedOnlineTimeControl(now = Date.now()) {
@@ -1093,6 +1210,10 @@ function exportCurrentSgf() {
     setMessage("当前棋局没有可导出的棋谱。", true);
     return;
   }
+  if (!gameRulesOf(source.base).capabilities.sgf) {
+    setMessage("这个棋类暂不支持 AI 对手、AI 分析或 SGF 棋谱。", true);
+    return;
+  }
   try {
     const metadata = replayMetadataForExport();
     const { sgf, warnings } = exportSgf({
@@ -1163,6 +1284,12 @@ async function importSgfFile(file) {
         : `已导入 ${file.name}，共 ${replayEventCount(parsed.replay)} 手；可播放、切换视图或做 AI 分析。${warningSummary}`,
     );
   } catch (error) {
+    if (error instanceof SgfError && error.code === "UNSUPPORTED_GAME") {
+      // GM[2] Othello and GM[4] Gomoku records: say what the file is.
+      setMessage(sgfOtherGameNote(error), true);
+      maybeStartAITurn();
+      return;
+    }
     console.error("Unable to import SGF", error);
     const reason = error instanceof SgfError
       ? localizedErrorMessage(error, "文件不是可识别的 SGF 棋谱")
@@ -1626,6 +1753,7 @@ function isLiveOnlineFairPlayLocked() {
 
 function canAnalyzeLivePosition() {
   if (!hasStartedMatch() || !game || game.phase !== PHASE_PLAY || currentTimeoutOutcome()) return false;
+  if (!gameRulesOf(game).capabilities.analysis) return false;
   if (onlineAITurnNeedsController()) return false;
   // Live AI help is deliberately unavailable to either online player. A room
   // spectator gets an entirely local analysis copy that never enters the room
@@ -1817,6 +1945,7 @@ function replayStepIsTerminal(step) {
 
 function startReviewAtStep(step, mode) {
   if (!replaySession) return false;
+  if (!gameRulesOf(replaySession.source?.base).capabilities.analysis) return false;
   if (isLiveOnlineFairPlayLocked()) {
     replaySession.analysisBatch = null;
     replaySession.analysisMessage = "在线对局尚未结束；为保证公平，比赛双方暂不能使用 AI 复盘。";
@@ -1986,6 +2115,7 @@ function analyzeCurrentLivePosition() {
 }
 
 function analyzeCurrentPosition() {
+  if (!displayedGameControls().analysis) return;
   setSidebarTab("analysis");
   if (replaySession) analyzeCurrentReplayStep();
   else analyzeCurrentLivePosition();
@@ -1993,6 +2123,7 @@ function analyzeCurrentPosition() {
 
 function analyzeWholeReplay() {
   if (!replaySession) return;
+  if (!gameRulesOf(replaySession.source?.base).capabilities.analysis) return;
   if (isLiveOnlineFairPlayLocked()) {
     replaySession.analysisMessage = "在线对局尚未结束；为保证公平，比赛双方暂不能使用 AI 复盘。";
     replaySession.analysisError = true;
@@ -2404,6 +2535,8 @@ function currentMatchSession() {
     onlineRoom?.code === roomClient.roomCode && Boolean(onlineRoom?.game);
   const localUndoAvailable = isAIMode() ? canUndoAIChoice() : Boolean(game?.canUndo?.());
   return createMatchSession({
+    // Pass, scoring and AI exist only in games whose rules offer them.
+    gameCapabilities: gameRulesOf(game).capabilities,
     transport: online ? MATCH_TRANSPORT_ONLINE : MATCH_TRANSPORT_LOCAL,
     controllerByColor: controllers,
     controllerOperatorByColor: controllerOperators,
@@ -2588,6 +2721,10 @@ function closeAIDialog() {
 }
 
 function showAIDialog() {
+  if (!gameRulesOf(hasOnlineSession() ? game : { gameType: pendingGameType }).capabilities.ai) {
+    setMessage("五子棋和黑白棋暂不支持 AI，请选择好友或本地双人对局。", true);
+    return;
+  }
   if (hasOnlineSession()) {
     const white = roomSeat(WHITE);
     if (!isOnlineHost()) {
@@ -2838,6 +2975,12 @@ async function startAIGame(event) {
     updateUI();
     return;
   }
+  if (!gameRulesOf(hasOnlineSession() ? game : { gameType: pendingGameType }).capabilities.ai) {
+    closeAIDialog();
+    setMessage("五子棋和黑白棋暂不支持 AI，请选择好友或本地双人对局。", true);
+    updateUI();
+    return;
+  }
   const requestedModelId = normalizeAIModelId(elements.aiModel.value);
   const requestedBlackModelId = normalizeAIModelId(elements.aiBlackModel.value);
   const requestedMatchMode = normalizeAIMatchMode(elements.aiMatchMode.value);
@@ -3007,26 +3150,12 @@ function syncMovePreviewAvailability() {
   arcView?.setMovePreviewEnabled(enabled);
 }
 
+/**
+ * A render-only engine for a public room snapshot, built by the snapshot's
+ * game (absent gameType: Go, hydrated exactly as before multiple games).
+ */
 function hydratePublicGame(state) {
-  const hydrated = new GoEngine({
-    ...(Number.isInteger(state.size) ? { size: state.size } : {}),
-    width: boardWidth(state),
-    height: boardHeight(state),
-    topology: state.topology ?? TOPOLOGY_CYLINDER,
-    komi: state.komi,
-    scoringRule: state.scoringRule,
-    initialBoard: state.board,
-    currentPlayer: state.currentPlayer,
-  });
-  hydrated.phase = state.phase;
-  hydrated.consecutivePasses = state.consecutivePasses;
-  hydrated.captures = { ...state.captures };
-  hydrated.deadStones = new Set(
-    (state.deadStones ?? []).map(({ row, col }) => `${row},${col}`),
-  );
-  hydrated.lastMove = cloneSerializable(state.lastMove);
-  hydrated.result = cloneSerializable(state.result);
-  return hydrated;
+  return rulesFor(gameTypeOf(state)).hydratePublic(state);
 }
 
 function onlineRoomPath(code, role = "") {
@@ -3143,7 +3272,12 @@ function createLobbyRoomCard() {
   const title = document.createElement("strong");
   const status = document.createElement("span");
   status.className = "lobby-room-status-badge";
-  header.append(title, status);
+  const badges = document.createElement("span");
+  badges.className = "lobby-room-card-badges";
+  const gameBadge = document.createElement("span");
+  gameBadge.className = "lobby-room-game-badge";
+  badges.append(gameBadge, status);
+  header.append(title, badges);
 
   const metadata = document.createElement("div");
   metadata.className = "lobby-room-meta";
@@ -3186,6 +3320,7 @@ function createLobbyRoomCard() {
   card.__lobbyElements = {
     title,
     status,
+    gameBadge,
     metadata,
     blackName,
     whiteName,
@@ -3202,9 +3337,16 @@ function updateLobbyRoomCard(card, room) {
   view.title.textContent = `房间 ${room.code}`;
   view.status.className = `lobby-room-status-badge ${room.status}`;
   view.status.textContent = lobbyStatusLabel(room.status);
+  // Which game the room plays (absent in Go rooms' summaries).
+  const gameLabels = lobbyGameLabels(room);
+  view.gameBadge.className = `lobby-room-game-badge ${gameLabels.gameType}`;
+  view.gameBadge.textContent = gameLabels.badge;
+  view.gameBadge.hidden = !ENABLE_MULTI_GAME;
+  card.dataset.gameType = gameLabels.gameType;
 
   view.metadata.replaceChildren();
   appendLobbyMetadata(view.metadata, `${room.width} × ${room.height}`);
+  if (gameLabels.rule) appendLobbyMetadata(view.metadata, gameLabels.rule);
   appendLobbyMetadata(view.metadata, lobbyTopologyLabel(room.topology));
   appendLobbyMetadata(view.metadata, lobbyModeLabel(room.mode));
   if (room.timed) appendLobbyMetadata(view.metadata, "计时");
@@ -3252,6 +3394,7 @@ async function renderLobbyRooms() {
   ensureLobbyPreviewObserver();
   const filtered = filterLobbyRooms(lobbyRooms, {
     status: lobbyStatusFilter,
+    game: ENABLE_MULTI_GAME ? elements.lobbyGameFilter.value : "all",
     topology: elements.lobbyTopologyFilter.value,
     size: elements.lobbySizeFilter.value,
     mode: elements.lobbyModeFilter.value,
@@ -3491,7 +3634,11 @@ function rememberLobbyBoardSettings() {
   try {
     window.sessionStorage.setItem(
       LOBBY_BOARD_SETTINGS_KEY,
-      JSON.stringify(getNewGameOptions()),
+      JSON.stringify({
+        ...getNewGameOptions(),
+        // Board sizes last used for each game in this tab.
+        sizesByGame: Object.fromEntries(pendingDimensionsByGame),
+      }),
     );
   } catch {
     // Without tab storage the lobby simply starts from the default board.
@@ -3512,9 +3659,20 @@ function restoreLobbyBoardSettings() {
     const numeric = Math.round(Number(value) || 0);
     return Math.max(0, Math.min(max, numeric));
   };
+  // Settings saved before multiple games have no gameType: they are Go.
+  const gameType = availableGameType(saved.gameType ?? GAME_GO);
+  for (const [savedGame, size] of Object.entries(saved.sizesByGame ?? {})) {
+    if (availableGameType(savedGame) !== savedGame) continue;
+    pendingDimensionsByGame.set(savedGame, {
+      width: clampBoardDimension(savedGame, size?.width),
+      height: clampBoardDimension(savedGame, size?.height),
+    });
+  }
   const options = {
-    width: normalizeBoardDimension(saved.width),
-    height: normalizeBoardDimension(saved.height),
+    gameType,
+    ...(gameType === GAME_GOMOKU ? { ruleSet: normalizeRuleSet(saved.ruleSet) } : {}),
+    width: clampBoardDimension(gameType, normalizeBoardDimension(saved.width)),
+    height: clampBoardDimension(gameType, normalizeBoardDimension(saved.height)),
     topology: [TOPOLOGY_CYLINDER, TOPOLOGY_TORUS, TOPOLOGY_MOBIUS].includes(saved.topology)
       ? saved.topology
       : TOPOLOGY_CYLINDER,
@@ -3544,37 +3702,23 @@ function rememberPlayerName(name) {
   }
 }
 
-function clockSettingsLabel(settings) {
-  const mainTimeSeconds = Math.max(0, Number(settings?.mainTimeSeconds) || 0);
-  const periods = Math.max(0, Math.round(Number(settings?.byoYomiPeriods) || 0));
-  const periodSeconds = Math.max(0, Math.round(Number(settings?.byoYomiSeconds) || 0));
-  const byoYomi = periods > 0 && periodSeconds > 0;
-  if (mainTimeSeconds <= 0 && !byoYomi) return "不计时";
-  const minutes = Math.round(mainTimeSeconds / 60);
-  return byoYomi
-    ? `${minutes} 分钟 + ${periods}×${periodSeconds} 秒`
-    : `${minutes} 分钟`;
-}
-
 /**
  * One line describing a game's settings. The invite dialog, the create-room
  * dialog and a received invitation all use it, so a guest sees the same
  * clock and komi the host chose.
  */
 function boardSettingsSummary(settings) {
-  const width = normalizeBoardDimension(settings?.width ?? settings?.size);
-  const height = normalizeBoardDimension(settings?.height ?? settings?.size);
-  const rule = settings?.scoringRule === "japanese" ? "简化领地计分" : "中国规则";
-  const komi = Number(settings?.komi);
-  const komiLabel = Number.isFinite(komi) ? ` · 贴目 ${formatScore(komi)}` : "";
-  return `${width} × ${height} · ${topologySurfaceName(settings?.topology)} · ${rule}${komiLabel} · ${
-    clockSettingsLabel(settings)
-  }`;
+  return gameSettingsSummary(
+    { ...settings, gameType: availableGameType(gameTypeOf(settings)) },
+    { showGame: ENABLE_MULTI_GAME },
+  );
 }
 
 function onlineBoardSummaryText() {
   const clock = selectedTimeControlConfig();
   return boardSettingsSummary({
+    gameType: pendingGameType,
+    ruleSet: pendingRuleSet,
     width: elements.customWidth.value,
     height: elements.customHeight.value,
     topology: pendingTopology,
@@ -3821,8 +3965,11 @@ function updateRoomUI() {
   elements.toggleOnlineAiAutoplay.disabled = !onlineSelfPlay ||
     !onlineReady || !connected || onlineBusy || reviewing ||
     game?.phase !== PHASE_PLAY || pauseIntentMatchesRoom();
+  const shownControls = displayedGameControls();
   if (elements.scoreStrip) {
-    elements.scoreStrip.hidden = (lobby || waiting || rematchSetup) && !reviewing;
+    // Gomoku has nothing to count; Go counts captures and Othello discs.
+    elements.scoreStrip.hidden = ((lobby || waiting || rematchSetup) && !reviewing) ||
+      !shownControls.counts;
   }
   elements.clockPanel.hidden = reviewing || rematchSetup || [
     MATCH_LIFECYCLE_LOBBY,
@@ -4090,6 +4237,8 @@ function updateRoomUI() {
   elements.byoYomiPeriods.disabled = !canChangeNextGameSettings;
   elements.byoYomiSeconds.disabled = !canChangeNextGameSettings;
   for (const button of elements.sizeButtons) button.disabled = !canChangeNextGameSettings;
+  for (const button of elements.gameTypeButtons) button.disabled = !canChangeNextGameSettings;
+  for (const select of elements.gomokuRuleSelects) select.disabled = !canChangeNextGameSettings;
   for (const button of elements.topologyButtons) {
     button.disabled = !canChangeNextGameSettings;
   }
@@ -4101,14 +4250,17 @@ function updateRoomUI() {
     occupiedWhiteMember.automated !== true &&
     occupiedWhiteMember.role !== "ai",
   );
+  // Games without an AI offer only friend and same-browser rounds.
+  const pendingMatchModes = gameRulesOf({ gameType: pendingGameType }).matchModes;
   for (const option of elements.onlineMatchMode.options) {
     option.disabled = Boolean(
       occupiedWhiteMember && option.value !== ONLINE_MODE_FRIEND,
-    );
+    ) || !pendingMatchModes.includes(option.value);
+    option.hidden = !pendingMatchModes.includes(option.value);
   }
   if (
-    occupiedWhiteMember &&
-    elements.onlineMatchMode.value !== ONLINE_MODE_FRIEND
+    (occupiedWhiteMember && elements.onlineMatchMode.value !== ONLINE_MODE_FRIEND) ||
+    !pendingMatchModes.includes(elements.onlineMatchMode.value)
   ) {
     elements.onlineMatchMode.value = ONLINE_MODE_FRIEND;
   }
@@ -4175,6 +4327,12 @@ function updateRoomUI() {
   elements.detachRoomAi.hidden = !legacyRoomAiActions || !match.capabilities.detach_ai;
   elements.exportSgf.disabled = !hasStartedMatch() && !reviewing;
   elements.importSgf.disabled = false;
+  // SGF records, AI analysis and review are Go's for now.
+  if (elements.recordActions) elements.recordActions.hidden = !shownControls.sgf;
+  if (elements.analysisTab) {
+    elements.analysisTab.hidden = !shownControls.analysis;
+    if (!shownControls.analysis && activeSidebarTab === "analysis") setSidebarTab("game");
+  }
   syncChatUI();
   syncMovePreviewAvailability();
   syncClockUI();
@@ -4187,8 +4345,10 @@ function updateRoomUI() {
  * docks them to the bottom of the viewport (only at phone widths).
  */
 function syncPlayDock() {
+  // updateUI marks the controls live while moves are being played (Gomoku
+  // and Othello have no Pass button, so its visibility cannot tell).
   const docked = !isReplaying() && !isNextGameSetup() &&
-    !elements.playControls.hidden && !elements.passButton.hidden &&
+    !elements.playControls.hidden && elements.playControls.dataset.live === "true" &&
     !(hasOnlineSession() && !isOnlinePlayer());
   elements.gameScreen.classList.toggle("play-docked", docked);
 }
@@ -4247,11 +4407,33 @@ function syncTopologyPresentation(topology = displayedTopology()) {
     : mobius
       ? "立体莫比乌斯"
       : "立体竹筒";
-  elements.rulesSummary.textContent = `${topologyName(topology)}棋盘规则说明`;
   elements.cylinderRules.hidden = !cylinder;
   elements.torusRules.hidden = !torus;
   elements.mobiusRules.hidden = !mobius;
+  syncRulesNotes(topology);
   setViewMode(!cylinder && activeViewMode === "arc" ? "flat" : activeViewMode);
+}
+
+/**
+ * The rules note under the settings: the board's topology, then the rules of
+ * the game shown (Go's own bullets, or Gomoku's or Othello's).
+ */
+function syncRulesNotes(topology = displayedTopology()) {
+  const shown = displayedBoardState();
+  const gameType = availableGameType(gameTypeOf(shown));
+  const ruleSet = gameType === GAME_GOMOKU
+    ? normalizeRuleSet(shown?.ruleSet ?? pendingRuleSet)
+    : null;
+  elements.rulesSummary.textContent = rulesSummaryTitle(gameType, topology, {
+    showGame: ENABLE_MULTI_GAME,
+  });
+  elements.goRules.hidden = gameType !== GAME_GO;
+  elements.gomokuRules.hidden = gameType !== GAME_GOMOKU;
+  elements.othelloRules.hidden = gameType !== GAME_OTHELLO;
+  for (const item of elements.rulesTopologyItems) {
+    item.hidden = !item.dataset.rulesTopology.split(/\s+/u).includes(topology ?? TOPOLOGY_CYLINDER);
+  }
+  for (const item of elements.rulesSetItems) item.hidden = item.dataset.rulesSet !== ruleSet;
 }
 
 function rebuildViews(width, height, topology) {
@@ -4269,7 +4451,7 @@ function restoreOfflineGame() {
   cancelAIThinking();
   const previousDimensions = { width: boardWidth(), height: boardHeight() };
   const previousTopology = game?.topology;
-  game = GoEngine.fromState(offlineGameState.game);
+  game = rulesFor(gameTypeOf(offlineGameState.game)).fromState(offlineGameState.game);
   matchLifecycle = [
     MATCH_LIFECYCLE_LOBBY,
     MATCH_LIFECYCLE_WAITING,
@@ -4304,10 +4486,7 @@ function restoreOfflineGame() {
   if (!sameBoardDimensions(previousDimensions, game) || previousTopology !== game.topology) {
     rebuildViews(boardWidth(), boardHeight(), game.topology);
   }
-  setPendingDimensions(boardWidth(), boardHeight());
-  setPendingTopology(game.topology);
-  elements.scoringRule.value = game.scoringRule;
-  elements.komi.value = String(game.komi);
+  reflectLiveGameSettings(game);
   reflectTimeControlConfig(localTimeControl);
   offlineGameState = null;
 }
@@ -4383,6 +4562,13 @@ function announceRoomState(room, previousRoom) {
         ? `${colorName(newlyConfirmed)}已确认当前点目，等待另一方。`
         : "点目确认已重置，请双方重新确认。");
     }
+  } else if (lastMove?.type === "play" && gameTypeOf(room.game) !== GAME_GO) {
+    // Gomoku and Othello: the move may end the game (five, full board, disc
+    // count) or skip the opponent automatically.
+    setMessage(gameMoveMessage(lastMove, {
+      gameType: gameTypeOf(room.game),
+      result: room.game.phase === PHASE_FINISHED ? room.game.result : null,
+    }));
   } else if (lastMove?.type === "play") {
     const captured = lastMove.captured?.length
       ? `，提掉 ${lastMove.captured.length} 子`
@@ -4395,9 +4581,10 @@ function announceRoomState(room, previousRoom) {
       setMessage(`${colorName(lastMove.color)}停一手。`);
     }
   } else if (room.moveCount === 0) {
-    setMessage(
-      `${boardDimensionLabel(room.game)} ${topologySurfaceName(room.game.topology)}在线棋盘已准备好，黑方先行。`,
-    );
+    const ready = `${boardDimensionLabel(room.game)} ${topologySurfaceName(room.game.topology)}在线棋盘已准备好，黑方先行。`;
+    setMessage(ENABLE_MULTI_GAME && gameTypeOf(room.game) !== GAME_GO
+      ? `${gameName(gameTypeOf(room.game))} · ${ready}`
+      : ready);
   }
 }
 
@@ -4504,7 +4691,7 @@ function applyOnlineRoom(room) {
     const options = room.match?.request?.settings ?? previousGameOptions(game, room.timeControl);
     reflectGameOptions(options);
     rematchSetupTransport = MATCH_TRANSPORT_ONLINE;
-    rematchPreviewGame = new GoEngine(options);
+    rematchPreviewGame = createGameFromOptions(options);
     elements.onlineMatchMode.value = room.match?.request?.mode ?? room.match?.mode ?? ONLINE_MODE_FRIEND;
     reflectOnlineAIModelControls(room.match?.request?.controllers ?? room.match?.controllers);
     rebuildViews(options.width, options.height, options.topology);
@@ -4550,10 +4737,7 @@ function applyOnlineRoom(room) {
     rebuildViews(boardWidth(), boardHeight(), game.topology);
   }
   if (!isOnlineNextGameSetup()) {
-    setPendingDimensions(boardWidth(), boardHeight());
-    setPendingTopology(game.topology);
-    elements.scoringRule.value = game.scoringRule;
-    elements.komi.value = String(game.komi);
+    reflectLiveGameSettings(game);
     reflectTimeControlConfig(room.timeControl);
   }
   if (rematchStarted || nextRoundStarted) setViewMode(activeViewMode);
@@ -4733,13 +4917,21 @@ async function dispatchMatchAction(action, payload = {}, options = {}) {
     if (!ensureLocalTimedMoveAllowed()) return false;
     const result = game.play(payload.row, payload.col);
     if (!result.ok) {
-      setMessage(ERROR_MESSAGES[result.reason] || "这一手不能下。", true);
+      setMessage(moveErrorMessage(result), true);
       return false;
     }
     moveCount += 1;
     completeLocalTimedTurn();
     lastPlayedPoint = { row: payload.row, col: payload.col };
     playMoveSounds(result.captured?.length ?? 0);
+    if (gameTypeOf(game) !== GAME_GO) {
+      // Gomoku and Othello: a five, a draw or an Othello count can end the
+      // game on this move, and Othello may skip the opponent automatically.
+      setMessage(gameMoveMessage(result, { gameType: gameTypeOf(game), result: result.result }));
+      updateUI();
+      maybeStartAITurn();
+      return true;
+    }
     const captureMessage = result.captured.length
       ? `，提掉 ${result.captured.length} 子`
       : "";
@@ -4807,7 +4999,7 @@ async function dispatchMatchAction(action, payload = {}, options = {}) {
     if (aiThinking) cancelAIThinking();
     const result = game.resign(loser);
     if (!result.ok) {
-      setMessage(ERROR_MESSAGES[result.reason] || "当前不能认输。", true);
+      setMessage(moveErrorMessage(result, "当前不能认输。"), true);
       return false;
     }
     retargetLocalTimeControl({ pause: true });
@@ -4818,7 +5010,13 @@ async function dispatchMatchAction(action, payload = {}, options = {}) {
 
   if (action === MATCH_ACTION_NEW_GAME) {
     cancelAIThinking();
-    game = new GoEngine(payload);
+    game = createGameFromOptions(payload);
+    if (aiActive && !gameRulesOf(game).capabilities.ai) {
+      // Gomoku and Othello have no AI yet: a next game of either, prepared
+      // after an AI game, is played by two people on this device.
+      aiActive = false;
+      aiAutoplayPaused = false;
+    }
     liveAnalysis = {
       modelId: liveAnalysis.modelId,
       positionKey: null,
@@ -4834,9 +5032,7 @@ async function dispatchMatchAction(action, payload = {}, options = {}) {
     lastPlayedPoint = null;
     elements.coordinateHint.textContent = "";
     rebuildViews(payload.width, payload.height, payload.topology);
-    setMessage(
-      `${payload.width} × ${payload.height} ${topologySurfaceName(payload.topology)}棋盘已准备好，黑方先行。`,
-    );
+    setMessage(newBoardMessage(payload, { showGame: ENABLE_MULTI_GAME }));
     updateUI();
     maybeStartAITurn();
     return true;
@@ -4845,7 +5041,7 @@ async function dispatchMatchAction(action, payload = {}, options = {}) {
   if (action === MATCH_ACTION_TOGGLE_DEAD) {
     const result = game.toggleDead(payload.row, payload.col);
     if (!result.ok) {
-      setMessage(ERROR_MESSAGES[result.reason] || "这里不能标记。", true);
+      setMessage(moveErrorMessage(result, "这里不能标记。"), true);
       return false;
     }
     setMessage(
@@ -4885,8 +5081,9 @@ function normalizeBoardDimension(value, fallback = 19) {
 }
 
 function setPendingDimensions(width, height = width) {
-  pendingWidth = normalizeBoardDimension(width);
-  pendingHeight = normalizeBoardDimension(height);
+  pendingWidth = clampBoardDimension(pendingGameType, width, pendingWidth);
+  pendingHeight = clampBoardDimension(pendingGameType, height, pendingHeight);
+  pendingDimensionsByGame.set(pendingGameType, { width: pendingWidth, height: pendingHeight });
   elements.customWidth.value = String(pendingWidth);
   elements.customHeight.value = String(pendingHeight);
   for (const button of elements.sizeButtons) {
@@ -4895,6 +5092,92 @@ function setPendingDimensions(width, height = width) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   }
+}
+
+/**
+ * Choose the game the settings prepare. Only the game (and Gomoku's rule
+ * set) changes here; callers then set the board size for that game.
+ */
+function setPendingGameType(gameType, { ruleSet } = {}) {
+  pendingGameType = availableGameType(gameType);
+  if (ruleSet !== undefined && ruleSet !== null) pendingRuleSet = normalizeRuleSet(ruleSet);
+  syncGameTypeControls();
+}
+
+/** Reflect the pending game in every game picker and game-only control. */
+function syncGameTypeControls() {
+  const gameType = pendingGameType;
+  const limits = BOARD_LIMITS[gameType];
+  for (const button of elements.gameTypeButtons) {
+    const active = button.dataset.gameType === gameType;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+  for (const select of elements.gomokuRuleSelects) select.value = pendingRuleSet;
+  for (const element of elements.gameOnlyElements) {
+    element.hidden = !element.dataset.gameOnly.split(/\s+/u).includes(gameType);
+  }
+  if (elements.gameTypeField) elements.gameTypeField.hidden = !ENABLE_MULTI_GAME;
+  const lobbyGameFilter = elements.lobbyGameFilter?.closest("label");
+  if (lobbyGameFilter) lobbyGameFilter.hidden = !ENABLE_MULTI_GAME;
+  for (const picker of elements.dialogGamePickers) picker.hidden = !ENABLE_MULTI_GAME;
+  for (const button of elements.sizeButtons) {
+    const games = (button.dataset.sizeGames ?? GAME_GO).split(/\s+/u);
+    button.hidden = !games.includes(gameType);
+  }
+  for (const input of [elements.customWidth, elements.customHeight]) {
+    input.min = String(limits.publicMin);
+    input.max = String(limits.max);
+    input.step = limits.parity === "even" ? "2" : "1";
+  }
+  elements.customWidthRange.textContent = dimensionRangeText(gameType, "width");
+  elements.customHeightRange.textContent = dimensionRangeText(gameType, "height");
+}
+
+/** Mirror a live game's settings into the (read-only) settings panel. */
+function reflectLiveGameSettings(liveGame) {
+  setPendingGameType(gameTypeOf(liveGame), { ruleSet: liveGame?.ruleSet });
+  setPendingDimensions(boardWidth(liveGame), boardHeight(liveGame));
+  setPendingTopology(liveGame?.topology);
+  if (gameTypeOf(liveGame) === GAME_GO) {
+    elements.scoringRule.value = liveGame.scoringRule;
+    elements.komi.value = String(liveGame.komi);
+  }
+}
+
+/**
+ * The settings picker chose another game: keep the topology and clock, and
+ * restore the board size last used for that game (else its default).
+ */
+function selectGameType(gameType) {
+  const next = availableGameType(gameType);
+  if (!isBoardSetupMode()) {
+    syncGameTypeControls();
+    return;
+  }
+  if (next === pendingGameType) return;
+  setPendingGameType(next);
+  const remembered = pendingDimensionsByGame.get(next);
+  const limits = BOARD_LIMITS[next];
+  setPendingDimensions(
+    remembered?.width ?? limits.defaultWidth,
+    remembered?.height ?? limits.defaultHeight,
+  );
+  elements.boardLimitNote.hidden = true;
+  rememberGameTypeChoice();
+  resetLobbyPreview();
+}
+
+function selectGomokuRuleSet(ruleSet) {
+  if (!isBoardSetupMode()) {
+    syncGameTypeControls();
+    return;
+  }
+  pendingRuleSet = normalizeRuleSet(ruleSet);
+  syncGameTypeControls();
+  rememberGameTypeChoice();
+  // The preview is rebuilt under the new rules (Renju marks forbidden points).
+  resetLobbyPreview();
 }
 
 function setPendingTopology(topology) {
@@ -4912,18 +5195,30 @@ function setPendingTopology(topology) {
   }
 }
 
+/**
+ * The settings of the next game. With multiple games every option set names
+ * its game (also "go", so switching a room back to Go is explicit); Go keeps
+ * its komi and scoring rule, Gomoku adds its rule set.
+ */
 function getNewGameOptions() {
-  const width = normalizeBoardDimension(elements.customWidth.value);
-  const height = normalizeBoardDimension(elements.customHeight.value);
+  const gameType = pendingGameType;
+  const width = clampBoardDimension(gameType, elements.customWidth.value, pendingWidth);
+  const height = clampBoardDimension(gameType, elements.customHeight.value, pendingHeight);
   const timeControl = selectedTimeControlConfig();
   setPendingDimensions(width, height);
   return {
+    ...(ENABLE_MULTI_GAME ? { gameType } : {}),
+    ...(gameType === GAME_GOMOKU ? { ruleSet: pendingRuleSet } : {}),
     width,
     height,
     ...(width === height ? { size: width } : {}),
     topology: pendingTopology,
-    scoringRule: elements.scoringRule.value,
-    komi: Number(elements.komi.value) || 0,
+    ...(gameType === GAME_GO
+      ? {
+          scoringRule: elements.scoringRule.value,
+          komi: Number(elements.komi.value) || 0,
+        }
+      : {}),
     mainTimeSeconds: timeControl?.mainTimeSeconds ?? 0,
     byoYomiPeriods: timeControl?.byoYomiPeriods ?? 0,
     byoYomiSeconds: timeControl?.byoYomiSeconds ?? 0,
@@ -5042,10 +5337,13 @@ function applyLocalNextGameAIState(state) {
 }
 
 function reflectGameOptions(options) {
+  setPendingGameType(gameTypeOf(options), { ruleSet: options.ruleSet });
   setPendingDimensions(options.width, options.height);
   setPendingTopology(options.topology);
-  elements.scoringRule.value = options.scoringRule;
-  elements.komi.value = String(options.komi);
+  if (gameTypeOf(options) === GAME_GO) {
+    if (options.scoringRule !== undefined) elements.scoringRule.value = options.scoringRule;
+    if (options.komi !== undefined) elements.komi.value = String(options.komi);
+  }
   const timeControl = options.mainTimeSeconds || options.byoYomiPeriods || options.byoYomiSeconds
     ? {
         mainTimeSeconds: options.mainTimeSeconds,
@@ -5069,7 +5367,7 @@ function resetLobbyPreview({ message = "" } = {}) {
     ? { width: boardWidth(previousGame), height: boardHeight(previousGame) }
     : null;
   const previousTopology = previousGame?.topology;
-  const preview = new GoEngine(options);
+  const preview = createGameFromOptions(options);
   if (nextGamePreview) {
     rematchPreviewGame = preview;
   } else {
@@ -5179,7 +5477,7 @@ function enterNextGameSetup() {
   rematchSetupTransport = hasOnlineSession()
     ? MATCH_TRANSPORT_ONLINE
     : MATCH_TRANSPORT_LOCAL;
-  rematchPreviewGame = new GoEngine(options);
+  rematchPreviewGame = createGameFromOptions(options);
   if (hasOnlineSession()) {
     elements.onlineMatchMode.value = onlineRoom?.match?.mode ?? ONLINE_MODE_FRIEND;
     reflectOnlineAIModelControls(onlineRoom?.match?.controllers);
@@ -5217,7 +5515,7 @@ async function startConfiguredNextGame() {
   if (!started && localSetup) {
     applyLocalNextGameAIState(previousAIState);
     rematchSetupTransport = MATCH_TRANSPORT_LOCAL;
-    rematchPreviewGame = new GoEngine(options);
+    rematchPreviewGame = createGameFromOptions(options);
     setSidebarTab("settings");
     updateUI();
   }
@@ -5297,6 +5595,7 @@ function renderBoardPosition(
   analysisCandidates = [],
   analysisVariation = [],
 ) {
+  const gameType = availableGameType(gameTypeOf(state));
   const viewState = {
     ...state,
     lastMove,
@@ -5305,8 +5604,25 @@ function renderBoardPosition(
     analysisCandidates,
     analysisVariation,
     territoryRegions: territoryRegionsForState(state),
+    // Gomoku rows and Renju forbidden points, Othello legal moves and flips.
+    gameMarkers: gameMarkersForState(state, { hints: showsLegalMoveHints(state) }),
+    boardStyle: { gameType },
   };
   activeBoardView()?.setPosition(viewState);
+}
+
+/**
+ * Othello legal-move hints appear only on the live board, and only while
+ * this page may play the side to move.
+ */
+function showsLegalMoveHints(state) {
+  return Boolean(
+    gameTypeOf(state) === GAME_OTHELLO &&
+      state?.phase === PHASE_PLAY &&
+      !isReplaying() &&
+      !isBoardSetupMode() &&
+      canShowMovePreview(),
+  );
 }
 
 function analysisContextKey(record = currentAnalysisRecord()) {
@@ -5365,7 +5681,8 @@ function currentAnalysisBaseState() {
 function buildAnalysisVariationPreview(baseState, candidate) {
   if (!baseState || !candidate) return null;
   try {
-    const preview = GoEngine.fromState(baseState);
+    if (!gameRulesOf(baseState).capabilities.analysis) return null;
+    const preview = rulesFor(GAME_GO).fromState(baseState);
     const variation = [];
     const moves = Array.isArray(candidate.variation)
       ? candidate.variation.slice(0, 8)
@@ -5500,6 +5817,21 @@ function syncAIReviewUI() {
     ? !replayStepIsTerminal(replaySession.index) && !isLiveOnlineFairPlayLocked()
     : canAnalyzeLivePosition();
   const model = currentReviewModel();
+
+  if (!displayedGameControls(frame).analysis) {
+    // Gomoku and Othello have no AI yet; their analysis tab is hidden.
+    elements.aiReviewStatus.textContent = "这个棋类暂不支持 AI 分析。";
+    elements.aiReviewStatus.classList.remove("error");
+    elements.aiReviewCurrent.disabled = true;
+    elements.aiReviewAll.hidden = true;
+    elements.aiReviewCancel.hidden = true;
+    elements.aiReviewResult.hidden = true;
+    elements.aiReviewCandidates.replaceChildren();
+    elements.aiVariationPreview.hidden = true;
+    elements.boardStage.classList.remove("analysis-point-picking");
+    renderCurrentAnalysisPosition();
+    return;
+  }
 
   if ((!hasStartedMatch() || isNextGameSetup()) && !replaySession) {
     elements.aiReviewEyebrow.textContent = "房间准备";
@@ -5685,6 +6017,30 @@ function syncAIReviewUI() {
   applyReviewCandidateAction({ type: "leave" }, candidates);
 }
 
+/**
+ * The two counters under the turn card: Go captures, Othello disc counts;
+ * Gomoku has none (the strip is hidden). Previews of Go show no captures.
+ */
+function syncGameCountersUI(state, { preview = false } = {}) {
+  const controls = displayedGameControls(state);
+  if (controls.countLabels) {
+    elements.blackCountLabel.textContent = controls.countLabels.black;
+    elements.whiteCountLabel.textContent = controls.countLabels.white;
+  }
+  const values = preview && controls.counts === "captures"
+    ? { black: 0, white: 0 }
+    : controls.countValues ?? { black: 0, white: 0 };
+  elements.blackCaptures.textContent = String(values.black);
+  elements.whiteCaptures.textContent = String(values.white);
+  return controls;
+}
+
+/** "19 × 19 · 361 点 · 竹筒", named by game when several games exist. */
+function boardSummaryLabel(state) {
+  const label = `${boardDimensionLabel(state)} · ${boardPointCount(state)} 点 · ${topologySurfaceName(state.topology)}`;
+  return ENABLE_MULTI_GAME ? `${gameName(gameTypeOf(state))} · ${label}` : label;
+}
+
 function updateReplayUI() {
   const frame = replaySession.frames[replaySession.index];
   const lastIndex = replaySession.frames.length - 1;
@@ -5698,10 +6054,8 @@ function updateReplayUI() {
   const terminalAtEnd = finishedAtEnd || Boolean(recordedResultAtEnd);
 
   renderBoardPosition(frame, move);
-  elements.blackCaptures.textContent = String(frame.captures.black);
-  elements.whiteCaptures.textContent = String(frame.captures.white);
-  elements.boardTopology.textContent =
-    `${boardDimensionLabel(frame)} · ${boardPointCount(frame)} 点 · ${topologySurfaceName(frame.topology)}`;
+  const controls = syncGameCountersUI(frame);
+  elements.boardTopology.textContent = boardSummaryLabel(frame);
   elements.moveNumber.textContent = `复盘 · 第 ${replaySession.index} / ${lastIndex} 手`;
   elements.phaseLabel.textContent = terminalAtEnd
     ? "复盘终局"
@@ -5753,7 +6107,9 @@ function updateReplayUI() {
   if (finishedAtEnd) {
     setMessage(frame.result?.reason === "resign"
       ? `复盘结束：${formatResult(frame.result)}。认输结果已还原。`
-      : `复盘结束：${formatResult(frame.result)}。最终死子标记与点目结果已还原。`);
+      : controls.scoring
+        ? `复盘结束：${formatResult(frame.result)}。最终死子标记与点目结果已还原。`
+        : `复盘结束：${formatResult(frame.result)}。`);
   } else if (recordedResultAtEnd) {
     setMessage(`复盘结束：SGF 记录结果 ${recordedResultAtEnd}。普通 SGF 不包含本项目的异形死子判定过程。${replayNote}`);
   } else if (scoringAtEnd) {
@@ -5762,6 +6118,11 @@ function updateReplayUI() {
     setMessage(`这是复盘起点。${replayNote}`);
   } else if (move?.type === "pass") {
     setMessage(`第 ${replaySession.index} 手：${colorName(move.color)}停一手。${replayNote}`);
+  } else if (controls.gameType !== GAME_GO) {
+    setMessage(joinSentences(
+      gameReplayStepMessage(replaySession.index, move, { gameType: controls.gameType }),
+      replayNote,
+    ));
   } else {
     const captured = move?.captured?.length
       ? `，提掉 ${move.captured.length} 子`
@@ -5771,6 +6132,7 @@ function updateReplayUI() {
 }
 
 function updateUI() {
+  syncRulesNotes();
   if (isReplaying()) {
     updateReplayUI();
     return;
@@ -5793,10 +6155,8 @@ function updateUI() {
   renderBoardPosition(state, renderLastMove);
 
   if (rematchSetup) {
-    elements.blackCaptures.textContent = "0";
-    elements.whiteCaptures.textContent = "0";
-    elements.boardTopology.textContent =
-      `${boardDimensionLabel(state)} · ${boardPointCount(state)} 点 · ${topologySurfaceName(state.topology)}`;
+    syncGameCountersUI(state, { preview: true });
+    elements.boardTopology.textContent = boardSummaryLabel(state);
     elements.phaseLabel.textContent = hasOnlineSession()
       ? "当前房间 · 下一局设置"
       : "下一局设置";
@@ -5815,10 +6175,8 @@ function updateUI() {
   }
 
   if (isLocalLobby()) {
-    elements.blackCaptures.textContent = "0";
-    elements.whiteCaptures.textContent = "0";
-    elements.boardTopology.textContent =
-      `${boardDimensionLabel(state)} · ${boardPointCount(state)} 点 · ${topologySurfaceName(state.topology)}`;
+    syncGameCountersUI(state, { preview: true });
+    elements.boardTopology.textContent = boardSummaryLabel(state);
     elements.phaseLabel.textContent = "我的房间";
     elements.turnStone.hidden = true;
     elements.turnText.textContent = "邀请对局后开始";
@@ -5835,10 +6193,8 @@ function updateUI() {
   }
 
   if (matchLifecycle === MATCH_LIFECYCLE_WAITING) {
-    elements.blackCaptures.textContent = "0";
-    elements.whiteCaptures.textContent = "0";
-    elements.boardTopology.textContent =
-      `${boardDimensionLabel(state)} · ${boardPointCount(state)} 点 · ${topologySurfaceName(state.topology)}`;
+    syncGameCountersUI(state, { preview: true });
+    elements.boardTopology.textContent = boardSummaryLabel(state);
     elements.phaseLabel.textContent = "邀请已发出";
     elements.turnStone.hidden = true;
     elements.turnText.textContent = "等待对手加入";
@@ -5853,21 +6209,21 @@ function updateUI() {
     return;
   }
 
-  elements.blackCaptures.textContent = String(state.captures.black);
-  elements.whiteCaptures.textContent = String(state.captures.white);
-  elements.boardTopology.textContent =
-    `${boardDimensionLabel(state)} · ${boardPointCount(state)} 点 · ${topologySurfaceName(state.topology)}`;
+  const controls = syncGameCountersUI(state);
+  elements.boardTopology.textContent = boardSummaryLabel(state);
   elements.moveNumber.textContent = `第 ${moveCount + 1} 手`;
   elements.turnStone.classList.toggle("black", state.currentPlayer === BLACK);
   elements.turnStone.classList.toggle("white", state.currentPlayer === WHITE);
 
   const playing = state.phase === PHASE_PLAY && !timeoutOutcome;
   const terminal = Boolean(timeoutOutcome || resignOutcome || state.phase === PHASE_FINISHED);
-  elements.passButton.hidden = !playing;
+  elements.passButton.hidden = !playing || !controls.pass;
   elements.newGameButton.hidden = true;
   elements.playControls.hidden = terminal;
+  elements.playControls.dataset.live = String(playing);
   elements.playControls.classList.toggle("scoring-actions", !playing);
-  elements.scoringPanel.hidden = playing || Boolean(timeoutOutcome) || Boolean(resignOutcome);
+  elements.scoringPanel.hidden = playing || Boolean(timeoutOutcome) || Boolean(resignOutcome) ||
+    !controls.scoring;
   elements.confirmScore.hidden = state.phase === PHASE_FINISHED;
   elements.resumeGame.hidden = state.phase === PHASE_FINISHED;
   syncReplayEntryAvailability();
@@ -5893,13 +6249,15 @@ function updateUI() {
 
   if (state.phase === PHASE_PLAY) {
     const currentController = currentControllersByColor()[state.currentPlayer];
-    elements.phaseLabel.textContent = state.consecutivePasses
+    // An Othello side without a move is skipped automatically: say so.
+    const skippedNote = controls.gameType === GAME_GO ? "" : gameStatusText(state).note;
+    elements.phaseLabel.textContent = skippedNote || (state.consecutivePasses
       ? "一方已停着"
       : isAIMode()
         ? isAIvsAI() ? "AI 自对弈" : "AI 对战"
         : isOnlineAIMatch()
           ? "在线 AI 对战"
-        : "对局中";
+        : "对局中");
     elements.turnStone.hidden = false;
     elements.turnText.textContent = isAIMode()
       ? isAIvsAI()
@@ -5916,6 +6274,16 @@ function updateUI() {
           ? `已暂停 · ${colorName(state.currentPlayer)}待行`
           : `KataGo ${aiThinking ? "正在思考" : "准备落子"}`
         : `${colorName(state.currentPlayer)}落子`;
+    return;
+  }
+
+  if (!controls.scoring) {
+    // Gomoku and Othello end on the board: no scoring phase to confirm.
+    const status = gameStatusText(state);
+    elements.turnStone.hidden = true;
+    elements.phaseLabel.textContent = status.phase;
+    elements.turnText.textContent = status.turn;
+    elements.moveNumber.textContent = `${moveCount} 手 · 对局结束`;
     return;
   }
 
@@ -5959,7 +6327,7 @@ function handleBoardPoint({ row, col }) {
     return;
   }
   if (hasOnlineSession() && !isOnlinePlayer()) {
-    if (activeSidebarTab === "analysis") {
+    if (activeSidebarTab === "analysis" && gameRulesOf().capabilities.analysis) {
       const analysis = currentAnalysisRecord();
       if (!analysis) {
         liveAnalysis.message = "请先点击“分析当前局面”，再在棋盘上选择想研究的点。";
@@ -5968,10 +6336,10 @@ function handleBoardPoint({ row, col }) {
         return;
       }
       try {
-        const preview = GoEngine.fromState(currentAnalysisBaseState());
+        const preview = rulesFor(GAME_GO).fromState(currentAnalysisBaseState());
         const result = preview.play(row, col);
         if (!result.ok) {
-          liveAnalysis.message = ERROR_MESSAGES[result.reason] || "这个点不能作为分析分支的第一手。";
+          liveAnalysis.message = moveErrorMessage(result, "这个点不能作为分析分支的第一手。");
           liveAnalysis.error = true;
           syncAIReviewUI();
           return;
@@ -6071,7 +6439,7 @@ function undoOfflineGame() {
 
   const result = game.undo();
   if (!result.ok) {
-    setMessage(ERROR_MESSAGES[result.reason] || "现在不能悔棋。", true);
+    setMessage(moveErrorMessage(result, "现在不能悔棋。"), true);
     return;
   }
   moveCount = Math.max(0, moveCount - 1);
@@ -6193,20 +6561,22 @@ for (const button of elements.sidebarTabs) {
     activateSidebarTab(button.dataset.sidebarTab, { focus: true });
   });
   button.addEventListener("keydown", (event) => {
-    const currentIndex = elements.sidebarTabs.indexOf(button);
+    // The analysis tab is hidden in games without AI analysis.
+    const tabs = elements.sidebarTabs.filter((tab) => !tab.hidden);
+    const currentIndex = tabs.indexOf(button);
     let nextIndex = null;
     if (event.key === "ArrowRight") {
-      nextIndex = (currentIndex + 1) % elements.sidebarTabs.length;
+      nextIndex = (currentIndex + 1) % tabs.length;
     } else if (event.key === "ArrowLeft") {
-      nextIndex = (currentIndex - 1 + elements.sidebarTabs.length) % elements.sidebarTabs.length;
+      nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
     } else if (event.key === "Home") {
       nextIndex = 0;
     } else if (event.key === "End") {
-      nextIndex = elements.sidebarTabs.length - 1;
+      nextIndex = tabs.length - 1;
     }
     if (nextIndex === null) return;
     event.preventDefault();
-    const nextTab = elements.sidebarTabs[nextIndex];
+    const nextTab = tabs[nextIndex];
     activateSidebarTab(nextTab.dataset.sidebarTab, { focus: true });
   });
 }
@@ -6333,6 +6703,13 @@ elements.cancelGameInvitation.addEventListener("click", () => {
   void sendOnlineCommand("cancel_game_request", { requestRevision });
 });
 
+for (const button of elements.gameTypeButtons) {
+  button.addEventListener("click", () => selectGameType(button.dataset.gameType));
+}
+for (const select of elements.gomokuRuleSelects) {
+  select.addEventListener("change", () => selectGomokuRuleSet(select.value));
+}
+
 for (const button of elements.sizeButtons) {
   button.addEventListener("click", () => {
     const size = Number(button.dataset.boardSize);
@@ -6368,16 +6745,20 @@ function commitPendingDimensionInputs() {
   }
   const width = Number(elements.customWidth.value);
   const height = Number(elements.customHeight.value);
-  const validWidth = Number.isInteger(width) &&
-    width >= PUBLIC_MIN_BOARD_DIMENSION && width <= MAX_BOARD_DIMENSION;
-  const validHeight = Number.isInteger(height) &&
-    height >= PUBLIC_MIN_BOARD_DIMENSION && height <= MAX_BOARD_DIMENSION;
+  const validWidth = isOfferedBoardDimension(pendingGameType, width);
+  const validHeight = isOfferedBoardDimension(pendingGameType, height);
   elements.customWidth.setAttribute("aria-invalid", String(!validWidth));
   elements.customHeight.setAttribute("aria-invalid", String(!validHeight));
+  // Gomoku needs 11 lines, Othello even sides: adjust a nearly valid size to
+  // the closest board the game allows and say why.
+  const adjustable = (value) => Number.isFinite(value) && value > 0;
   setPendingDimensions(
-    validWidth ? width : pendingWidth,
-    validHeight ? height : pendingHeight,
+    validWidth || adjustable(width) ? width : pendingWidth,
+    validHeight || adjustable(height) ? height : pendingHeight,
   );
+  const note = validWidth && validHeight ? "" : boardLimitNote(pendingGameType);
+  elements.boardLimitNote.textContent = note;
+  elements.boardLimitNote.hidden = !note;
   elements.customWidth.setAttribute("aria-invalid", "false");
   elements.customHeight.setAttribute("aria-invalid", "false");
   resetLobbyPreview();
@@ -6390,13 +6771,12 @@ function scheduleLobbyDimensionPreview() {
   if (!isBoardSetupMode()) return;
   const width = Number(elements.customWidth.value);
   const height = Number(elements.customHeight.value);
-  const validWidth = Number.isInteger(width) &&
-    width >= PUBLIC_MIN_BOARD_DIMENSION && width <= MAX_BOARD_DIMENSION;
-  const validHeight = Number.isInteger(height) &&
-    height >= PUBLIC_MIN_BOARD_DIMENSION && height <= MAX_BOARD_DIMENSION;
+  const validWidth = isOfferedBoardDimension(pendingGameType, width);
+  const validHeight = isOfferedBoardDimension(pendingGameType, height);
   elements.customWidth.setAttribute("aria-invalid", String(!validWidth));
   elements.customHeight.setAttribute("aria-invalid", String(!validHeight));
   if (!validWidth || !validHeight) return;
+  elements.boardLimitNote.hidden = true;
   if (lobbyPreviewFrame !== null) window.cancelAnimationFrame(lobbyPreviewFrame);
   lobbyPreviewFrame = null;
   setPendingDimensions(width, height);
@@ -6969,6 +7349,7 @@ for (const button of elements.lobbyStatusButtons) {
   });
 }
 for (const filter of [
+  elements.lobbyGameFilter,
   elements.lobbyTopologyFilter,
   elements.lobbySizeFilter,
   elements.lobbyModeFilter,
@@ -7135,14 +7516,19 @@ elements.onlineMatchBlackAiModel.value = preferredAIModelId;
 elements.onlineMatchAiModel.value = preferredAIModelId;
 syncAIDialogModelPresentation();
 syncAIMatchModePresentation();
-game = new GoEngine({
-  size: 19,
-  width: 19,
-  height: 19,
-  topology: TOPOLOGY_CYLINDER,
-  komi: 7.5,
-  scoringRule: SCORING_CHINESE,
-});
+const savedGameChoice = savedGameTypeChoice();
+if (savedGameChoice && savedGameChoice.gameType !== GAME_GO) {
+  setPendingGameType(savedGameChoice.gameType, { ruleSet: savedGameChoice.ruleSet });
+  const limits = BOARD_LIMITS[pendingGameType];
+  setPendingDimensions(limits.defaultWidth, limits.defaultHeight);
+} else if (savedGameChoice) {
+  setPendingGameType(GAME_GO, { ruleSet: savedGameChoice.ruleSet });
+} else {
+  syncGameTypeControls();
+}
+// The opening board: 19 × 19 Go on a cylinder (komi 7.5, Chinese rules), or
+// the default board of the game this browser chose last.
+game = createGameFromOptions(getNewGameOptions());
 setSidebarTab("settings");
 buildChatPickers();
 syncLanguageControls();

@@ -394,4 +394,33 @@ export const ENGLISH_STATIC = Object.freeze({
   "待确认加入": "Pending join",
   "选择待确认加入身份": "Choose a pending join identity",
   "待确认建房": "Pending room creation",
+  // Game choice and the Gomoku / Othello rules notes.
+  "棋类": "Game",
+  "全部棋类": "All games",
+  "棋类选择": "Game selection",
+  "选择棋类": "Choose a game",
+  "五子棋规则": "Gomoku rules",
+  "禁手只限制黑方": "Forbidden moves restrict Black only",
+  "黑方先行，双方轮流在空点落一子，不能停一手。":
+    "Black moves first. Players take turns placing one stone on an empty point; passing is not allowed.",
+  "横、竖或斜向连成五子即获胜；连线跨越接缝照样计算。":
+    "Five in a row horizontally, vertically or diagonally wins; rows count across seams.",
+  "自由规则：五子或更长的连线都算获胜，双方都没有禁手。":
+    "Freestyle: five or more in a row wins, and neither side has forbidden moves.",
+  "禁手规则（连珠）：黑方只有恰好五子才获胜，三三、四四和长连都是禁手，落在禁手点会被拒绝；白方没有禁手，长连也算获胜。":
+    "Renju: Black wins only with exactly five; double threes, double fours and overlines are forbidden for Black, and such moves are rejected. White has no forbidden moves, and an overline also wins for White.",
+  "首尾相接成一整圈的同色棋子按长连计算。":
+    "A complete loop of one colour that joins up with itself counts as an overline.",
+  "棋盘下满仍无人连成五子则为和棋。":
+    "If the board fills up without five in a row, the game is a draw.",
+  "开局中央交叉摆放黑白各两子，黑方先行。":
+    "The game starts with two black and two white discs crossed in the centre; Black moves first.",
+  "落子必须沿横、竖或斜向夹住至少一枚对方棋子，夹住的棋子全部翻成己方颜色。":
+    "Each move must outflank at least one opposing disc along a row, column or diagonal; every outflanked disc turns to the mover's colour.",
+  "夹子的直线可以跨越接缝；绕回落子点的一整圈不会翻转任何棋子。":
+    "Outflanking lines continue across seams; a line that loops back to the new disc flips nothing.",
+  "一方无子可下时自动跳过，由另一方继续；双方都无子可下时对局结束。":
+    "A player with no legal move is skipped automatically and the other continues; the game ends when neither side can move.",
+  "终局时棋子多的一方获胜，数量相同为和棋。棋盘宽高须为 6–30 的偶数。":
+    "The player with more discs at the end wins; equal counts are a draw. Board sides must be even, from 6 to 30.",
 });

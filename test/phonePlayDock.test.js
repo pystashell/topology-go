@@ -41,7 +41,7 @@ test("phones dock the move status and play buttons to the viewport bottom", () =
 test("the dock is shown only while this viewer is playing", () => {
   const source = main.slice(main.indexOf("function syncPlayDock()"), main.indexOf("function rememberOfflineGame()"));
   assert.match(main, /syncClockUI\(\);\s*syncPlayDock\(\);\s*\}/u, "updateRoomUI keeps the dock in sync");
-  const element = (hidden = false) => ({ hidden });
+  const element = (hidden = false) => ({ hidden, dataset: { live: "true" } });
   const classes = new Set();
   const context = {
     elements: {
@@ -69,7 +69,12 @@ test("the dock is shown only while this viewer is playing", () => {
   syncPlayDock();
   assert.equal(classes.has("play-docked"), false, "spectators have no moves to make");
   context.player = true;
+  // Gomoku and Othello have no Pass button but still dock while playing.
   context.elements.passButton.hidden = true;
   syncPlayDock();
+  assert.equal(classes.has("play-docked"), true, "games without Pass dock too");
+  context.elements.playControls.dataset.live = "false";
+  syncPlayDock();
   assert.equal(classes.has("play-docked"), false, "scoring and finished games keep the normal layout");
+  assert.match(main, /elements\.playControls\.dataset\.live = String\(playing\);/u);
 });

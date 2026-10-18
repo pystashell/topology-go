@@ -17,6 +17,8 @@ const SOURCES = [
   "src/multiplayer/roomClient.js",
   "src/multiplayer/lobbyClient.js",
 ];
+// src/ui/gameUi.js composes its copy from typed inputs; test/gameUi.test.js
+// renders every sentence it can produce in English instead.
 
 // Literals that are only ever glued into a longer sentence; the full sentence
 // is what the dictionary translates (each is noted where it is composed).
