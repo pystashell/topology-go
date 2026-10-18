@@ -63,6 +63,7 @@ export const SERVER_ERROR_COPY = Object.freeze({
   SCORING_TOGGLE_LIMIT: "本次点目的死子标记次数已达上限，请确认结果或继续对局。",
   UNDO_PENDING: "悔棋申请正在等待回应。",
   UNDO_UNAVAILABLE: "现在不能悔棋。",
+  UNSUPPORTED_FOR_GAME: "这个棋类不支持这个操作。",
   // Chat validation shared by client and room (src/multiplayer/chat.js)
   EMPTY_CHAT: "请输入聊天内容。",
   INVALID_CHAT: "聊天内容格式不正确。",
@@ -122,6 +123,7 @@ export const ENGLISH_SERVER_ERRORS = Object.freeze({
   "本次点目的死子标记次数已达上限，请确认结果或继续对局。":
     "Dead-stone marks for this scoring reached their limit. Confirm the result or resume play.",
   "悔棋申请正在等待回应。": "An undo request is already waiting for a response.",
+  "这个棋类不支持这个操作。": "This game does not support that action.",
   "聊天内容太长，请缩短后再发送。": "That chat message is too long. Shorten it and try again.",
   "聊天内容行数太多，请合并后再发送。": "That chat message has too many lines. Combine them and try again.",
   "联机服务暂时不可用，请稍后重试。": "The online service is unavailable right now. Try again shortly.",
