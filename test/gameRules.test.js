@@ -63,7 +63,7 @@ function scoredGame() {
 }
 
 test("game types, rule sets, limits and errors are fixed constants", () => {
-  assert.equal(ENABLE_MULTI_GAME, false);
+  assert.equal(ENABLE_MULTI_GAME, true);
   assert.deepEqual(GAME_TYPES, ["go", "gomoku", "othello"]);
   assert.deepEqual([GAME_GO, GAME_GOMOKU, GAME_OTHELLO], GAME_TYPES);
   assert.deepEqual(GOMOKU_RULE_SETS, ["freestyle", "renju"]);

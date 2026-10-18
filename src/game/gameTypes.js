@@ -10,10 +10,10 @@ import {
  */
 
 /**
- * Multi-game UI and online support stay hidden until the whole feature
- * (rules, rooms, views and UI) has landed.
+ * Gomoku and Othello are offered next to Go. Turning this off hides the game
+ * pickers and keeps every new game Go (rooms still accept any game).
  */
-export const ENABLE_MULTI_GAME = false;
+export const ENABLE_MULTI_GAME = true;
 
 export const GAME_GO = "go";
 export const GAME_GOMOKU = "gomoku";
