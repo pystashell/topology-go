@@ -66,6 +66,100 @@ function requireCondition(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function randomHex(bytes) {
+  return Array.from(
+    crypto.getRandomValues(new Uint8Array(bytes)),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+/**
+ * Optional Gomoku round: runs only when the server creates Gomoku rooms (a
+ * Go-only server ignores gameType and creates Go; a server without the
+ * Gomoku engine refuses the room). It checks that a page without
+ * multi-game support is refused, then plays a friend round to five.
+ */
+async function runGomokuScenario(host, guest) {
+  let created;
+  try {
+    created = await host.createRoom({
+      name: "Smoke Gomoku Black",
+      gameType: "gomoku",
+      ruleSet: "freestyle",
+      size: 15,
+      topology: "cylinder",
+    });
+  } catch (error) {
+    return { status: "skipped", reason: `create rejected (${error?.code ?? error?.message})` };
+  }
+  if (created.room?.game?.gameType !== "gomoku") {
+    return { status: "skipped", reason: "server does not support Gomoku rooms" };
+  }
+  const roomCode = created.roomCode;
+
+  const legacyJoin = await fetch(new URL(`/api/rooms/${roomCode}/join`, target), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      v: BADUK_PROTOCOL_VERSION,
+      name: "Smoke Old Page",
+      role: "spectator",
+      playerId: crypto.randomUUID(),
+      token: randomHex(32),
+    }),
+  });
+  const legacyPayload = await legacyJoin.json().catch(() => null);
+  requireCondition(
+    legacyJoin.status === 426 && legacyPayload?.code === "PROTOCOL_UPGRADE_REQUIRED",
+    "A page without multi-game support was admitted to a Gomoku room",
+  );
+
+  const guestConnected = waitFor(
+    guest,
+    "connection",
+    ({ status }) => status === "connected",
+    "Gomoku guest WebSocket connection",
+  );
+  const joined = await guest.joinRoom(roomCode, { name: "Smoke Gomoku White" });
+  await guestConnected;
+  requireCondition(joined.color === "white", "Gomoku guest did not take White");
+
+  const invitation = waitFor(guest, "state", ({ room }) =>
+    room?.match?.status === "invited" &&
+    room.match.request?.settings?.gameType === "gomoku", "Gomoku invitation");
+  await host.command("request_game", { mode: "friend", gameType: "gomoku" });
+  const invited = await invitation;
+  const started = [host, guest].map((client) =>
+    waitFor(client, "state", ({ room }) => room?.match?.status === "playing", "Gomoku round start"));
+  await guest.command("respond_game", {
+    accept: true,
+    requestRevision: invited.room.match.request.requestRevision,
+  });
+  await Promise.all(started);
+
+  const playAndSync = async (client, row, col, moveCount, label) => {
+    const synced = [host, guest].map((candidate) =>
+      waitFor(candidate, "state", ({ room }) => room?.moveCount === moveCount, label));
+    await client.command("play", { row, col });
+    return (await Promise.all(synced))[0];
+  };
+  let moveCount = 0;
+  for (let col = 3; col < 7; col += 1) {
+    await playAndSync(host, 7, col, (moveCount += 1), `Gomoku black ${col}`);
+    await playAndSync(guest, 8, col, (moveCount += 1), `Gomoku white ${col}`);
+  }
+  const finished = await playAndSync(host, 7, 7, (moveCount += 1), "Gomoku five");
+  requireCondition(
+    finished.room.game.phase === "finished" &&
+      finished.room.game.result?.reason === "five" &&
+      finished.room.game.result?.winner === "black" &&
+      finished.room.match?.status === "finished" &&
+      finished.room.timeControl?.running !== true,
+    "Five in a row did not end the Gomoku round for Black",
+  );
+  return { status: "passed", roomCode, moveCount, winner: "black", oldPageRefused: true };
+}
+
 async function leaveQuietly(client) {
   if (!client.session) return;
   try {
@@ -80,6 +174,8 @@ const white = makeClient();
 const spectator = makeClient();
 const aiHost = makeClient();
 const aiSpectator = makeClient();
+const gomokuHost = makeClient();
+const gomokuGuest = makeClient();
 
 try {
   const legacyResponse = await fetch(new URL("/api/rooms", target), {
@@ -486,6 +582,8 @@ try {
   });
   await Promise.all([hostSawDirectUndo, spectatorSawDirectUndo]);
 
+  const gomoku = await runGomokuScenario(gomokuHost, gomokuGuest);
+
   console.log(
     JSON.stringify({
       ok: true,
@@ -523,9 +621,12 @@ try {
       onlineAISpectatorSynchronized: true,
       onlineAIDirectUndo: true,
       rectangularOnlineBoard: "9x7",
+      gomoku,
     }),
   );
 } finally {
+  await leaveQuietly(gomokuGuest);
+  await leaveQuietly(gomokuHost);
   await leaveQuietly(aiSpectator);
   await leaveQuietly(aiHost);
   await leaveQuietly(spectator);
