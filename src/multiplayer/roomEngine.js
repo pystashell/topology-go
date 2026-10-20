@@ -24,6 +24,12 @@ import {
 } from "../game/gameTypes.js";
 import { gameTypeOf, rulesFor } from "../game/rules/index.js";
 import {
+  ALL_AI_MODEL_IDS,
+  aiSeatName,
+  defaultAIModelIdForGame,
+  isAIModelIdForGame,
+} from "../ai/modelCatalog.js";
+import {
   advanceTimeControl,
   completeTimeControlTurn,
   createTimeControl,
@@ -118,7 +124,9 @@ const VALID_TOPOLOGIES = new Set([
   TOPOLOGY_TORUS,
   TOPOLOGY_MOBIUS,
 ]);
-const VALID_AI_MODELS = new Set(["b10", "b18"]);
+// KataGo's b10/b18 for Go, "rapfi" for Gomoku, "topo-othello" for Othello.
+// Every check below also asks that the id belongs to the round's game.
+const VALID_AI_MODELS = new Set(ALL_AI_MODEL_IDS);
 const AUTOMATED_WHITE_ID_PREFIX = "__ai_white__";
 // This is a deliberately unreachable credential hash, not a usable token.
 // Persisting the AI as an ordinary white player keeps older releases able to
@@ -297,9 +305,18 @@ function normalizeTopology(value) {
   return topology;
 }
 
-function normalizeAIModelId(value, persisted = false) {
-  const modelId = value ?? "b10";
-  if (typeof modelId !== "string" || !VALID_AI_MODELS.has(modelId)) {
+/**
+ * An AI model id for a game's AI seat: absent means the game's default
+ * (KataGo b10 for Go), and an id of another game is refused like any unknown
+ * one.
+ */
+function normalizeAIModelId(value, persisted = false, gameType = GAME_GO) {
+  const modelId = value ?? defaultAIModelIdForGame(gameType);
+  if (
+    typeof modelId !== "string" ||
+    !VALID_AI_MODELS.has(modelId) ||
+    !isAIModelIdForGame(modelId, gameType)
+  ) {
     throw new RoomEngineError(
       persisted ? "持久化 AI 席位无效。" : "AI 模型无效。",
       persisted ? 500 : 400,
@@ -483,7 +500,7 @@ function gameFromRoundSettings(settings) {
   return rulesFor(normalizeGameType(gameType)).create(gameBoardSettings(settings));
 }
 
-/** Games without an AI offer only friend and same-browser rounds. */
+/** Each game offers only the match modes its rules list. */
 function assertMatchModeForGame(mode, settings) {
   if (!rulesFor(gameTypeOf(settings)).matchModes.includes(mode)) {
     throw new RoomEngineError(
@@ -505,20 +522,26 @@ function timeControlFromRoundSettings(settings, now) {
   );
 }
 
-function controller(kind, operatorId, modelId) {
+function controller(kind, operatorId, modelId, gameType = GAME_GO) {
   return {
     kind,
     operatorId: operatorId ?? null,
-    ...(kind === "ai" ? { modelId: normalizeAIModelId(modelId) } : {}),
+    ...(kind === "ai" ? { modelId: normalizeAIModelId(modelId, false, gameType) } : {}),
   };
 }
 
+/**
+ * Controllers of a round. AI model ids default to (and must belong to) the
+ * round's game: KataGo for Go, Rapfi for Gomoku, the Othello engine for
+ * Othello.
+ */
 function controllersForMode({
   mode,
   hostId,
   whiteId = null,
-  aiModelId = "b10",
+  aiModelId = undefined,
   aiModelIds = null,
+  gameType = GAME_GO,
 }) {
   const blackAIModelId = aiModelIds?.[BLACK] ?? aiModelId;
   const whiteAIModelId = aiModelIds?.[WHITE] ?? aiModelId;
@@ -531,13 +554,13 @@ function controllersForMode({
   if (mode === MATCH_MODE_HUMAN_AI) {
     return {
       [BLACK]: controller("human", hostId),
-      [WHITE]: controller("ai", hostId, whiteAIModelId),
+      [WHITE]: controller("ai", hostId, whiteAIModelId, gameType),
     };
   }
   if (mode === MATCH_MODE_AI_AI) {
     return {
-      [BLACK]: controller("ai", hostId, blackAIModelId),
-      [WHITE]: controller("ai", hostId, whiteAIModelId),
+      [BLACK]: controller("ai", hostId, blackAIModelId, gameType),
+      [WHITE]: controller("ai", hostId, whiteAIModelId, gameType),
     };
   }
   return {
@@ -973,7 +996,7 @@ function migrateSerializedState(value) {
   return state;
 }
 
-function validController(value) {
+function validController(value, gameType = GAME_GO) {
   return Boolean(
     value &&
     typeof value === "object" &&
@@ -982,12 +1005,17 @@ function validController(value) {
       (typeof value.operatorId === "string" &&
         value.operatorId.length > 0 &&
         value.operatorId.length <= 128)) &&
-    (value.kind !== "ai" || VALID_AI_MODELS.has(value.modelId)),
+    (value.kind !== "ai" ||
+      (VALID_AI_MODELS.has(value.modelId) && isAIModelIdForGame(value.modelId, gameType))),
   );
 }
 
 function validateMatchState(state) {
   const match = state.match;
+  // The round's controllers drive the stored game; an invitation's drive the
+  // game it proposes.
+  const gameType = gameTypeOf(state.game);
+  const requestGameType = gameTypeOf(match?.request?.settings);
   if (
     !match ||
     typeof match !== "object" ||
@@ -995,8 +1023,8 @@ function validateMatchState(state) {
     match.roundId < 0 ||
     !VALID_MATCH_STATUSES.has(match.status) ||
     !VALID_MATCH_MODES.has(match.mode) ||
-    !validController(match.controllers?.[BLACK]) ||
-    !validController(match.controllers?.[WHITE]) ||
+    !validController(match.controllers?.[BLACK], gameType) ||
+    !validController(match.controllers?.[WHITE], gameType) ||
     (match.aiAutoplayPaused !== undefined &&
       (typeof match.aiAutoplayPaused !== "boolean" ||
         (match.aiAutoplayPaused && match.mode !== MATCH_MODE_AI_AI))) ||
@@ -1020,8 +1048,8 @@ function validateMatchState(state) {
       typeof request.requestedBy !== "string" ||
       !VALID_MATCH_MODES.has(request.mode) ||
       request.mode !== MATCH_MODE_FRIEND ||
-      !validController(request.controllers?.[BLACK]) ||
-      !validController(request.controllers?.[WHITE]) ||
+      !validController(request.controllers?.[BLACK], requestGameType) ||
+      !validController(request.controllers?.[WHITE], requestGameType) ||
       !Number.isFinite(request.requestedAt) ||
       !request.settings ||
       typeof request.settings !== "object"
@@ -1145,7 +1173,9 @@ function validateSerializedState(state) {
             "BAD_ROOM_STATE",
           );
         }
-        normalizeAIModelId(member.modelId, true);
+        // An AI seat member belongs to the stored round's game (a legacy
+        // new_game into another game re-assigns it; see applyAction).
+        normalizeAIModelId(member.modelId, true, gameTypeOf(state.game));
       }
     } else if (member.role === "spectator" && member.color === null) {
       spectators += 1;
@@ -2261,7 +2291,8 @@ export class RoomEngine {
     if (action === "attach_ai") {
       this.requireHost(member);
       this.assertSeatsUnlocked();
-      const modelId = normalizeAIModelId(payload.modelId);
+      const gameType = this.currentGameType();
+      const modelId = normalizeAIModelId(payload.modelId, false, gameType);
       const existingAutomated = this.automatedPlayer();
       if (!existingAutomated && this.nextOpenColor() !== WHITE) {
         throw new RoomEngineError(
@@ -2272,7 +2303,7 @@ export class RoomEngine {
       }
       if (existingAutomated) {
         const previousModelId = existingAutomated.modelId;
-        existingAutomated.name = `KataGo ${modelId} AI`;
+        existingAutomated.name = aiSeatName(modelId);
         existingAutomated.controllerId = member.playerId;
         existingAutomated.modelId = modelId;
         existingAutomated.lastSeenAt = now;
@@ -2295,7 +2326,7 @@ export class RoomEngine {
         }
         const automated = {
           playerId: automatedId,
-          name: `KataGo ${modelId} AI`,
+          name: aiSeatName(modelId),
           tokenHash: AUTOMATED_TOKEN_HASH,
           role: "player",
           color: WHITE,
@@ -2322,6 +2353,7 @@ export class RoomEngine {
           mode: MATCH_MODE_HUMAN_AI,
           hostId: member.playerId,
           aiModelId: modelId,
+          gameType,
         });
       }
     } else if (action === "detach_ai") {
@@ -2919,13 +2951,26 @@ export class RoomEngine {
       );
       const settings = normalizeRoundSettings(payload, this.game, this.state.timeControl);
       assertMatchModeForGame(legacyMode, settings);
+      const gameType = gameTypeOf(settings);
+      const automated = this.automatedPlayer();
+      // A legacy AI seat keeps its model while the game stays the same; a
+      // round of another game seats that game's own engine instead.
+      const automatedModelId = isAIModelIdForGame(automated?.modelId, gameType)
+        ? automated.modelId
+        : undefined;
       const controllers = controllersForMode({
         mode: legacyMode,
         hostId: member.playerId,
         whiteId: this.humanWhitePlayer()?.playerId ?? null,
-        aiModelId: payload.aiModelId ?? this.automatedPlayer()?.modelId ?? "b10",
+        aiModelId: payload.aiModelId ?? automatedModelId,
         aiModelIds: payload.aiModelIds,
+        gameType,
       });
+      if (automated && automatedModelId === undefined) {
+        const modelId = controllers[WHITE].modelId ?? defaultAIModelIdForGame(gameType);
+        automated.modelId = modelId;
+        automated.name = aiSeatName(modelId);
+      }
       this.startRound({ settings, mode: legacyMode, controllers, now });
       move = { ok: true, type: "new_game", phase: PHASE_PLAY };
       }
@@ -3588,8 +3633,9 @@ export class RoomEngine {
       mode,
       hostId: member.playerId,
       whiteId: this.humanWhitePlayer()?.playerId ?? null,
-      aiModelId: payload.aiModelId ?? "b10",
+      aiModelId: payload.aiModelId,
       aiModelIds: payload.aiModelIds,
+      gameType: gameTypeOf(settings),
     });
     if (mode !== MATCH_MODE_FRIEND) {
       const occupiedWhite = this.state.members.find(

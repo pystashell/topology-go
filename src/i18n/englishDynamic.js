@@ -27,6 +27,33 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "黑方禁手：四四。": "Forbidden for Black: double four.",
   "黑方禁手：三三。": "Forbidden for Black: double three.",
   "必须夹住至少一枚对方棋子。": "A move must outflank at least one disc.",
+  // Gomoku and Othello AI engines and levels (src/ai/gameAiRegistry.js).
+  "拓扑黑白棋 AI": "Topology Othello AI",
+  "简单": "Easy",
+  "普通": "Normal",
+  "困难": "Hard",
+  "AI 难度": "AI difficulty",
+  "白方 AI 难度": "White AI difficulty",
+  "黑方 AI 难度": "Black AI difficulty",
+  "AI 在房主浏览器中思考，难度只影响思考时间和搜索深度":
+    "The AI thinks in the host browser; difficulty only changes its thinking time and search depth",
+  "AI 对 AI 时黑白双方可分别选择难度": "In AI vs AI, Black and White can have different difficulties",
+  "AI 在房主浏览器中运行，服务器只验证并同步棋步": "The AI runs in the host browser; the server only validates and syncs its moves",
+  "观看 AI 控制黑白双方": "Watch the AI play both Black and White",
+  "和 AI 下一盘": "Play a game against the AI",
+  "调整房间里的 AI": "Adjust the room's AI",
+  "AI 在浏览器后台按当前棋盘的接缝规则选择落点。无需账号或第三方 API，服务器不承担推理。":
+    "The AI chooses its moves in a background worker by this board's seam rules. No account or third-party API is needed, and the server does no inference.",
+  "AI 在浏览器后台运行，无需下载大型模型；每一手都按当前棋盘的接缝规则检查。":
+    "The AI runs in a background worker without a large model download; every move is checked against this board's seam rules.",
+  "简单会留出机会，普通会抓住明显的胜负手，困难会多看对方的一手应对。":
+    "Easy leaves openings, Normal takes the clear winning and saving moves, and Hard also weighs the opponent's best reply.",
+  "这个棋类暂不支持 AI。": "This game does not support AI yet.",
+  "AI 返回了无法提交的在线棋步。": "The AI returned an online move that could not be submitted.",
+  "把邀请链接发给朋友，或让 AI 接替空缺的白方座位。":
+    "Share the invitation link, or let the AI take the open White seat.",
+  "已退出 AI 对局并保留当前棋局；现在可以本地轮流落子，或重新开始 AI 对局。":
+    "The AI game ended but the position was kept. You can continue locally or start another AI game.",
   // Game names, rule sets and results shown by src/ui/gameUi.js.
   "围棋": "Go",
   "五子棋": "Gomoku",
@@ -803,7 +830,8 @@ export const ENGLISH_PATTERNS = Object.freeze([
   },
   {
     pattern: /^AI · (黑方|白方) · (.+)$/u,
-    replace: (_, color, model) => `AI · ${capturedPhrase(color)} · ${model}`,
+    // A KataGo model ("b10") or a Gomoku/Othello difficulty ("普通").
+    replace: (_, color, model) => `AI · ${capturedPhrase(color)} · ${capturedPhrase(model)}`,
   },
   {
     pattern: /^(.+) 正在思考。你仍可旋转或切换视图。$/u,
@@ -1105,6 +1133,15 @@ export const ENGLISH_PATTERNS = Object.freeze([
       `${capturedPhrase(winner)} wins by ${margin} point${margin === "1" ? "" : "s"}${punctuated ? "." : ""}`,
   },
   { pattern: /^等待(.+)落子。$/u, replace: (_, color) => `Waiting for ${capturedPhrase(color)}.` },
+  // "<AI> 准备落子" (an AI's turn card) before the generic "<colour>落子".
+  {
+    pattern: /^(黑方|白方) AI 准备落子$/u,
+    replace: (_, color) => `${capturedTerm(color)} AI is ready to move`,
+  },
+  {
+    pattern: /^(.+?) 准备落子$/u,
+    replace: (_, ai) => `${capturedPhrase(ai)} is ready to move`,
+  },
   { pattern: /^(.+)落子$/u, replace: (_, color) => `${capturedPhrase(color)} to play` },
   { pattern: /^(.+)落子。$/u, replace: (_, color) => `${capturedPhrase(color)} plays.` },
   { pattern: /^(.+)落子，提掉 (\d+) 子。$/u, replace: (_, color, count) => `${capturedPhrase(color)} plays and captures ${count} stone${count === "1" ? "" : "s"}.` },
@@ -1299,6 +1336,52 @@ export const ENGLISH_PATTERNS = Object.freeze([
   {
     pattern: /^这份 SGF 不是围棋棋谱（GM\[(.*)\]）；目前只能导入围棋 SGF。$/u,
     replace: "This SGF file is not a Go record (GM[$1]); only Go SGF files can be imported for now.",
+  },
+  // Gomoku and Othello AI (src/main.js): the engine's name ("Rapfi",
+  // "拓扑黑白棋 AI") and difficulty are captured. Kept after the KataGo and
+  // colour-specific sentences above, which they would otherwise shadow.
+  {
+    pattern: /^(.+) · (简单|普通|困难)$/u,
+    replace: (_, engine, level) => `${capturedPhrase(engine)} · ${capturedTerm(level)}`,
+  },
+  {
+    pattern: /^(简单|普通|困难) \/ (简单|普通|困难)$/u,
+    replace: (_, black, white) => `${capturedTerm(black)} / ${capturedTerm(white)}`,
+  },
+  {
+    pattern: /^(.+) · 自对弈$/u,
+    replace: (_, engine) => `${capturedPhrase(engine)} · self-play`,
+  },
+  {
+    pattern: /^(.+?) (正在思考|准备落子)$/u,
+    replace: (_, engine, state) =>
+      `${capturedPhrase(engine)} ${state === "正在思考" ? "is thinking" : "is ready to move"}`,
+  },
+  {
+    pattern: /^正在把 (.+) 接入在线白方座位…$/u,
+    replace: (_, engine) => `Attaching ${capturedPhrase(engine)} to the online White seat…`,
+  },
+  {
+    pattern: /^和 (.+) 对弈，朋友可以观战$/u,
+    replace: (_, engine) => `Play ${capturedPhrase(engine)} while friends spectate`,
+  },
+  {
+    pattern: /^(.+) 同时控制黑白双方$/u,
+    replace: (_, engine) => `${capturedPhrase(engine)} controls both Black and White`,
+  },
+  {
+    pattern: /^(.+) 在浏览器运行，朋友可以观战$/u,
+    replace: (_, engine) => `${capturedPhrase(engine)} runs in the browser while friends spectate`,
+  },
+  {
+    pattern: /^(.+) 正在房主浏览器中思考；服务器会验证并同步棋步。$/u,
+    replace: (_, engine) =>
+      `${capturedPhrase(engine)} is thinking in the host browser; the server will validate and sync the move.`,
+  },
+  {
+    pattern: /^(.+) 已选好落点，正在由服务器验证并同步…$/u,
+    replace: (_, engine) =>
+      `${capturedPhrase(engine)} chose its move. The server is validating and syncing it…`,
   },
   // Generic fallbacks: keep these last so the specific sentences win.
   {

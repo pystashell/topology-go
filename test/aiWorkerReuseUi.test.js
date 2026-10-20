@@ -25,6 +25,10 @@ function harness() {
     aiThinking: false,
     aiWorkerContext: null,
     aiGameActive: false,
+    gameAICancels: [],
+    // Recorded as plain JSON: objects made inside the vm context are not
+    // deep-equal to this realm's literals.
+    cancelGameAITurn: (options) => context.gameAICancels.push(JSON.stringify(options)),
     isAIMode: () => context.aiGameActive,
     isOnlineAIController: () => false,
     elements: { boardStage: { removeAttribute() {} } },
@@ -52,6 +56,8 @@ test("an idle AI worker survives the end of a game for the next one", () => {
   assert.equal(ai.context.aiWorker.name, "first");
   assert.equal(ai.context.aiWorkerModelId, "b10");
   assert.equal(ai.context.aiRequestId, 1, "replies to the cancelled request are ignored");
+  // Gomoku and Othello engines are cancelled too, and keep their worker.
+  assert.deepEqual(ai.context.gameAICancels, ['{"terminate":false}']);
 });
 
 test("busy, failed or explicitly released workers are terminated", () => {
@@ -65,6 +71,7 @@ test("busy, failed or explicitly released workers are terminated", () => {
   const released = harness();
   released.cancelAIThinking({ terminate: true });
   assert.deepEqual(released.terminated, ["first"]);
+  assert.deepEqual(released.context.gameAICancels, ['{"terminate":true}']);
 });
 
 test("a kept worker is released after a long idle stretch outside AI games", () => {
