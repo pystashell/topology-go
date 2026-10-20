@@ -84,3 +84,33 @@ SOFTWARE.
 
 TensorFlow.js is distributed under the Apache License 2.0. Its packages retain
 their own license files in the npm distribution.
+
+## Rapfi Gomoku engine
+
+The Gomoku AI runs [Rapfi](https://github.com/dhbloo/rapfi), a Gomoku/Renju
+engine by the Rapfi developers, compiled to WebAssembly:
+`public/engines/rapfi/rapfi-single-simd128.mjs` and
+`public/engines/rapfi/rapfi-single-simd128.wasm`. Rapfi is free software
+under the GNU General Public License, version 3 or later; the license text is
+distributed beside the engine as `public/engines/rapfi/COPYING` (served at
+`/engines/rapfi/COPYING`).
+
+The binaries are built, without modifications to the source, from upstream
+commit
+[`3c94c2a976f24a0dd1c5517623e9ab6fffe66bd7`](https://github.com/dhbloo/rapfi/tree/3c94c2a976f24a0dd1c5517623e9ab6fffe66bd7)
+by `scripts/build-rapfi.sh` (Emscripten 6.0.13). The corresponding source is
+served next to the binaries: `/engines/rapfi/rapfi-source-3c94c2a.tar.gz`
+(the upstream tree, including its bundled libraries under their own
+licenses), `/engines/rapfi/build-rapfi.sh` and `/engines/rapfi/SOURCE.md`
+(exact build settings and artifact checksums). The app talks to the engine
+only through its Piskvork text protocol (`src/ai/gomoku/rapfiBridge.js`).
+
+## Rapfi networks
+
+`public/engines/rapfi/mix9svqfreestyle_bsmix.bin.lz4`,
+`mix9svqrenju_bs15_black.bin.lz4`, `mix9svqrenju_bs15_white.bin.lz4` and
+`model210901.bin` are unchanged weight files from
+[dhbloo/rapfi-networks](https://github.com/dhbloo/rapfi-networks) at commit
+`e32ad77a5364363b3e3a02b3f9e8610ade19ea98`, released under CC0 1.0 Universal
+(`public/engines/rapfi/NETWORKS_LICENSE.txt`). They are credited here even
+though attribution is not required.
