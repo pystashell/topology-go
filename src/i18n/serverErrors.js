@@ -79,6 +79,15 @@ export const SERVER_ERROR_COPY = Object.freeze({
   HTTP_ERROR: "联机服务暂时不可用，请稍后重试。",
   SYNC_TIMEOUT: "房间同步超时，正在重新连接。",
   ACK_TIMEOUT: "等待服务器确认超时。",
+  // Gomoku and Othello AI workers (src/ai/gameAiClient.js)
+  AI_SEARCH_CANCELLED: "AI 思考已取消。",
+  AI_TIMEOUT: "AI 思考超时，已重新启动 AI。",
+  AI_WORKER_FAILED: "AI 思考线程没有正常启动。",
+  AI_UNSUPPORTED: "当前浏览器不支持后台 AI 计算。",
+  AI_ENGINE_ERROR: "AI 思考时发生错误。",
+  AI_ILLEGAL_MOVE: "AI 返回了不合规则的落点。",
+  AI_NO_LEGAL_MOVE: "AI 找不到可以下的点。",
+  AI_BAD_POSITION: "AI 无法读取当前棋局。",
 });
 
 /** English for the copy above that is not already in the main dictionary. */
@@ -128,6 +137,10 @@ export const ENGLISH_SERVER_ERRORS = Object.freeze({
   "聊天内容行数太多，请合并后再发送。": "That chat message has too many lines. Combine them and try again.",
   "联机服务暂时不可用，请稍后重试。": "The online service is unavailable right now. Try again shortly.",
   "房间同步超时，正在重新连接。": "The room did not sync in time. Reconnecting.",
+  "AI 思考已取消。": "The AI stopped thinking.",
+  "AI 思考超时，已重新启动 AI。": "The AI took too long and was restarted.",
+  "AI 返回了不合规则的落点。": "The AI returned a move that breaks the rules.",
+  "AI 找不到可以下的点。": "The AI found no legal point to play.",
 });
 
 /**

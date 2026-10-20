@@ -242,11 +242,22 @@
                 <label id="online-match-ai-model-field" class="input-row" for="online-match-ai-model" hidden>
                   <span>
                     <strong>白方 AI</strong>
-                    <small>b18 更强，但下载和显存占用明显更高</small>
+                    <small id="online-match-ai-model-note">b18 更强，但下载和显存占用明显更高</small>
                   </span>
                   <select id="online-match-ai-model">
                     <option value="b10">b10 · 快速</option>
                     <option value="b18">b18 · 增强（高耗资源）</option>
+                  </select>
+                </label>
+                <label id="online-match-ai-level-field" class="input-row" for="online-match-ai-level" hidden>
+                  <span>
+                    <strong>白方 AI 难度</strong>
+                    <small>AI 在房主浏览器中思考，难度只影响思考时间和搜索深度</small>
+                  </span>
+                  <select id="online-match-ai-level">
+                    <option value="easy">简单</option>
+                    <option value="normal" selected>普通</option>
+                    <option value="hard">困难</option>
                   </select>
                 </label>
                 <label id="online-match-black-ai-model-field" class="input-row" for="online-match-black-ai-model" hidden>
@@ -257,6 +268,17 @@
                   <select id="online-match-black-ai-model">
                     <option value="b10">b10 · 快速</option>
                     <option value="b18">b18 · 增强（高耗资源）</option>
+                  </select>
+                </label>
+                <label id="online-match-black-ai-level-field" class="input-row" for="online-match-black-ai-level" hidden>
+                  <span>
+                    <strong>黑方 AI 难度</strong>
+                    <small>AI 对 AI 时黑白双方可分别选择难度</small>
+                  </span>
+                  <select id="online-match-black-ai-level">
+                    <option value="easy">简单</option>
+                    <option value="normal" selected>普通</option>
+                    <option value="hard">困难</option>
                   </select>
                 </label>
               </section>
@@ -835,7 +857,7 @@
         <div class="invite-choice-group" role="group" aria-labelledby="invite-choice-title">
           <h3 id="invite-choice-title">选择对手</h3>
           <div class="invite-choice-grid">
-            <button id="invite-ai" class="invite-choice" type="button" data-game-only="go">
+            <button id="invite-ai" class="invite-choice" type="button">
               <span class="invite-choice-icon" aria-hidden="true">AI</span>
               <span>
                 <strong>与 AI 对弈</strong>
@@ -856,15 +878,14 @@
                 <small>两个人在同一台设备轮流落子</small>
               </span>
             </button>
-            <button id="invite-self-play" class="invite-choice" type="button" data-game-only="go">
+            <button id="invite-self-play" class="invite-choice" type="button">
               <span class="invite-choice-icon" aria-hidden="true">AI²</span>
               <span>
                 <strong>AI 自对弈</strong>
-                <small>观看 KataGo 控制黑白双方</small>
+                <small>观看 AI 控制黑白双方</small>
               </span>
             </button>
           </div>
-          <p class="invite-ai-note" data-game-only="gomoku othello" hidden>五子棋和黑白棋暂不支持 AI，请选择好友或本地双人对局。</p>
         </div>
 
         <div class="dialog-actions">
@@ -981,6 +1002,24 @@
           </select>
         </label>
 
+        <label id="ai-black-level-field" class="dialog-field" for="ai-black-level" hidden>
+          <span>黑方 AI 难度</span>
+          <select id="ai-black-level">
+            <option value="easy">简单</option>
+            <option value="normal" selected>普通</option>
+            <option value="hard">困难</option>
+          </select>
+        </label>
+
+        <label id="ai-level-field" class="dialog-field" for="ai-level" hidden>
+          <span>AI 难度</span>
+          <select id="ai-level">
+            <option value="easy">简单</option>
+            <option value="normal" selected>普通</option>
+            <option value="hard">困难</option>
+          </select>
+        </label>
+
         <div id="ai-model-warning" class="ai-model-warning" role="status">
           <strong id="ai-model-warning-title"></strong>
           <span id="ai-model-warning-resource"></span>
@@ -995,7 +1034,7 @@
           </select>
         </label>
 
-        <p class="ai-level-note">模型会被浏览器缓存，不会每手重新下载。官方普通围棋网络达到职业级以上，但竹筒、甜甜圈与莫比乌斯棋力无法诚实换算成人类几段。</p>
+        <p id="ai-level-note" class="ai-level-note">模型会被浏览器缓存，不会每手重新下载。官方普通围棋网络达到职业级以上，但竹筒、甜甜圈与莫比乌斯棋力无法诚实换算成人类几段。</p>
         <div class="dialog-actions">
           <button id="cancel-ai" class="secondary-button" type="button">取消</button>
           <button id="start-ai" class="primary-button" type="submit">开始对局</button>

@@ -224,12 +224,19 @@ export const gomokuRules = Object.freeze({
     scoring: false,
     undo: true,
     resign: true,
-    ai: false,
+    ai: true,
     analysis: false,
     sgf: false,
   }),
   roomActions: readonlySet(NON_GO_ROOM_ACTIONS),
-  matchModes: Object.freeze([MATCH_MODES.FRIEND, MATCH_MODES.LOCAL]),
+  // AI rounds run the game's own engine in the host browser (see
+  // src/ai/gameAiRegistry.js); the room only validates and syncs its moves.
+  matchModes: Object.freeze([
+    MATCH_MODES.FRIEND,
+    MATCH_MODES.HUMAN_AI,
+    MATCH_MODES.AI_AI,
+    MATCH_MODES.LOCAL,
+  ]),
   normalizeSettings,
   create,
   fromState,

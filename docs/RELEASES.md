@@ -48,7 +48,8 @@ GitHub Release 正文会记录 commit、来源分支和两个 Cloudflare ID。�
 - 回滚到只支持围棋的版本时，schema 3 房间会按“未知 schema”处理：停止该房间服务（`ROOM_RESTORE_FAILED`）并保留原始存储，不会删档或误读；重新部署多棋类版本后原样恢复。围棋房间不受影响。房间切回围棋后，只要存档里还有其他棋类的对局，就仍保持 schema 3。
 - 因此回滚前应确认没有进行中的五子棋/黑白棋对局，或接受这些房间在回滚期间暂停；不要为了“修复”而手工改写 `schemaVersion`。
 - 旧页面不认识其他棋类，只会回传局面令牌。新页面建房和加入时发送 `multiGame: true`，在其他棋类的房间里落子、认输、申请悔棋以及接受其他棋类的邀请时携带 `gameType`；缺少时房间返回 426 `PROTOCOL_UPGRADE_REQUIRED`，旧页面加入此类房间同样收到 426，提示刷新。围棋房间对旧页面的行为不变，WebSocket 子协议和 `BADUK_PROTOCOL_VERSION` 不变。
-- 其他棋类只支持好友对局和同机对局；`pass`、点目和 AI 相关操作返回 409 `UNSUPPORTED_FOR_GAME`，AI 对局模式返回 400 `UNSUPPORTED_FOR_GAME`。
+- 五子棋和黑白棋同样支持好友、人机（`human-ai`）、AI 自对弈（`ai-ai`）和同机对局。AI 与围棋的 KataGo 一样在房主浏览器中运行，房间只校验并同步它的落子。AI 模型 ID 按棋类区分：围棋 `b10`/`b18`，五子棋 `rapfi`，黑白棋 `topo-othello`；请求中的跨棋类 ID 返回 400 `BAD_REQUEST`，存档中的跨棋类 ID 视为损坏（`BAD_ROOM_STATE`）。这些棋类的 `ai_play` 必须携带 `gameType`，否则返回 426 `PROTOCOL_UPGRADE_REQUIRED`。`pass`、`ai_pass` 和点目操作仍返回 409 `UNSUPPORTED_FOR_GAME`。
+- 回滚到不认识 `rapfi`/`topo-othello` 的版本时，存有五子棋或黑白棋 AI 对局的房间会恢复失败：停止该房间服务（`ROOM_RESTORE_FAILED`）并保留原始存储，重新部署后原样恢复。围棋房间不受影响。
 - 发布后可用 `npm run test:live -- <地址>` 验证；服务器支持五子棋房间时，冒烟脚本还会验证旧页面被拒绝并下完一局五连，否则在输出中标记 `"gomoku": {"status": "skipped"}`。
 
 只读查看计划（允许工作区尚未提交）：

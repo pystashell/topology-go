@@ -174,16 +174,18 @@ test("Go keeps every action, mode and capability", () => {
 test("Gomoku and Othello declare their capabilities, actions and defaults", () => {
   for (const gameType of [GAME_GOMOKU, GAME_OTHELLO]) {
     const rules = rulesFor(gameType);
-    assert.deepEqual(rules.matchModes, ["friend", "local"]);
+    assert.deepEqual(rules.matchModes, ["friend", "human-ai", "ai-ai", "local"]);
     assert.deepEqual(
       { ...rules.capabilities },
-      { pass: false, scoring: false, undo: true, resign: true, ai: false, analysis: false, sgf: false },
+      { pass: false, scoring: false, undo: true, resign: true, ai: true, analysis: false, sgf: false },
     );
-    for (const action of ["pass", "toggle_dead", "finish_scoring", "resume_play",
-      "attach_ai", "ai_play", "direct_undo_ai_move"]) {
+    // An AI never passes in these games; KataGo analysis stays Go's.
+    for (const action of ["pass", "ai_pass", "toggle_dead", "finish_scoring", "resume_play"]) {
       assert.equal(rules.roomActions.has(action), false, `${gameType} ${action}`);
     }
-    for (const action of ["play", "resign", "request_undo", "new_game", "chat", "sync", "leave"]) {
+    for (const action of ["play", "resign", "request_undo", "new_game", "chat", "sync", "leave",
+      "attach_ai", "detach_ai", "ai_play", "set_ai_autoplay_paused",
+      "direct_undo_ai_round", "direct_undo_ai_move"]) {
       assert.equal(rules.roomActions.has(action), true, `${gameType} ${action}`);
     }
   }
