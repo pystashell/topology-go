@@ -27,6 +27,11 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "黑方禁手：四四。": "Forbidden for Black: double four.",
   "黑方禁手：三三。": "Forbidden for Black: double three.",
   "必须夹住至少一枚对方棋子。": "A move must outflank at least one disc.",
+  // Gomoku and Othello AI engines and levels (src/ai/gameAiRegistry.js).
+  "拓扑黑白棋 AI": "Topology Othello AI",
+  "简单": "Easy",
+  "普通": "Normal",
+  "困难": "Hard",
   // Game names, rule sets and results shown by src/ui/gameUi.js.
   "围棋": "Go",
   "五子棋": "Gomoku",
