@@ -18,3 +18,10 @@
 /assets/katagoWorker-*
   ! Content-Security-Policy
   Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+
+# The Gomoku AI worker compiles the Rapfi engine (public/engines/rapfi/, built
+# by scripts/build-rapfi.sh without JS eval) as WebAssembly. Same narrow
+# grant as the KataGo worker: 'wasm-unsafe-eval' for this worker only.
+/assets/gomokuAiWorker-*
+  ! Content-Security-Policy
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
