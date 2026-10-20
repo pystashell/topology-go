@@ -71,10 +71,26 @@ import {
 } from "./game/timeControl.js";
 import {
   DEFAULT_AI_MODEL_ID,
+  aiSeatName,
+  defaultAIModelIdForGame,
   formatModelDownloadProgress,
   getAIModel,
+  isAIModelIdForGame,
   normalizeAIModelId,
+  normalizeGameAIModelId,
 } from "./ai/modelCatalog.js";
+import {
+  GAME_AI_LEVEL_LABELS,
+  gameAiEntry,
+  gameAiSettings,
+  normalizeGameAiLevel,
+  usesGameAiProtocol,
+} from "./ai/gameAiRegistry.js";
+import {
+  GAME_AI_ERRORS,
+  createGameAi,
+  gameAiPosition,
+} from "./ai/gameAiClient.js";
 import {
   AI_MATCH_SELF_PLAY,
   isAIControlledColor,
@@ -252,8 +268,13 @@ const elements = {
   onlineMatchMode: $("#online-match-mode"),
   onlineMatchAiModelField: $("#online-match-ai-model-field"),
   onlineMatchAiModel: $("#online-match-ai-model"),
+  onlineMatchAiModelNote: $("#online-match-ai-model-note"),
   onlineMatchBlackAiModelField: $("#online-match-black-ai-model-field"),
   onlineMatchBlackAiModel: $("#online-match-black-ai-model"),
+  onlineMatchAiLevelField: $("#online-match-ai-level-field"),
+  onlineMatchAiLevel: $("#online-match-ai-level"),
+  onlineMatchBlackAiLevelField: $("#online-match-black-ai-level-field"),
+  onlineMatchBlackAiLevel: $("#online-match-black-ai-level"),
   timeControlPreset: $("#time-control-preset"),
   customTimeFields: $("#custom-time-fields"),
   mainTimeMinutes: $("#main-time-minutes"),
@@ -363,6 +384,11 @@ const elements = {
   aiModel: $("#ai-model"),
   aiBlackModelField: $("#ai-black-model-field"),
   aiBlackModel: $("#ai-black-model"),
+  aiLevelField: $("#ai-level-field"),
+  aiLevel: $("#ai-level"),
+  aiBlackLevelField: $("#ai-black-level-field"),
+  aiBlackLevel: $("#ai-black-level"),
+  aiLevelNote: $("#ai-level-note"),
   aiModelWarning: $("#ai-model-warning"),
   aiModelWarningTitle: $("#ai-model-warning-title"),
   aiModelWarningResource: $("#ai-model-warning-resource"),
@@ -489,6 +515,13 @@ let aiGameModelIds = {
   [BLACK]: DEFAULT_AI_MODEL_ID,
   [WHITE]: DEFAULT_AI_MODEL_ID,
 };
+// Gomoku and Othello AI difficulty per colour (local games; the online host
+// reads its own level selects). Their engines live in gameAiClients.
+let aiGameLevels = {
+  [BLACK]: "normal",
+  [WHITE]: "normal",
+};
+const gameAiClients = new Map();
 let aiThinking = false;
 let aiWorker = null;
 let aiWorkerModelId = null;
@@ -525,6 +558,7 @@ const CHAT_EMOJIS = Object.freeze([
 const PLAYER_NAME_KEY = "bamboo-baduk-player-name";
 const SOUND_ENABLED_KEY = "3d-baduk-sound-enabled";
 const AI_MODEL_KEY = "3d-baduk-ai-model";
+const GAME_AI_LEVEL_KEY = "3d-baduk-game-ai-level-v1";
 // The lobby refreshes itself while it is on screen. 3 reads a minute stays
 // far below the server's per-IP lobby budget (~120 GETs a minute).
 const LOBBY_POLL_INTERVAL_MS = 20_000;
@@ -558,6 +592,103 @@ function rememberPreferredAIModel() {
   }
 }
 
+function savedGameAILevel() {
+  try {
+    return normalizeGameAiLevel(window.localStorage.getItem(GAME_AI_LEVEL_KEY));
+  } catch {
+    return normalizeGameAiLevel(null);
+  }
+}
+
+function rememberGameAILevel(level) {
+  try {
+    window.localStorage.setItem(GAME_AI_LEVEL_KEY, normalizeGameAiLevel(level));
+  } catch {
+    // The level remains usable for this tab when storage is unavailable.
+  }
+}
+
+/**
+ * The game an AI dialog or online AI setup is about: the live room game, or
+ * the board being prepared in the settings.
+ */
+function aiSetupGameType() {
+  return hasOnlineSession() && !isNextGameSetup() ? gameTypeOf(game) : pendingGameType;
+}
+
+/** "KataGo" for Go, else the engine's (Chinese source) name, e.g. "Rapfi". */
+function aiEngineName(gameType = gameTypeOf(game)) {
+  return usesGameAiProtocol(gameType) ? gameAiEntry(gameType).sourceName : "KataGo";
+}
+
+function aiLevelLabel(level) {
+  return GAME_AI_LEVEL_LABELS[normalizeGameAiLevel(level)];
+}
+
+const ONLINE_GO_MODEL_LABELS = Object.freeze({
+  b10: "b10 · 快速",
+  b18: "b18 · 增强（高耗资源）",
+});
+
+/**
+ * Offer a game's AI in a model picker: KataGo's b10/b18 for Go, the game's
+ * own engine otherwise. Labels are Chinese source copy (the page translates).
+ */
+function syncAIModelSelectOptions(select, gameType, { online = false } = {}) {
+  if (!select) return;
+  const key = usesGameAiProtocol(gameType) ? gameType : GAME_GO;
+  if (select.dataset.aiGame === key) return;
+  const previous = select.value;
+  const choices = key === GAME_GO
+    ? ["b10", "b18"].map((id) => ({
+        value: id,
+        text: online ? ONLINE_GO_MODEL_LABELS[id] : getAIModel(id).optionLabel,
+      }))
+    : [{ value: defaultAIModelIdForGame(key), text: gameAiEntry(key).sourceName }];
+  select.replaceChildren(...choices.map(({ value, text }) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    return option;
+  }));
+  select.dataset.aiGame = key;
+  select.value = choices.some(({ value }) => value === previous) ? previous : choices[0].value;
+}
+
+/** The Gomoku/Othello AI client of a game, created on first use and reused. */
+function gameAIFor(gameType) {
+  let client = gameAiClients.get(gameType);
+  if (!client) {
+    client = createGameAi(gameType);
+    gameAiClients.set(gameType, client);
+  }
+  return client;
+}
+
+/**
+ * Stop a Gomoku or Othello AI turn in progress. The worker is kept for the
+ * next move or game unless terminate asks to release it.
+ */
+function cancelGameAITurn({ terminate = false } = {}) {
+  for (const client of gameAiClients.values()) {
+    if (terminate) client.dispose();
+    else client.cancel();
+  }
+}
+
+/** A local Gomoku/Othello AI's level for a colour. */
+function localAILevel(color = game?.currentPlayer) {
+  return normalizeGameAiLevel(aiGameLevels[color]);
+}
+
+/** The online host's level for an AI colour (host-local, never sent). */
+function onlineAILevel(color = game?.currentPlayer) {
+  const select = color === BLACK && onlineRoom?.match?.mode === ONLINE_MODE_AI_AI
+    ? elements.onlineMatchBlackAiLevel
+    : elements.onlineMatchAiLevel;
+  return normalizeGameAiLevel(select?.value);
+}
+
 function browserSupportsAIModel(modelId) {
   const model = getAIModel(modelId);
   return !model.requiresWebGPU || Boolean(window.navigator?.gpu);
@@ -565,6 +696,20 @@ function browserSupportsAIModel(modelId) {
 
 function syncAIDialogModelPresentation() {
   const mode = normalizeAIMatchMode(elements.aiMatchMode.value);
+  const gameType = aiSetupGameType();
+  if (usesGameAiProtocol(gameType)) {
+    // Gomoku and Othello engines run in a light worker without downloads.
+    elements.aiModelWarningTitle.textContent = mode === AI_MATCH_SELF_PLAY
+      ? aiEngineName(gameType)
+      : `${aiEngineName(gameType)} · ${aiLevelLabel(elements.aiLevel.value)}`;
+    elements.aiModelWarningResource.textContent =
+      "AI 在浏览器后台运行，无需下载大型模型；每一手都按当前棋盘的接缝规则检查。";
+    elements.aiModelWarningStrength.textContent =
+      "简单会留出机会，普通会抓住明显的胜负手，困难会多看对方的一手应对。";
+    elements.aiModelWarning.classList.remove("heavy", "error");
+    elements.startAi.disabled = false;
+    return;
+  }
   const selectedModels = mode === AI_MATCH_SELF_PLAY
     ? [getAIModel(elements.aiBlackModel.value), getAIModel(elements.aiModel.value)]
     : [getAIModel(elements.aiModel.value)];
@@ -918,9 +1063,16 @@ function clockDisplayName(color) {
     const declared = onlineController(color);
     const operator = onlineRoom?.players?.find((player) => player.id === declared?.operatorId);
     if (declared?.kind === MATCH_CONTROLLER_AI) {
-      return `KataGo ${declared.modelId ?? DEFAULT_AI_MODEL_ID}`;
+      const modelId = declared.modelId ?? defaultAIModelIdForGame(gameTypeOf(onlineRoom?.game));
+      return isAIModelIdForGame(modelId, GAME_GO)
+        ? `KataGo ${modelId}`
+        : translateText(aiSeatName(modelId));
     }
     return operator?.name ?? roomSeat(color)?.name ?? translateText(colorName(color));
+  }
+  if (isAIMode() && usesGameAiProtocol(gameTypeOf(game))) {
+    if (!isAIvsAI() && color === aiHumanColor) return translateText("你");
+    return `${translateText(aiEngineName())} · ${translateText(aiLevelLabel(localAILevel(color)))}`;
   }
   if (isAIMode()) {
     if (isAIvsAI()) return `${getAIModel(localAIModelId(color)).shortLabel} AI`;
@@ -2479,13 +2631,15 @@ function onlineAISeat(color = null) {
     const operator = onlineRoom?.players?.find(
       (player) => player.id === controller.operatorId,
     );
+    const modelId = controller.modelId ?? defaultAIModelIdForGame(gameTypeOf(onlineRoom?.game));
     return {
       id: `controller:${candidate}`,
-      name: `KataGo ${controller.modelId ?? DEFAULT_AI_MODEL_ID} AI`,
+      // "KataGo b10 AI", "Rapfi AI" or "拓扑黑白棋 AI".
+      name: aiSeatName(modelId),
       role: "ai",
       color: candidate,
       automated: true,
-      modelId: controller.modelId ?? DEFAULT_AI_MODEL_ID,
+      modelId,
       controllerId: controller.operatorId,
       online: operator?.online !== false,
     };
@@ -2589,6 +2743,10 @@ function localAIModelId(color = game?.currentPlayer) {
 }
 
 function currentAIName(color = game?.currentPlayer) {
+  if (usesGameAiProtocol(gameTypeOf(game))) {
+    const level = hasOnlineSession() ? onlineAILevel(color) : localAILevel(color);
+    return `${aiEngineName()} · ${aiLevelLabel(level)}`;
+  }
   return `KataGo ${getAIModel(localAIModelId(color)).shortLabel} ${topologyName()}混合 AI`;
 }
 
@@ -2649,6 +2807,10 @@ function syncLastPlayedPoint() {
 function canUndoAIChoice() {
   if (!isAIMode() || !game?.canUndo()) return false;
   if (isAIvsAI()) return aiAutoplayPaused && !aiThinking;
+  if (gameTypeOf(game) !== GAME_GO) {
+    // Othello can skip a turn, so look for a recorded move of the human.
+    return game.undoMoveColors().includes(aiHumanColor);
+  }
   const firstHumanMoveNumber = aiHumanColor === WHITE ? 2 : 1;
   return moveCount >= firstHumanMoveNumber;
 }
@@ -2656,11 +2818,36 @@ function canUndoAIChoice() {
 function syncAIMatchModePresentation() {
   const mode = normalizeAIMatchMode(elements.aiMatchMode.value);
   const onlineSeatMode = hasOnlineSession();
+  const gameType = aiSetupGameType();
+  const gameEngine = usesGameAiProtocol(gameType);
+  syncAIModelSelectOptions(elements.aiModel, gameType);
+  syncAIModelSelectOptions(elements.aiBlackModel, gameType);
   elements.aiMatchMode.closest(".dialog-field").hidden = onlineSeatMode;
-  elements.aiBlackModelField.hidden = onlineSeatMode || mode !== AI_MATCH_SELF_PLAY;
+  // A Gomoku or Othello engine plays both colours; only Go picks per colour.
+  elements.aiBlackModelField.hidden = onlineSeatMode || mode !== AI_MATCH_SELF_PLAY || gameEngine;
   elements.aiModel.closest(".dialog-field").querySelector("span").textContent =
-    mode === AI_MATCH_SELF_PLAY ? "白方 AI 模型" : "AI 模型";
+    mode === AI_MATCH_SELF_PLAY && !gameEngine ? "白方 AI 模型" : "AI 模型";
+  // Gomoku and Othello pick a difficulty; KataGo's strength is its model.
+  elements.aiLevelField.hidden = !gameEngine;
+  elements.aiBlackLevelField.hidden = !gameEngine || onlineSeatMode || mode !== AI_MATCH_SELF_PLAY;
+  elements.aiLevelField.querySelector("span").textContent =
+    mode === AI_MATCH_SELF_PLAY && !onlineSeatMode ? "白方 AI 难度" : "AI 难度";
+  elements.aiLevelNote.hidden = gameEngine;
   elements.aiHumanColorField.hidden = onlineSeatMode || mode === AI_MATCH_SELF_PLAY;
+  if (gameEngine) {
+    elements.aiDialogEyebrow.textContent = onlineSeatMode ? "在线 AI 座位" : "本机 AI 对手";
+    elements.aiDialogTitle.textContent = onlineSeatMode
+      ? onlineAISeat(WHITE) ? "调整房间里的 AI" : "让 AI 接替白方"
+      : "和 AI 下一盘";
+    elements.aiDialogIntro.textContent = onlineSeatMode
+      ? "AI 仍在房主浏览器中运行，服务器只验证落子并同步给观众。接入后请保持房主页面在线。"
+      : "AI 在浏览器后台按当前棋盘的接缝规则选择落点。无需账号或第三方 API，服务器不承担推理。";
+    elements.startAi.textContent = onlineSeatMode
+      ? onlineAISeat(WHITE) ? "更新在线 AI" : "接入白方座位"
+      : isAIMode() ? "按新设置重开" : "开始对局";
+    syncAIDialogModelPresentation();
+    return;
+  }
   elements.aiDialogEyebrow.textContent = onlineSeatMode ? "在线 AI 座位" : "本机 AI 对手";
   elements.aiDialogTitle.textContent = onlineSeatMode
     ? onlineAISeat(WHITE) ? "调整房间里的 KataGo" : "让 KataGo 接替白方"
@@ -2708,6 +2895,7 @@ function scheduleAIWorkerIdleRelease() {
  */
 function cancelAIThinking({ terminate = false } = {}) {
   aiRequestId += 1;
+  cancelGameAITurn({ terminate });
   if (terminate || aiWorkerBusy) terminateAIWorker();
   else scheduleAIWorkerIdleRelease();
   aiThinking = false;
@@ -2721,8 +2909,8 @@ function closeAIDialog() {
 }
 
 function showAIDialog() {
-  if (!gameRulesOf(hasOnlineSession() ? game : { gameType: pendingGameType }).capabilities.ai) {
-    setMessage("五子棋和黑白棋暂不支持 AI，请选择好友或本地双人对局。", true);
+  if (!gameRulesOf({ gameType: aiSetupGameType() }).capabilities.ai) {
+    setMessage("这个棋类暂不支持 AI。", true);
     return;
   }
   if (hasOnlineSession()) {
@@ -2738,10 +2926,23 @@ function showAIDialog() {
   }
   elements.aiMatchMode.value = aiMatchMode;
   elements.aiHumanColor.value = aiHumanColor;
-  elements.aiBlackModel.value = isAIMode() ? localAIModelId(BLACK) : preferredAIModelId;
-  elements.aiModel.value = hasOnlineSession()
-    ? normalizeAIModelId(onlineAISeat(WHITE)?.modelId ?? preferredAIModelId)
-    : isAIMode() ? localAIModelId(WHITE) : preferredAIModelId;
+  const dialogGameType = aiSetupGameType();
+  syncAIModelSelectOptions(elements.aiModel, dialogGameType);
+  syncAIModelSelectOptions(elements.aiBlackModel, dialogGameType);
+  if (usesGameAiProtocol(dialogGameType)) {
+    elements.aiBlackModel.value = defaultAIModelIdForGame(dialogGameType);
+    elements.aiModel.value = defaultAIModelIdForGame(dialogGameType);
+    const remembered = savedGameAILevel();
+    elements.aiBlackLevel.value = isAIMode() ? localAILevel(BLACK) : remembered;
+    elements.aiLevel.value = hasOnlineSession()
+      ? onlineAILevel(WHITE)
+      : isAIMode() ? localAILevel(aiMatchMode === AI_MATCH_SELF_PLAY ? WHITE : aiColor()) : remembered;
+  } else {
+    elements.aiBlackModel.value = isAIMode() ? localAIModelId(BLACK) : preferredAIModelId;
+    elements.aiModel.value = hasOnlineSession()
+      ? normalizeAIModelId(onlineAISeat(WHITE)?.modelId ?? preferredAIModelId)
+      : isAIMode() ? localAIModelId(WHITE) : preferredAIModelId;
+  }
   syncAIDialogModelPresentation();
   syncAIMatchModePresentation();
   if (typeof elements.aiDialog.showModal === "function") {
@@ -2780,12 +2981,16 @@ async function applyOnlineAIMove(move, stats = {}, context = aiWorkerContext) {
   const expectation = {
     expectedMoveCount: context.moveCount,
     expectedPositionToken: context.positionToken,
+    // Gomoku and Othello rooms accept AI moves only from pages naming the game.
+    ...(context.gameType && context.gameType !== GAME_GO ? { gameType: context.gameType } : {}),
   };
   const payload = move?.type === "play"
     ? { row: move.row, col: move.col, ...expectation }
     : expectation;
   if (!["play", "pass"].includes(move?.type)) {
-    recoverFromAIError("KataGo 返回了无法提交的在线棋步。");
+    recoverFromAIError(context.gameType && context.gameType !== GAME_GO
+      ? "AI 返回了无法提交的在线棋步。"
+      : "KataGo 返回了无法提交的在线棋步。");
     return;
   }
   aiWorkerContext = null;
@@ -2816,7 +3021,9 @@ function recoverFromAIError(message) {
   }
   aiActive = false;
   setMessage(
-    `${message} 已退出 AI 对局并保留当前棋局；现在可以本地轮流落子，或重新开始 KataGo 对局。`,
+    gameTypeOf(game) === GAME_GO
+      ? `${message} 已退出 AI 对局并保留当前棋局；现在可以本地轮流落子，或重新开始 KataGo 对局。`
+      : `${message} 已退出 AI 对局并保留当前棋局；现在可以本地轮流落子，或重新开始 AI 对局。`,
     true,
   );
   updateUI();
@@ -2882,8 +3089,87 @@ function ensureAIWorker() {
   return worker;
 }
 
+/**
+ * A Gomoku or Othello AI turn (local, or the online seat this host runs):
+ * the game's engine answers through gameAiClient; the move is then played
+ * like KataGo's (locally, or as ai_play for the room to validate).
+ */
+function startGameAITurn() {
+  const onlineTurn = isOnlineAITurn();
+  if (onlineTurn && aiFailedPositionToken === onlineRoom?.positionToken) return;
+  const gameType = gameTypeOf(game);
+  const color = game.currentPlayer;
+  const onlineSeat = onlineTurn ? onlineAISeat(color) : null;
+  const modelId = normalizeGameAIModelId(onlineSeat?.modelId, gameType);
+  const level = onlineTurn ? onlineAILevel(color) : localAILevel(color);
+  aiThinking = true;
+  elements.boardStage.setAttribute("aria-busy", "true");
+  setMessage(`${currentAIName()} 正在${onlineTurn ? "房主浏览器中" : ""}思考…`);
+  updateUI();
+  const requestId = ++aiRequestId;
+  const context = onlineTurn
+    ? {
+        kind: MATCH_TRANSPORT_ONLINE,
+        roomCode: roomClient.roomCode,
+        positionToken: onlineRoom.positionToken,
+        moveCount,
+        color,
+        modelId,
+        gameType,
+      }
+    : { kind: MATCH_TRANSPORT_LOCAL, modelId, gameType, moveCount, color };
+  aiWorkerContext = context;
+  let position;
+  try {
+    position = gameAiPosition(game, { moveCount });
+  } catch (error) {
+    aiThinking = false;
+    elements.boardStage.removeAttribute("aria-busy");
+    recoverFromAIError(localizedErrorMessage(error, "AI 无法读取当前棋局。"));
+    return;
+  }
+  // Self-play is paced so that each move can be seen.
+  const delay = isAIvsAI() || isOnlineAISelfPlay() ? 420 : 120;
+  window.setTimeout(async () => {
+    if (requestId !== aiRequestId || !shouldRunCurrentAI()) return;
+    let answer;
+    try {
+      answer = await gameAIFor(gameType).choose(position, gameAiSettings(level));
+    } catch (error) {
+      if (requestId !== aiRequestId) return;
+      aiThinking = false;
+      elements.boardStage.removeAttribute("aria-busy");
+      if (error?.code === GAME_AI_ERRORS.CANCELLED) {
+        aiWorkerContext = null;
+        updateUI();
+        return;
+      }
+      recoverFromAIError(localizedErrorMessage(error, "AI 思考时发生错误。"));
+      return;
+    }
+    if (requestId !== aiRequestId) return;
+    aiThinking = false;
+    elements.boardStage.removeAttribute("aria-busy");
+    const move = { type: "play", row: answer.move.row, col: answer.move.col };
+    if (!game.checkPlay(move.row, move.col).ok) {
+      recoverFromAIError("AI 返回了不合规则的落点。");
+      return;
+    }
+    if (context.kind === MATCH_TRANSPORT_ONLINE) {
+      void applyOnlineAIMove(move, answer.info, context);
+    } else {
+      aiWorkerContext = null;
+      applyAIMove(move, answer.info);
+    }
+  }, delay);
+}
+
 function maybeStartAITurn() {
   if (!shouldRunCurrentAI() || aiThinking) return;
+  if (usesGameAiProtocol(gameTypeOf(game))) {
+    startGameAITurn();
+    return;
+  }
 
   const onlineTurn = isOnlineAITurn();
   const onlineSeat = onlineTurn ? onlineAISeat(game.currentPlayer) : null;
@@ -2975,31 +3261,50 @@ async function startAIGame(event) {
     updateUI();
     return;
   }
-  if (!gameRulesOf(hasOnlineSession() ? game : { gameType: pendingGameType }).capabilities.ai) {
+  const dialogGameType = aiSetupGameType();
+  if (!gameRulesOf({ gameType: dialogGameType }).capabilities.ai) {
     closeAIDialog();
-    setMessage("五子棋和黑白棋暂不支持 AI，请选择好友或本地双人对局。", true);
+    setMessage("这个棋类暂不支持 AI。", true);
     updateUI();
     return;
   }
-  const requestedModelId = normalizeAIModelId(elements.aiModel.value);
-  const requestedBlackModelId = normalizeAIModelId(elements.aiBlackModel.value);
+  const gameEngine = usesGameAiProtocol(dialogGameType);
   const requestedMatchMode = normalizeAIMatchMode(elements.aiMatchMode.value);
-  const requestedModelIds = requestedMatchMode === AI_MATCH_SELF_PLAY
-    ? [requestedBlackModelId, requestedModelId]
-    : [requestedModelId];
-  if (requestedModelIds.some((modelId) => !browserSupportsAIModel(modelId))) {
-    syncAIDialogModelPresentation();
-    setMessage("当前浏览器没有检测到 WebGPU，无法使用 b18；请选择 b10。", true);
-    return;
+  let requestedModelId;
+  if (gameEngine) {
+    // Gomoku and Othello: the game's own engine at the chosen difficulty.
+    requestedModelId = defaultAIModelIdForGame(dialogGameType);
+    const whiteLevel = normalizeGameAiLevel(elements.aiLevel.value);
+    const blackLevel = normalizeGameAiLevel(elements.aiBlackLevel.value);
+    rememberGameAILevel(whiteLevel);
+    cancelAIThinking();
+    if (hasOnlineSession()) {
+      elements.onlineMatchAiLevel.value = whiteLevel;
+    } else {
+      aiGameLevels = requestedMatchMode === AI_MATCH_SELF_PLAY
+        ? { [BLACK]: blackLevel, [WHITE]: whiteLevel }
+        : { [BLACK]: whiteLevel, [WHITE]: whiteLevel };
+    }
+  } else {
+    requestedModelId = normalizeAIModelId(elements.aiModel.value);
+    const requestedBlackModelId = normalizeAIModelId(elements.aiBlackModel.value);
+    const requestedModelIds = requestedMatchMode === AI_MATCH_SELF_PLAY
+      ? [requestedBlackModelId, requestedModelId]
+      : [requestedModelId];
+    if (requestedModelIds.some((modelId) => !browserSupportsAIModel(modelId))) {
+      syncAIDialogModelPresentation();
+      setMessage("当前浏览器没有检测到 WebGPU，无法使用 b18；请选择 b10。", true);
+      return;
+    }
+    cancelAIThinking();
+    preferredAIModelId = requestedModelId;
+    aiGameModelId = requestedModelId;
+    aiGameModelIds = {
+      [BLACK]: requestedBlackModelId,
+      [WHITE]: requestedModelId,
+    };
+    rememberPreferredAIModel();
   }
-  cancelAIThinking();
-  preferredAIModelId = requestedModelId;
-  aiGameModelId = requestedModelId;
-  aiGameModelIds = {
-    [BLACK]: requestedBlackModelId,
-    [WHITE]: requestedModelId,
-  };
-  rememberPreferredAIModel();
   if (hasOnlineSession()) {
     const hadOnlineAI = Boolean(onlineAISeat(WHITE));
     if (!isOnlineHost() || (roomSeat(WHITE) && !onlineAISeat(WHITE))) {
@@ -3010,7 +3315,9 @@ async function startAIGame(event) {
     cancelAIThinking();
     aiFailedPositionToken = null;
     closeAIDialog();
-    setMessage(`正在把 KataGo ${getAIModel(requestedModelId).shortLabel} 接入在线白方座位…`);
+    setMessage(gameEngine
+      ? `正在把 ${aiEngineName(dialogGameType)} 接入在线白方座位…`
+      : `正在把 KataGo ${getAIModel(requestedModelId).shortLabel} 接入在线白方座位…`);
     const sent = await sendOnlineCommand("attach_ai", { modelId: requestedModelId });
     // Updating/retrying an existing seat stops its old worker first. If the
     // command is rejected, resume the still-authoritative seat instead of
@@ -3027,10 +3334,12 @@ async function startAIGame(event) {
   await startNewGame();
   setMessage(
     isAIvsAI()
-      ? `AI 自对弈已开始：黑方 ${getAIModel(localAIModelId(BLACK)).shortLabel}，白方 ${getAIModel(localAIModelId(WHITE)).shortLabel}。`
+      ? gameEngine
+        ? `AI 自对弈已开始：黑白双方都由 ${aiEngineName()} 控制。`
+        : `AI 自对弈已开始：黑方 ${getAIModel(localAIModelId(BLACK)).shortLabel}，白方 ${getAIModel(localAIModelId(WHITE)).shortLabel}。`
       : aiHumanColor === BLACK
-        ? `AI 对局已开始：你执黑，${currentAIName()} 执白。`
-        : `AI 对局已开始：${currentAIName()} 执黑，正在思考第一手。`,
+        ? `AI 对局已开始：你执黑，${currentAIName(aiColor())} 执白。`
+        : `AI 对局已开始：${currentAIName(aiColor())} 执黑，正在思考第一手。`,
   );
   updateUI();
   maybeStartAITurn();
@@ -3864,8 +4173,11 @@ function onlineControllerSeat(color) {
   if (!controller) return { text: `等待${colorName(color)}`, online: false };
   const operator = onlineRoom?.players?.find((player) => player.id === controller.operatorId);
   if (controller.kind === MATCH_CONTROLLER_AI) {
+    const modelId = controller.modelId ?? defaultAIModelIdForGame(gameTypeOf(onlineRoom?.game));
     return {
-      text: `KataGo ${controller.modelId ?? DEFAULT_AI_MODEL_ID} · AI`,
+      text: isAIModelIdForGame(modelId, GAME_GO)
+        ? `KataGo ${modelId} · AI`
+        : aiSeatName(modelId),
       online: operator?.online !== false,
     };
   }
@@ -3937,11 +4249,14 @@ function updateRoomUI() {
     : aiMode
       ? isAIvsAI() ? "AI 自对弈" : "AI 对战"
       : lobby ? "我的房间" : "本地双人";
+  const kataGoGame = !usesGameAiProtocol(gameTypeOf(game));
   elements.roomTitle.textContent = active
-    ? onlineAi ? "和 KataGo 对弈，朋友可以观战" : "和朋友共享同一盘棋"
+    ? onlineAi
+      ? kataGoGame ? "和 KataGo 对弈，朋友可以观战" : `和 ${aiEngineName()} 对弈，朋友可以观战`
+      : "和朋友共享同一盘棋"
     : aiMode
       ? isAIvsAI()
-        ? "KataGo 同时控制黑白双方"
+        ? kataGoGame ? "KataGo 同时控制黑白双方" : `${aiEngineName()} 同时控制黑白双方`
         : `你执${colorName(aiHumanColor).replace("方", "")} · AI 执${colorName(aiColor()).replace("方", "")}`
       : lobby ? "还没有发起对局" : "双方在同一台设备轮流落子";
   if (active) {
@@ -3951,7 +4266,9 @@ function updateRoomUI() {
       : roomMatchStatus === ONLINE_MATCH_INVITED
         ? "对局邀请等待回应"
         : onlineAi
-          ? "KataGo 在浏览器运行，朋友可以观战"
+          ? kataGoGame
+            ? "KataGo 在浏览器运行，朋友可以观战"
+            : `${aiEngineName()} 在浏览器运行，朋友可以观战`
           : "房间对局已同步给所有成员";
   }
   elements.offlineOpponentActions.hidden = !lobby || reviewing;
@@ -3976,7 +4293,21 @@ function updateRoomUI() {
     MATCH_LIFECYCLE_WAITING,
   ].includes(matchLifecycle);
 
-  if (aiMode) {
+  if (aiMode && !kataGoGame) {
+    // Gomoku and Othello: the game's engine and its difficulty per colour.
+    elements.aiOpponentName.textContent = isAIvsAI()
+      ? `${aiEngineName()} · 自对弈`
+      : currentAIName(aiColor());
+    elements.aiLevelBadge.textContent = isAIvsAI()
+      ? `${aiLevelLabel(localAILevel(BLACK))} / ${aiLevelLabel(localAILevel(WHITE))}`
+      : aiLevelLabel(localAILevel(aiColor()));
+    elements.aiBlackSeat.textContent = isAIvsAI()
+      ? `AI · 黑方 · ${aiLevelLabel(localAILevel(BLACK))}`
+      : aiHumanColor === BLACK ? "你 · 黑方" : "AI · 黑方";
+    elements.aiWhiteSeat.textContent = isAIvsAI()
+      ? `AI · 白方 · ${aiLevelLabel(localAILevel(WHITE))}`
+      : aiHumanColor === WHITE ? "你 · 白方" : "AI · 白方";
+  } else if (aiMode) {
     elements.aiOpponentName.textContent = isAIvsAI() ? "KataGo AI 自对弈" : currentAIName();
     elements.aiLevelBadge.textContent = isAIvsAI()
       ? `${getAIModel(localAIModelId(BLACK)).badgeLabel} / ${getAIModel(localAIModelId(WHITE)).badgeLabel}`
@@ -3987,6 +4318,8 @@ function updateRoomUI() {
     elements.aiWhiteSeat.textContent = isAIvsAI()
       ? `AI · 白方 · ${getAIModel(localAIModelId(WHITE)).shortLabel}`
       : aiHumanColor === WHITE ? "你 · 白方" : "AI · 白方";
+  }
+  if (aiMode) {
     elements.toggleAiAutoplay.hidden = !isAIvsAI();
     elements.toggleAiAutoplay.textContent = aiAutoplayPaused ? "继续对弈" : "暂停对弈";
     elements.toggleAiAutoplay.disabled = reviewing || game.phase !== PHASE_PLAY;
@@ -4077,7 +4410,9 @@ function updateRoomUI() {
         : "黑方房主正在设置下一局；聊天和房间成员都会保留。";
     } else if (!hasBothPlayers) {
       elements.roomHint.textContent = isOnlineHost()
-        ? "把邀请链接发给朋友，或让 KataGo 接替空缺的白方座位。"
+        ? kataGoGame
+          ? "把邀请链接发给朋友，或让 KataGo 接替空缺的白方座位。"
+          : "把邀请链接发给朋友，或让 AI 接替空缺的白方座位。"
         : "等待白方加入后即可对弈。";
     } else if (undoRequest) {
       elements.roomHint.textContent = ownUndoRequest
@@ -4099,7 +4434,9 @@ function updateRoomUI() {
       elements.roomHint.textContent = isOnlineTurn()
         ? "轮到你了。"
         : onlineAISeat(game.currentPlayer)
-          ? "KataGo 正在房主浏览器中思考；服务器会验证并同步棋步。"
+          ? kataGoGame
+            ? "KataGo 正在房主浏览器中思考；服务器会验证并同步棋步。"
+            : `${aiEngineName()} 正在房主浏览器中思考；服务器会验证并同步棋步。`
           : `等待${colorName(game.currentPlayer)}落子。`;
     }
     if (connected && onlineReady && roomMatchStatus === ONLINE_MATCH_SETUP) {
@@ -4269,10 +4606,23 @@ function updateRoomUI() {
     selectedOnlineMode,
   );
   const onlineModeUsesBlackAI = selectedOnlineMode === ONLINE_MODE_AI_AI;
-  elements.onlineMatchBlackAiModelField.hidden = !onlineModeUsesBlackAI;
+  // Go picks a KataGo model; Gomoku and Othello show their engine and a
+  // difficulty that only the host's browser uses.
+  const onlineGameEngine = usesGameAiProtocol(pendingGameType);
+  syncAIModelSelectOptions(elements.onlineMatchAiModel, pendingGameType, { online: true });
+  syncAIModelSelectOptions(elements.onlineMatchBlackAiModel, pendingGameType, { online: true });
+  // One engine plays both colours of a Gomoku or Othello AI-vs-AI round.
+  elements.onlineMatchBlackAiModelField.hidden = !onlineModeUsesBlackAI || onlineGameEngine;
   elements.onlineMatchAiModelField.hidden = !onlineModeUsesAI;
+  elements.onlineMatchAiModelNote.textContent = onlineGameEngine
+    ? "AI 在房主浏览器中运行，服务器只验证并同步棋步"
+    : "b18 更强，但下载和显存占用明显更高";
   elements.onlineMatchBlackAiModel.disabled = !canChangeNextGameSettings || !onlineModeUsesBlackAI;
   elements.onlineMatchAiModel.disabled = !canChangeNextGameSettings || !onlineModeUsesAI;
+  elements.onlineMatchBlackAiLevelField.hidden = !onlineGameEngine || !onlineModeUsesBlackAI;
+  elements.onlineMatchAiLevelField.hidden = !onlineGameEngine || !onlineModeUsesAI;
+  elements.onlineMatchBlackAiLevel.disabled = !canChangeNextGameSettings || !onlineModeUsesBlackAI;
+  elements.onlineMatchAiLevel.disabled = !canChangeNextGameSettings || !onlineModeUsesAI;
   const showFriendInvitationDetails = active && selectedOnlineMode === ONLINE_MODE_FRIEND;
   elements.friendRoomCodeRow.hidden = !showFriendInvitationDetails;
   elements.copyRoomLink.hidden = !showFriendInvitationDetails;
@@ -4371,6 +4721,7 @@ function rememberOfflineGame() {
       humanColor: aiHumanColor,
       modelId: aiGameModelId,
       modelIds: { ...aiGameModelIds },
+      levels: { ...aiGameLevels },
     },
   };
 }
@@ -4471,6 +4822,10 @@ function restoreOfflineGame() {
   aiGameModelIds = {
     [BLACK]: normalizeAIModelId(offlineGameState.ai?.modelIds?.[BLACK] ?? offlineGameState.ai?.modelId),
     [WHITE]: normalizeAIModelId(offlineGameState.ai?.modelIds?.[WHITE] ?? offlineGameState.ai?.modelId),
+  };
+  aiGameLevels = {
+    [BLACK]: normalizeGameAiLevel(offlineGameState.ai?.levels?.[BLACK]),
+    [WHITE]: normalizeGameAiLevel(offlineGameState.ai?.levels?.[WHITE]),
   };
   if (aiActive) {
     preferredAIModelId = aiGameModelId;
@@ -4661,7 +5016,9 @@ function applyOnlineRoom(room) {
     aiFailedPositionToken = null;
   }
   const roomAI = onlineAISeat();
-  if (roomAI) aiGameModelId = normalizeAIModelId(roomAI.modelId);
+  if (roomAI && isAIModelIdForGame(roomAI.modelId, GAME_GO)) {
+    aiGameModelId = normalizeAIModelId(roomAI.modelId);
+  }
   onlineClockReceivedAt = Date.now();
   if (
     onlineCommandPending &&
@@ -4893,7 +5250,9 @@ async function dispatchMatchAction(action, payload = {}, options = {}) {
     return false;
   }
   if (route.target === MATCH_TRANSPORT_ONLINE) {
-    if (actor === MATCH_CONTROLLER_AI) {
+    if (actor === MATCH_CONTROLLER_AI && usesGameAiProtocol(gameTypeOf(game))) {
+      setMessage(`${aiEngineName()} 已选好落点，正在由服务器验证并同步…`);
+    } else if (actor === MATCH_CONTROLLER_AI) {
       const inferenceDetail = Number.isFinite(options.stats?.inferenceMs)
         ? `（推理 ${Math.round(options.stats.inferenceMs)} ms）`
         : "";
@@ -5012,8 +5371,8 @@ async function dispatchMatchAction(action, payload = {}, options = {}) {
     cancelAIThinking();
     game = createGameFromOptions(payload);
     if (aiActive && !gameRulesOf(game).capabilities.ai) {
-      // Gomoku and Othello have no AI yet: a next game of either, prepared
-      // after an AI game, is played by two people on this device.
+      // A game without an AI, prepared after an AI game, is played by two
+      // people on this device.
       aiActive = false;
       aiAutoplayPaused = false;
     }
@@ -5236,6 +5595,11 @@ function selectedOnlineMatchMode() {
 }
 
 function selectedOnlineAIModelIds() {
+  if (usesGameAiProtocol(pendingGameType)) {
+    // Gomoku and Othello seat their game's own engine.
+    const modelId = defaultAIModelIdForGame(pendingGameType);
+    return { [BLACK]: modelId, [WHITE]: modelId };
+  }
   return {
     [BLACK]: normalizeAIModelId(elements.onlineMatchBlackAiModel.value),
     [WHITE]: normalizeAIModelId(elements.onlineMatchAiModel.value),
@@ -5243,11 +5607,22 @@ function selectedOnlineAIModelIds() {
 }
 
 function reflectOnlineAIModelControls(controllers = null) {
+  const gameType = pendingGameType;
+  syncAIModelSelectOptions(elements.onlineMatchAiModel, gameType, { online: true });
+  syncAIModelSelectOptions(elements.onlineMatchBlackAiModel, gameType, { online: true });
+  if (usesGameAiProtocol(gameType)) {
+    elements.onlineMatchBlackAiModel.value = defaultAIModelIdForGame(gameType);
+    elements.onlineMatchAiModel.value = defaultAIModelIdForGame(gameType);
+    return;
+  }
+  // Controllers of another game (a Gomoku round before a Go one) say
+  // nothing about KataGo; keep the current choice then.
+  const goModel = (modelId) => isAIModelIdForGame(modelId, GAME_GO) ? modelId : undefined;
   const blackModel = normalizeAIModelId(
-    controllers?.[BLACK]?.modelId ?? elements.onlineMatchBlackAiModel.value ?? preferredAIModelId,
+    goModel(controllers?.[BLACK]?.modelId) ?? elements.onlineMatchBlackAiModel.value ?? preferredAIModelId,
   );
   const whiteModel = normalizeAIModelId(
-    controllers?.[WHITE]?.modelId ?? elements.onlineMatchAiModel.value ?? preferredAIModelId,
+    goModel(controllers?.[WHITE]?.modelId) ?? elements.onlineMatchAiModel.value ?? preferredAIModelId,
   );
   elements.onlineMatchBlackAiModel.value = blackModel;
   elements.onlineMatchAiModel.value = whiteModel;
@@ -5294,6 +5669,7 @@ async function requestOnlineGame(options) {
     : [aiModelIds[WHITE]];
   if (
     [ONLINE_MODE_HUMAN_AI, ONLINE_MODE_AI_AI].includes(mode) &&
+    !usesGameAiProtocol(pendingGameType) &&
     selectedModelIds.some((modelId) => getAIModel(modelId).heavy) &&
     !window.confirm(translateText(
       "b18 首次需要下载约 93.4 MB，并会占用数百 MB 内存与显存、增加耗电和发热。仅建议桌面端 WebGPU。确定使用吗？",
@@ -5319,6 +5695,7 @@ function currentLocalNextGameAIState() {
     humanColor: aiHumanColor,
     modelId: aiGameModelId,
     modelIds: { ...aiGameModelIds },
+    levels: { ...aiGameLevels },
     autoplayPaused: aiAutoplayPaused,
   };
 }
@@ -5333,6 +5710,12 @@ function applyLocalNextGameAIState(state) {
     [BLACK]: normalizeAIModelId(state.modelIds?.[BLACK] ?? state.modelId),
     [WHITE]: normalizeAIModelId(state.modelIds?.[WHITE] ?? state.modelId),
   };
+  if (state.levels) {
+    aiGameLevels = {
+      [BLACK]: normalizeGameAiLevel(state.levels[BLACK]),
+      [WHITE]: normalizeGameAiLevel(state.levels[WHITE]),
+    };
+  }
   aiAutoplayPaused = state.autoplayPaused;
 }
 
@@ -6272,7 +6655,7 @@ function updateUI() {
       : currentController === MATCH_CONTROLLER_AI
         ? isOnlineAISelfPlay() && onlineRoom?.match?.aiAutoplayPaused
           ? `已暂停 · ${colorName(state.currentPlayer)}待行`
-          : `KataGo ${aiThinking ? "正在思考" : "准备落子"}`
+          : `${aiEngineName()} ${aiThinking ? "正在思考" : "准备落子"}`
         : `${colorName(state.currentPlayer)}落子`;
     return;
   }
@@ -6469,7 +6852,7 @@ function showResignDialog() {
   elements.resignSummary.textContent = hasOnlineSession()
     ? `你将以${colorName(loser)}认输，对方立即获胜；不需要对方确认，此操作不能撤销。`
     : isAIMode()
-      ? `你将以${colorName(loser)}向 ${currentAIName()} 认输；AI 立即获胜，此操作不能撤销。`
+      ? `你将以${colorName(loser)}向 ${currentAIName(oppositeColor(loser))} 认输；AI 立即获胜，此操作不能撤销。`
       : `${colorName(loser)}将认输，${colorName(oppositeColor(loser))}立即获胜；此操作不能撤销。`;
   if (typeof elements.resignDialog.showModal === "function") {
     elements.resignDialog.showModal();
@@ -7274,6 +7657,14 @@ elements.toggleOnlineAiAutoplay.addEventListener("click", toggleAIAutoplay);
 elements.aiForm.addEventListener("submit", (event) => void startAIGame(event));
 elements.aiModel.addEventListener("change", syncAIDialogModelPresentation);
 elements.aiBlackModel.addEventListener("change", syncAIDialogModelPresentation);
+elements.aiLevel.addEventListener("change", syncAIDialogModelPresentation);
+elements.aiBlackLevel.addEventListener("change", syncAIDialogModelPresentation);
+for (const select of [elements.onlineMatchAiLevel, elements.onlineMatchBlackAiLevel]) {
+  select.addEventListener("change", () => {
+    rememberGameAILevel(select.value);
+    updateUI();
+  });
+}
 elements.aiMatchMode.addEventListener("change", syncAIMatchModePresentation);
 elements.aiReviewModel.addEventListener("change", () => {
   const requested = normalizeAIModelId(elements.aiReviewModel.value);
@@ -7514,6 +7905,18 @@ elements.aiBlackModel.value = preferredAIModelId;
 elements.aiMatchMode.value = aiMatchMode;
 elements.onlineMatchBlackAiModel.value = preferredAIModelId;
 elements.onlineMatchAiModel.value = preferredAIModelId;
+{
+  const level = savedGameAILevel();
+  aiGameLevels = { [BLACK]: level, [WHITE]: level };
+  for (const select of [
+    elements.aiLevel,
+    elements.aiBlackLevel,
+    elements.onlineMatchAiLevel,
+    elements.onlineMatchBlackAiLevel,
+  ]) {
+    select.value = level;
+  }
+}
 syncAIDialogModelPresentation();
 syncAIMatchModePresentation();
 const savedGameChoice = savedGameTypeChoice();

@@ -78,6 +78,15 @@ class InProcessWorker {
   }
 }
 
+/** Resolve once `predicate` holds (polling the event loop), or fail. */
+async function waitFor(predicate, label = "condition") {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.fail(`timed out waiting for ${label}`);
+}
+
 const fallbackEngine = {
   init: async () => fallbackEngineInfo(),
   choose: (position, settings, { signal }) => chooseFallbackMove(position, settings, { signal }),
@@ -211,17 +220,17 @@ test("cancel rejects the pending move at once and the worker is reused", async (
   const ai = createGameAi("othello", { entry: fakeEntry(slowEngine), idleReleaseMs: 0 });
   const position = gameAiPosition(new OthelloEngine());
   const pending = ai.choose(position, { level: "hard" });
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await waitFor(() => typeof release === "function", "the search to start");
   assert.equal(ai.busy, true);
   assert.equal(ai.cancel(), true);
   await assert.rejects(pending, (error) => error.code === GAME_AI_ERRORS.CANCELLED);
   assert.equal(ai.busy, false);
   const worker = InProcessWorker.created[0];
-  await new Promise((resolve) => setTimeout(resolve, 10));
   assert.deepEqual(worker.received.at(-1), { type: "cancel", requestId: worker.received[1].requestId });
   // The next request waits for the cancelled one to drain, then reuses the worker.
+  release = null;
   const next = ai.choose(position, { level: "easy" });
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await waitFor(() => typeof release === "function", "the next search to start");
   release();
   assert.deepEqual((await next).move, { row: 0, col: 0 });
   assert.equal(InProcessWorker.created.length, 1);
@@ -239,11 +248,10 @@ test("a worker that cannot stop or answer is replaced", async () => {
   });
   const position = gameAiPosition(new GomokuEngine({ width: 11, height: 11 }));
   const cancelled = ai.choose(position, { level: "easy" });
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await waitFor(() => InProcessWorker.created[0]?.received.length === 2, "the request to be sent");
   ai.cancel();
   await assert.rejects(cancelled, (error) => error.code === GAME_AI_ERRORS.CANCELLED);
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  assert.equal(InProcessWorker.created[0].terminated, true, "a stuck cancel is terminated");
+  await waitFor(() => InProcessWorker.created[0].terminated, "the stuck worker to be replaced");
 
   const timedOut = ai.choose(position, { level: "easy", timeLimitMs: 30 });
   await assert.rejects(timedOut, (error) => error.code === GAME_AI_ERRORS.TIMEOUT);
@@ -273,8 +281,8 @@ test("worker errors map to client codes; a crash fails the move", async () => {
 
   const crashing = createGameAi("othello", { entry: fakeEntry(neverEngine), idleReleaseMs: 0 });
   const crashed = crashing.choose(position);
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  InProcessWorker.created.at(-1).crash("worker script failed");
+  await waitFor(() => InProcessWorker.created[1]?.received.length === 2, "the request to be sent");
+  InProcessWorker.created[1].crash("worker script failed");
   await assert.rejects(crashed, (error) =>
     error.code === GAME_AI_ERRORS.WORKER_FAILED && error.message === "worker script failed");
   ai.dispose();
@@ -311,8 +319,7 @@ test("an idle worker is released after the idle stretch", async () => {
   InProcessWorker.created = [];
   const ai = createGameAi("othello", { entry: fakeEntry(), idleReleaseMs: 20 });
   await ai.choose(gameAiPosition(new OthelloEngine()), { level: "easy" });
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(InProcessWorker.created[0].terminated, true);
+  await waitFor(() => InProcessWorker.created[0].terminated, "the idle release");
   await ai.choose(gameAiPosition(new OthelloEngine()), { level: "easy" });
   assert.equal(InProcessWorker.created.length, 2, "the next move starts a fresh worker");
   ai.dispose();
