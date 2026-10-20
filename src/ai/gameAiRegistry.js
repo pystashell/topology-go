@@ -81,8 +81,8 @@ const REGISTRY = Object.freeze({
   [GAME_OTHELLO]: engineEntry(
     GAME_OTHELLO,
     TOPO_OTHELLO_MODEL_ID,
-    // Topology Othello: "./othello/othelloAiWorker.js" once it lands.
-    () => new Worker(new URL("./fallback/fallbackAiWorker.js", import.meta.url), { type: "module" }),
+    // Our own wrap-around Othello engine; see src/ai/othello/.
+    () => new Worker(new URL("./othello/othelloAiWorker.js", import.meta.url), { type: "module" }),
   ),
 });
 
