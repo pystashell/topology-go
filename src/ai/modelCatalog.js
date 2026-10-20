@@ -60,3 +60,92 @@ export function formatModelDownloadProgress(loadedBytes, modelId) {
   const totalMiB = model.compressedBytes / (1024 * 1024);
   return `${loadedMiB.toFixed(1)} / ${totalMiB.toFixed(1)} MB`;
 }
+
+/*
+ * Per-game AI catalog. Go keeps the KataGo models above exactly as they are;
+ * every other game offers one engine whose id the room stores on its AI
+ * controllers. A model id belongs to exactly one game, so a room refuses a
+ * KataGo id for a Gomoku round (and the reverse). Rooms, the lobby and the
+ * page share this table; it imports nothing that needs a browser.
+ */
+
+export const RAPFI_MODEL_ID = "rapfi";
+export const TOPO_OTHELLO_MODEL_ID = "topo-othello";
+
+const GAME_AI_ENGINES = Object.freeze({
+  [RAPFI_MODEL_ID]: Object.freeze({
+    id: RAPFI_MODEL_ID,
+    gameType: "gomoku",
+    // Rapfi is a proper name and reads the same in Chinese and English.
+    name: "Rapfi",
+    seatName: "Rapfi AI",
+  }),
+  [TOPO_OTHELLO_MODEL_ID]: Object.freeze({
+    id: TOPO_OTHELLO_MODEL_ID,
+    gameType: "othello",
+    // Chinese source copy; the page's dictionary renders "Topology Othello AI".
+    name: "拓扑黑白棋 AI",
+    seatName: "拓扑黑白棋 AI",
+  }),
+});
+
+const GAME_AI_MODEL_IDS = Object.freeze({
+  go: AI_MODEL_IDS,
+  gomoku: Object.freeze([RAPFI_MODEL_ID]),
+  othello: Object.freeze([TOPO_OTHELLO_MODEL_ID]),
+});
+
+/** Every AI model id any game accepts (KataGo first). */
+export const ALL_AI_MODEL_IDS = Object.freeze(
+  Object.values(GAME_AI_MODEL_IDS).flat(),
+);
+
+/**
+ * The model ids a game's AI seats may use; [] for an unknown game.
+ *
+ * @param {string} [gameType="go"]
+ * @returns {ReadonlyArray<string>}
+ */
+export function aiModelIdsForGame(gameType = "go") {
+  return GAME_AI_MODEL_IDS[gameType] ?? Object.freeze([]);
+}
+
+/** The model a game's AI seat uses when none is named. */
+export function defaultAIModelIdForGame(gameType = "go") {
+  return aiModelIdsForGame(gameType)[0] ?? DEFAULT_AI_MODEL_ID;
+}
+
+/** Whether `modelId` names one of this game's AI models. */
+export function isAIModelIdForGame(modelId, gameType = "go") {
+  return typeof modelId === "string" && aiModelIdsForGame(gameType).includes(modelId);
+}
+
+/** A model id of this game, or the game's default for anything else. */
+export function normalizeGameAIModelId(modelId, gameType = "go") {
+  return isAIModelIdForGame(modelId, gameType) ? modelId : defaultAIModelIdForGame(gameType);
+}
+
+/** The game a model id belongs to, or null for an unknown id. */
+export function aiModelGameType(modelId) {
+  for (const [gameType, ids] of Object.entries(GAME_AI_MODEL_IDS)) {
+    if (typeof modelId === "string" && ids.includes(modelId)) return gameType;
+  }
+  return null;
+}
+
+/**
+ * The engine behind a non-Go model id ({id, gameType, name, seatName}), or
+ * null for KataGo and unknown ids (use getAIModel for KataGo).
+ */
+export function getGameAIEngine(modelId) {
+  return typeof modelId === "string" ? GAME_AI_ENGINES[modelId] ?? null : null;
+}
+
+/**
+ * The name an AI seat goes by in rooms and the lobby. KataGo seats keep
+ * their historical "KataGo b10 AI" names (including for an unrecognized id,
+ * which older rooms never stored); other engines use their own names.
+ */
+export function aiSeatName(modelId) {
+  return getGameAIEngine(modelId)?.seatName ?? `KataGo ${modelId} AI`;
+}

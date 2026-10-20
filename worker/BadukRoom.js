@@ -601,6 +601,15 @@ export class BadukRoom {
         this.assertMultiGameClient(command, this.engine.currentGameType());
       }
       if (
+        command.action === "ai_play" &&
+        this.engine.member(playerId)?.role === "player"
+      ) {
+        // A host page runs the AI seat and names the game it computed the
+        // move for; a Go-only page must not submit KataGo moves into a
+        // Gomoku or Othello round. Go rooms need no name.
+        this.assertMultiGameClient(command, this.engine.currentGameType());
+      }
+      if (
         command.action === "respond_game" &&
         command.payload.accept === true &&
         this.engine.member(playerId)?.role === "player"

@@ -200,14 +200,16 @@ test("controls follow each game's capabilities and counters", () => {
   assert.deepEqual(go.countLabels, { black: "黑方提子", white: "白方提子" });
 
   const gomoku = gameControls("gomoku", new GomokuEngine().getState());
-  assert.equal(gomoku.pass || gomoku.scoring || gomoku.ai || gomoku.analysis || gomoku.sgf, false);
-  assert.equal(gomoku.undo && gomoku.resign && gomoku.ruleSet, true);
+  assert.equal(gomoku.pass || gomoku.scoring || gomoku.analysis || gomoku.sgf, false);
+  // Gomoku and Othello play their own AI engines; KataGo analysis stays Go's.
+  assert.equal(gomoku.undo && gomoku.resign && gomoku.ruleSet && gomoku.ai, true);
   assert.equal(gomoku.komi, false);
   assert.equal(gomoku.counts, null);
   assert.equal(gomoku.countLabels, null);
 
   const othello = gameControls("othello", new OthelloEngine({ width: 8, height: 6 }).getState());
-  assert.equal(othello.pass || othello.scoring || othello.ai || othello.sgf || othello.ruleSet, false);
+  assert.equal(othello.pass || othello.scoring || othello.analysis || othello.sgf || othello.ruleSet, false);
+  assert.equal(othello.ai, true);
   assert.equal(othello.counts, "discs");
   assert.deepEqual(othello.countValues, { black: 2, white: 2 });
   assert.deepEqual(othello.countLabels, { black: "黑方子数", white: "白方子数" });

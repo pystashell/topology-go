@@ -353,12 +353,17 @@ export function fakeRules(gameType) {
       scoring: false,
       undo: true,
       resign: true,
-      ai: false,
+      ai: true,
       analysis: false,
       sgf: false,
     }),
     roomActions: readonlySet(NON_GO_ROOM_ACTIONS),
-    matchModes: Object.freeze([MATCH_MODES.FRIEND, MATCH_MODES.LOCAL]),
+    matchModes: Object.freeze([
+      MATCH_MODES.FRIEND,
+      MATCH_MODES.HUMAN_AI,
+      MATCH_MODES.AI_AI,
+      MATCH_MODES.LOCAL,
+    ]),
     normalizeSettings(raw = {}, previous = null) {
       const width = side(
         raw.width ?? raw.size ?? previous?.width ?? previous?.size ?? defaults.width,

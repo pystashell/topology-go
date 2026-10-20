@@ -547,6 +547,34 @@ for (const gameType of ["gomoku", "othello"]) {
   });
 }
 
+test("AI moves in a Gomoku or Othello room must name the game", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const now = Date.now();
+  const engine = RoomEngine.create({ code: "BAM234", name: "Black", gameType: "gomoku",
+    playerId: "black", tokenHash: "a".repeat(64), startImmediately: false, now });
+  engine.applyAction({ playerId: "black", action: "request_game",
+    payload: { mode: "ai-ai", gameType: "gomoku" }, now });
+  const { room, storage } = await durable(engine.serialize());
+  const aiMove = (id, sequence, gameType) => ({
+    id, sequence, action: "ai_play",
+    payload: {
+      row: 3, col: 4,
+      expectedMoveCount: room.engine.state.moveCount,
+      expectedPositionToken: room.engine.snapshot().positionToken,
+      ...(gameType ? { gameType } : {}),
+    },
+  });
+  const oldPage = socket();
+  await room.handleCommand(oldPage, attachment, aiMove("ai-old", 1));
+  assert.equal(oldPage.messages[0].code, "PROTOCOL_UPGRADE_REQUIRED");
+  assert.equal(room.engine.game.board[3][4], null);
+  const newPage = socket();
+  await room.handleCommand(newPage, attachment, aiMove("ai-new", 2, "gomoku"));
+  assert.equal(newPage.messages.at(-1).type, "ack");
+  assert.equal(storage.value.game.board[3][4], "black");
+  assert.equal(storage.value.match.controllers.white.modelId, "rapfi");
+});
+
 test("accepting an invitation to another game needs a multi-game page; declining does not", async (t) => {
   t.mock.method(console, "error", () => {});
   const stored = savedGameRoom("go", { invite: { gameType: "othello" } });
