@@ -26,10 +26,10 @@ test("Othello rules describe the game", () => {
   assert.equal(othelloRules.limits, BOARD_LIMITS.othello);
   assert.deepEqual(othelloRules.defaults, { width: 8, height: 8, topology: "cylinder" });
   assert.deepEqual({ ...othelloRules.capabilities }, {
-    pass: false, scoring: false, undo: true, resign: true, ai: false, analysis: false, sgf: false,
+    pass: false, scoring: false, undo: true, resign: true, ai: true, analysis: false, sgf: false,
   });
   assert.deepEqual([...othelloRules.roomActions], NON_GO_ROOM_ACTIONS);
-  assert.deepEqual(othelloRules.matchModes, ["friend", "local"]);
+  assert.deepEqual(othelloRules.matchModes, ["friend", "human-ai", "ai-ai", "local"]);
   assert.ok(Object.isFrozen(othelloRules) && Object.isFrozen(othelloRules.defaults));
   const game = othelloRules.create();
   assert.equal(gameTypeOf(game), "othello");

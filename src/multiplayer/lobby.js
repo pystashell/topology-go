@@ -4,6 +4,7 @@ import {
   GOMOKU_RULE_SETS,
   isGameType,
 } from "../game/gameTypes.js";
+import { aiSeatName } from "../ai/modelCatalog.js";
 import {
   encodeLobbyBoardPreview,
   isLobbyBoardPreview,
@@ -96,7 +97,8 @@ function controllerPlayer(room, color, value, mode) {
       ? value.modelId.slice(0, 16)
       : "b10";
     return {
-      name: `KataGo ${modelId} AI`,
+      // "KataGo b10 AI", "Rapfi AI", "拓扑黑白棋 AI" (translated by the page).
+      name: aiSeatName(modelId),
       color,
       controller: "ai",
       online: operator?.online === true,

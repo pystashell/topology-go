@@ -266,38 +266,130 @@ test("next-round settings keep the game unless asked and switch to the new game'
   );
 });
 
-test("games without AI offer only friend and same-browser rounds", () => {
-  const room = createRoom({ size: 9 });
-  for (const mode of ["human-ai", "ai-ai"]) {
-    for (const gameType of ["gomoku", "othello"]) {
-      rejects(
-        () => act(room, "host", "request_game", { mode, gameType }, 1_200),
-        400,
-        "UNSUPPORTED_FOR_GAME",
-        "这个棋类暂不支持这种对局方式。",
-      );
-    }
-  }
-  const started = act(room, "host", "request_game", { mode: MATCH_MODE_LOCAL, gameType: "othello" }, 1_300);
-  assert.equal(started.room.match.status, MATCH_STATUS_PLAYING);
-  assert.equal(started.room.game.gameType, "othello");
-  assert.equal(started.room.match.controllers.white.operatorId, "host");
+function aiExpectation(room) {
+  const snapshot = room.snapshot(room.state.updatedAt);
+  return {
+    expectedMoveCount: snapshot.moveCount,
+    expectedPositionToken: snapshot.positionToken,
+  };
+}
 
-  // A Gomoku room can still go back to an AI game of Go.
-  act(room, "host", "resign", { color: "black" }, 1_400);
-  const goAI = act(room, "host", "request_game", { mode: "human-ai", gameType: "go" }, 1_500);
+test("Gomoku and Othello offer AI rounds with their own engines", () => {
+  const room = createRoom({ size: 9 });
+  const gomoku = act(room, "host", "request_game", { mode: "human-ai", gameType: "gomoku" }, 1_200);
+  assert.equal(gomoku.room.match.status, MATCH_STATUS_PLAYING);
+  assert.equal(gomoku.room.game.gameType, "gomoku");
+  assert.deepEqual(gomoku.room.match.controllers, {
+    black: { kind: "human", operatorId: "host" },
+    white: { kind: "ai", operatorId: "host", modelId: "rapfi" },
+  });
+  assert.deepEqual(
+    lobbySummaryFromRoom(gomoku.room, 1_200).players.map(({ name, controller }) => [name, controller]),
+    [["Host", "human"], ["Rapfi AI", "ai"]],
+  );
+
+  // The host plays Black; the host browser submits Rapfi's White replies.
+  play(room, "host", 5, 5, 1_300);
+  const reply = act(room, "host", "ai_play", { row: 6, col: 6, ...aiExpectation(room) }, 1_400);
+  assert.equal(reply.room.moveCount, 2);
+  assert.equal(reply.room.game.currentPlayer, "black");
+  rejects(() => act(room, "host", "ai_play", { row: 7, col: 7, ...aiExpectation(room) }, 1_450),
+    409, "NOT_AI_TURN");
+  rejects(() => act(room, "host", "ai_pass", aiExpectation(room), 1_450),
+    409, "UNSUPPORTED_FOR_GAME", "这个棋类不支持这个操作。");
+  const undone = act(room, "host", "direct_undo_ai_round", aiExpectation(room), 1_500);
+  assert.equal(undone.move.type, "ai_round_undone");
+  assert.equal(undone.move.undoneCount, 2);
+  assert.equal(undone.room.moveCount, 0);
+  act(room, "host", "resign", { color: "black" }, 1_600);
+
+  // AI self-play of Othello: both colours run the Othello engine, can be
+  // paused, and a paused game takes back single moves.
+  const othello = act(room, "host", "request_game", { mode: "ai-ai", gameType: "othello" }, 1_700);
+  assert.equal(othello.room.match.controllers.black.modelId, "topo-othello");
+  assert.equal(othello.room.match.controllers.white.modelId, "topo-othello");
+  assert.deepEqual(
+    lobbySummaryFromRoom(othello.room, 1_700).players.map(({ name }) => name),
+    ["拓扑黑白棋 AI", "拓扑黑白棋 AI"],
+  );
+  act(room, "host", "ai_play", { row: 2, col: 3, ...aiExpectation(room) }, 1_800);
+  act(room, "host", "set_ai_autoplay_paused", { paused: true, ...aiExpectation(room) }, 1_900);
+  const back = act(room, "host", "direct_undo_ai_move", aiExpectation(room), 2_000);
+  assert.equal(back.move.type, "ai_move_undone");
+  assert.equal(back.room.moveCount, 0);
+  act(room, "host", "set_ai_autoplay_paused", { paused: false, ...aiExpectation(room) }, 2_050);
+  act(room, "host", "resign", { color: "black" }, 2_100);
+
+  // A Gomoku or Othello room can still go back to an AI game of Go.
+  const goAI = act(room, "host", "request_game", { mode: "human-ai", gameType: "go" }, 2_200);
   assert.equal(goAI.room.match.mode, "human-ai");
+  assert.equal(goAI.room.match.controllers.white.modelId, "b10");
   assert.equal("gameType" in goAI.room.game, false);
+  assert.equal(lobbySummaryFromRoom(goAI.room, 2_200).players[1].name, "KataGo b10 AI");
+  const restored = RoomEngine.restore(structuredClone(room.serialize()));
+  assert.deepEqual(restored.serialize(), room.serialize());
+});
+
+test("AI model ids belong to one game each", () => {
+  const room = createRoom({ size: 9 });
+  for (const [gameType, modelId] of [
+    ["gomoku", "b10"],
+    ["gomoku", "topo-othello"],
+    ["othello", "b18"],
+    ["othello", "rapfi"],
+    ["go", "rapfi"],
+    ["go", "topo-othello"],
+  ]) {
+    rejects(
+      () => act(room, "host", "request_game", { mode: "human-ai", gameType, aiModelId: modelId }, 1_200),
+      400,
+      "BAD_REQUEST",
+      "AI 模型无效。",
+    );
+    rejects(
+      () => act(room, "host", "request_game", {
+        mode: "ai-ai", gameType, aiModelIds: { black: modelId, white: modelId },
+      }, 1_200),
+      400,
+      "BAD_REQUEST",
+      "AI 模型无效。",
+    );
+  }
+  assert.equal(room.state.match.status, "setup");
+  const started = act(room, "host", "request_game", {
+    mode: "ai-ai", gameType: "gomoku", aiModelIds: { black: "rapfi", white: "rapfi" },
+  }, 1_300);
+  assert.equal(started.room.match.controllers.black.modelId, "rapfi");
+
+  // A stored round whose AI model belongs to another game is corrupt.
+  const stored = room.serialize();
+  stored.match.controllers.white.modelId = "b10";
+  rejects(() => RoomEngine.restore(stored), 500, "BAD_ROOM_STATE");
+});
+
+test("a legacy AI seat follows the round's game", () => {
+  const room = createRoom({ size: 9, startImmediately: true });
+  room.state.allowLegacyNewGame = true;
+  const attached = act(room, "host", "attach_ai", { modelId: "b18" }, 1_100);
+  assert.equal(attached.room.players.find((player) => player.color === "white").name, "KataGo b18 AI");
+  rejects(() => act(room, "host", "attach_ai", { modelId: "rapfi" }, 1_150), 400, "BAD_REQUEST");
+  act(room, "host", "resign", { color: "black" }, 1_200);
+  const next = act(room, "host", "new_game", { gameType: "othello" }, 1_300);
+  assert.equal(next.room.game.gameType, "othello");
+  assert.equal(next.room.match.mode, "human-ai");
+  assert.equal(next.room.match.controllers.white.modelId, "topo-othello");
+  const seat = next.room.players.find((player) => player.color === "white");
+  assert.equal(seat.name, "拓扑黑白棋 AI");
+  assert.deepEqual(RoomEngine.restore(structuredClone(room.serialize())).serialize(), room.serialize());
 });
 
 test("each game accepts only its own room actions", () => {
   const room = friendRoom("gomoku", { size: 11 });
   play(room, "host", 5, 5, 2_100);
   const before = room.serialize();
+  // AI seats exist in every game, but an AI never passes outside Go.
   for (const action of [
-    "pass", "ai_play", "ai_pass", "toggle_dead", "finish_scoring", "resume_play",
-    "attach_ai", "detach_ai", "set_ai_autoplay_paused", "direct_undo_ai_round",
-    "direct_undo_ai_move",
+    "pass", "ai_pass", "toggle_dead", "finish_scoring", "resume_play",
   ]) {
     rejects(
       () => act(room, "friend", action, { row: 5, col: 6 }, 2_200),
