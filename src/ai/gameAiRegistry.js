@@ -75,8 +75,8 @@ const REGISTRY = Object.freeze({
   [GAME_GOMOKU]: engineEntry(
     GAME_GOMOKU,
     RAPFI_MODEL_ID,
-    // Rapfi: "./gomoku/gomokuAiWorker.js" once it lands.
-    () => new Worker(new URL("./fallback/fallbackAiWorker.js", import.meta.url), { type: "module" }),
+    // Rapfi (WebAssembly) behind seam-aware tactics; see src/ai/gomoku/.
+    () => new Worker(new URL("./gomoku/gomokuAiWorker.js", import.meta.url), { type: "module" }),
   ),
   [GAME_OTHELLO]: engineEntry(
     GAME_OTHELLO,
