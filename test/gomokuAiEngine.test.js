@@ -249,9 +249,12 @@ test("cancel stops a long search promptly and the engine stays usable", async ()
     toMove: "black",
     lastMove: { row: 9, col: 9, color: "white" },
   });
+  // Warm up first: a new board size or evaluator makes Rapfi unpack its
+  // network inside the next (uninterruptible) slice.
+  await chooseGomokuMove(pos, { level: "hard", timeLimitMs: 200 }, { engine: rapfi, waitForNetwork: true });
   const controller = new AbortController();
   const started = performance.now();
-  const pending = chooseGomokuMove(pos, { level: "hard", timeLimitMs: 20_000 }, { engine: rapfi, signal: controller.signal, waitForNetwork: true });
+  const pending = chooseGomokuMove(pos, { level: "hard", timeLimitMs: 20_000 }, { engine: rapfi, signal: controller.signal });
   setTimeout(() => controller.abort(), 300);
   await assert.rejects(pending, { code: "CANCELLED" });
   const elapsed = performance.now() - started;
