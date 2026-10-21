@@ -12,3 +12,7 @@ dist/
 .dev.vars.*
 *.log
 project_story.md
+
+# Local Playwright install for scripts/browser-checks
+scripts/browser-checks/package.json
+scripts/browser-checks/package-lock.json
