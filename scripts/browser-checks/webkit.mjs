@@ -8,23 +8,49 @@ import { BASE, SHOTS } from "./lib.mjs";
 
 const problems = [];
 const results = {};
+// WebKit gives every <select> an internal shadow tree with inline styles and
+// reports it against the page CSP (style-src-attr, at the select's line in
+// the HTML). Nothing of ours is blocked; those reports alone are ignored.
+const html = (await (await fetch(`${BASE}/single`)).text()).split("\n");
+const selectLines = new Set(html.flatMap((line, index) => (/<select\b/u.test(line) ? [index + 1] : [])));
+results.ignoredSelectReports = 0;
 const browser = await webkit.launch();
 const context = await browser.newContext({ ...devices["iPhone 13"] });
 await context.addInitScript(() => {
   try { localStorage.setItem("3d-baduk-locale-v1", "zh-CN"); } catch {}
   document.addEventListener("securitypolicyviolation", (event) => {
-    console.error(`CSP violation: ${event.violatedDirective} ${event.blockedURI}`);
+    console.error(`CSP violation: ${event.violatedDirective} ${event.blockedURI} @${event.sourceFile}:${event.lineNumber}`);
   });
 });
 const page = await context.newPage();
 page.on("console", (message) => {
-  if (message.type() === "error") problems.push(`console.error: ${message.text()}`);
+  if (message.type() !== "error") return;
+  const text = message.text();
+  const violation = /^CSP violation: style-src-attr inline @:(\d+)$/u.exec(text);
+  if (violation && selectLines.has(Number(violation[1]))) {
+    results.ignoredSelectReports += 1;
+    return;
+  }
+  if (capturing && /^CSP violation: style-src-elem inline/u.test(text)) return;
+  // The console line WebKit prints for the same select reports.
+  if (/^Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline'/u.test(text)) return;
+  problems.push(`console.error: ${text}`);
 });
 page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
 
 const text = async (selector) => ((await page.locator(selector).first().textContent()) ?? "").trim();
 const moveNumber = () => text("#move-number");
-const shot = (name) => page.screenshot({ path: `${SHOTS}/webkit-${name}.png` });
+const moveIndex = (value) => Number(/第 (\d+) 手/u.exec(value)?.[1] ?? NaN);
+// Playwright WebKit injects a style while it captures a screenshot, which
+// the page CSP reports (style-src-elem); ignore reports during a capture.
+let capturing = false;
+const shot = async (name) => {
+  if (process.env.NO_SHOTS) return;
+  capturing = true;
+  await page.screenshot({ path: `${SHOTS}/webkit-${name}.png` });
+  await page.waitForTimeout(200);
+  capturing = false;
+};
 
 async function tapBoardCentre() {
   const canvas = page.locator(".view-surface:not([hidden]) canvas").first();
@@ -90,12 +116,13 @@ for (const [gameType, topology] of [["gomoku", "torus"], ["othello", "mobius"]])
     if ((await moveNumber()) !== before) break;
   }
   const afterHuman = await moveNumber();
+  // The human move and the AI reply: two moves on from the start.
   let reply = "";
   try {
-    await page.waitForFunction((value) => {
-      const now = document.querySelector("#move-number")?.textContent ?? "";
-      return now !== value && /轮到你|Your/u.test(document.querySelector("#ai-hint")?.textContent ?? "");
-    }, afterHuman, { timeout: 30_000 });
+    await page.waitForFunction((start) => {
+      const now = Number(/第 (\d+) 手/u.exec(document.querySelector("#move-number")?.textContent ?? "")?.[1]);
+      return now >= start + 2 && /轮到你|Your/u.test(document.querySelector("#ai-hint")?.textContent ?? "");
+    }, moveIndex(before), { timeout: 30_000 });
     reply = await moveNumber();
   } catch {
     reply = `timeout (${await text("#ai-hint")})`;
