@@ -147,6 +147,8 @@ record.abandonment = {
 await host.waitForFunction(() => !document.querySelector("#claim-abandonment")?.disabled, null, { timeout: 150_000 });
 record.abandonment.noteReady = await text(host, "#abandonment-note");
 await host.click("#claim-abandonment");
+await host.waitForTimeout(1_000);
+record.abandonment.messageAfterClaim = await text(host, "#message");
 await host.waitForFunction(() => /对局结束|认输终局/u.test(document.querySelector("#phase-label")?.textContent ?? ""), null, { timeout: 15_000 });
 record.abandonment.result = await text(host, "#turn-text");
 record.abandonment.panelHidden = await host.locator("#abandonment-panel").isHidden();

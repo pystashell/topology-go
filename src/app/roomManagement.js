@@ -162,9 +162,17 @@ function wireRoomManagement() {
   });
   elements.claimAbandonment.addEventListener("click", async () => {
     if (!window.confirm(translateText("判对方弃局后，本局按对方认输结束。确定吗？"))) return;
-    if (await sendOnlineCommand("claim_abandonment")) {
-      setMessage("已判对方弃局，本局结束。", false);
-    }
+    const claim = abandonmentClaim();
+    const sent = await sendOnlineCommand("claim_abandonment", {}, {
+      onError: (error) => {
+        // The room restarted and counts the grace from then: count again here.
+        if (error?.code === "ABANDONMENT_TOO_EARLY" && claim) {
+          const operatorId = onlineController(claim.color)?.operatorId;
+          if (operatorId) opponentOfflineSince.set(operatorId, Date.now());
+        }
+      },
+    });
+    if (sent) setMessage("已判对方弃局，本局结束。", false);
   });
 }
 
