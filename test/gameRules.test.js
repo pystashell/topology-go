@@ -177,7 +177,7 @@ test("Gomoku and Othello declare their capabilities, actions and defaults", () =
     assert.deepEqual(rules.matchModes, ["friend", "human-ai", "ai-ai", "local"]);
     assert.deepEqual(
       { ...rules.capabilities },
-      { pass: false, scoring: false, undo: true, resign: true, ai: true, analysis: false, sgf: false },
+      { pass: false, scoring: false, undo: true, resign: true, ai: true, analysis: false, sgf: true },
     );
     // An AI never passes in these games; KataGo analysis stays Go's.
     for (const action of ["pass", "ai_pass", "toggle_dead", "finish_scoring", "resume_play"]) {

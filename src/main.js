@@ -1358,6 +1358,9 @@ function sgfImportWarningSummary(warnings) {
     INVALID_KOMI: "贴目无效，已按 0 目复盘",
     MISSING_SIZE: "缺少尺寸，已按 19 × 19 解释",
     MISSING_GM: "缺少棋类标记，已按围棋解释",
+    DEFAULT_SIZE_ASSUMED: "缺少尺寸，已按该棋默认尺寸解释",
+    UNKNOWN_GOMOKU_RULE: "未知五子棋规则已按自由规则解释",
+    OTHELLO_PASSES_SKIPPED: "棋谱中的停着已跳过，黑白棋会自动跳过无子可下的一方",
     NORMALIZED_PROPERTY_ID: "属性名已规范化",
     PARTIAL_BASE_MISSING: "旧版部分棋谱缺少提子与劫争历史，仅能近似复盘",
   };
@@ -1394,8 +1397,10 @@ function exportCurrentSgf() {
     });
     const base = source.base ?? game;
     const stamp = new Date().toISOString().replace(/[-:]/gu, "").slice(0, 13);
+    const gameType = gameTypeOf(base);
     const filename = [
-      "3d-baduk",
+      "topology-go",
+      ...(gameType === GAME_GO ? [] : [safeRecordFilenamePart(gameType)]),
       safeRecordFilenamePart(base.topology ?? "cylinder"),
       `${boardWidth(base)}x${boardHeight(base)}`,
       stamp,
@@ -1448,10 +1453,13 @@ async function importSgfFile(file) {
     replaySession.extensionEvents = parsed.extensionEvents;
     const assumed = parsed.warnings.some((item) => item.code === "TOPOLOGY_ASSUMED");
     const warningSummary = sgfImportWarningSummary(parsed.warnings);
+    const analysis = gameRulesOf(parsed.replay.base).capabilities.analysis;
     setMessage(
       assumed
         ? `已导入 ${file.name}：原谱未写异形拓扑，按当前选择的${topologyName(parsed.metadata.topology)}复盘。${warningSummary}`
-        : `已导入 ${file.name}，共 ${replayEventCount(parsed.replay)} 手；可播放、切换视图或做 AI 分析。${warningSummary}`,
+        : analysis
+          ? `已导入 ${file.name}，共 ${replayEventCount(parsed.replay)} 手；可播放、切换视图或做 AI 分析。${warningSummary}`
+          : `已导入 ${file.name}，共 ${replayEventCount(parsed.replay)} 手；可播放或切换视图。${warningSummary}`,
     );
   } catch (error) {
     if (error instanceof SgfError && error.code === "UNSUPPORTED_GAME") {

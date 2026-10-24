@@ -26,6 +26,7 @@ Then, from `scripts/browser-checks`:
 | `node csp.mjs` | Under the real `_headers` CSP: view switches, a local KataGo self-play game (b10), the lobby, and room creation over WebSocket. Fails on any CSP violation. |
 | `node local.mjs` | Gomoku (freestyle and Renju) and Othello against the AI on cylinder, torus and Möbius, played to a result. Also AI self-play with pause/undo/resume, direct undo against the AI, and an English pass checking for leftover Chinese. |
 | `node online.mjs` | Online rooms with an AI seat run by the host browser, plus a guest and a spectator. Checks that undo stays in sync and that every view ends on the same result. |
+| `node sgf.mjs` | SGF for every game: AI self-play a Gomoku (Renju, torus) and an Othello (Möbius) game, export each record, import it on a fresh page and replay it to the end. Also a Go import, an unsupported GM[3] record and an English pass. |
 | `node go.mjs` | Go regression: the AI dialog still offers KataGo b10/b18, and KataGo plays a real reply. |
 
 ## Environment variables

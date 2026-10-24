@@ -437,7 +437,8 @@ test("setup stones and PL become a replay-compatible base position", () => {
 
 test("malformed, oversized, too-deep and out-of-board SGF is rejected", () => {
   assert.throws(() => importSgf("not sgf"), SgfError);
-  assert.throws(() => importSgf("(;FF[4]GM[2]SZ[9])"), { code: "UNSUPPORTED_GAME" });
+  assert.throws(() => importSgf("(;FF[4]GM[3]SZ[8])"), { code: "UNSUPPORTED_GAME" });
+  assert.throws(() => importSgf("(;FF[4]GM[2]SZ[9])"), { code: "INVALID_BOARD_SIZE" });
   assert.throws(() => importSgf("(;FF[4]GM[1]SZ[5];B[zz])"), {
     code: "POINT_OUT_OF_BOUNDS",
   });

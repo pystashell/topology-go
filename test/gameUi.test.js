@@ -200,7 +200,8 @@ test("controls follow each game's capabilities and counters", () => {
   assert.deepEqual(go.countLabels, { black: "黑方提子", white: "白方提子" });
 
   const gomoku = gameControls("gomoku", new GomokuEngine().getState());
-  assert.equal(gomoku.pass || gomoku.scoring || gomoku.analysis || gomoku.sgf, false);
+  assert.equal(gomoku.pass || gomoku.scoring || gomoku.analysis, false);
+  assert.equal(gomoku.sgf, true);
   // Gomoku and Othello play their own AI engines; KataGo analysis stays Go's.
   assert.equal(gomoku.undo && gomoku.resign && gomoku.ruleSet && gomoku.ai, true);
   assert.equal(gomoku.komi, false);
@@ -208,7 +209,8 @@ test("controls follow each game's capabilities and counters", () => {
   assert.equal(gomoku.countLabels, null);
 
   const othello = gameControls("othello", new OthelloEngine({ width: 8, height: 6 }).getState());
-  assert.equal(othello.pass || othello.scoring || othello.analysis || othello.sgf || othello.ruleSet, false);
+  assert.equal(othello.pass || othello.scoring || othello.analysis || othello.ruleSet, false);
+  assert.equal(othello.sgf, true);
   assert.equal(othello.ai, true);
   assert.equal(othello.counts, "discs");
   assert.deepEqual(othello.countValues, { black: 2, white: 2 });
@@ -333,14 +335,12 @@ test("board, rules and lobby labels name the game", () => {
   assert.deepEqual(lobbyGameLabels({ gameType: "othello" }), { gameType: "othello", badge: "黑白棋", rule: "" });
 });
 
-test("SGF records of other games get a friendly note", () => {
+test("SGF records of games we do not play get a friendly note", () => {
   const note = (gm) => sgfOtherGameNote({ message: `Unsupported SGF game type GM[${gm}]` });
-  assert.equal(note(2), "这是黑白棋棋谱（GM[2]）；目前只能导入围棋 SGF。");
-  assert.equal(english(note(2)), "This is an Othello record (GM[2]); only Go SGF files can be imported for now.");
-  assert.equal(english(note(4)), "This is a Gomoku record (GM[4]); only Go SGF files can be imported for now.");
+  assert.equal(note(7), "这份 SGF 不是围棋、五子棋或黑白棋棋谱（GM[7]），无法导入。");
   assert.equal(
     english(note(7)),
-    "This SGF file is not a Go record (GM[7]); only Go SGF files can be imported for now.",
+    "This SGF file is not a Go, Gomoku or Othello record (GM[7]) and cannot be imported.",
   );
   assertEnglish(sgfOtherGameNote({}));
 });

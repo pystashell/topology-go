@@ -13,10 +13,25 @@
  *   XBADUKBASE[1][chunks...]     versioned partial-replay baseline state
  *
  * Unknown X* properties are preserved as metadata by importSgf().
+ *
+ * Gomoku (GM[4]) and Othello (GM[2]) records use the same moves, XTOP and
+ * game-info properties. Gomoku writes RU[Freestyle] or RU[Renju]; Othello
+ * writes its four starting discs as AB/AW. Both games always replay from
+ * their starting position, so imports re-play every move under the real
+ * rules and reject records that cannot be reached that way.
  */
 
 import { MAX_BOARD_DIMENSION } from "./boardDimensions.js";
+import {
+  GAME_GO,
+  GAME_GOMOKU,
+  GAME_OTHELLO,
+  GOMOKU_FREESTYLE,
+  GOMOKU_RENJU,
+  SGF_GAME_CODES,
+} from "./gameTypes.js";
 import { GoEngine } from "./goEngine.js";
+import { gameTypeOf, rulesFor } from "./rules/index.js";
 
 const BLACK = "black";
 const WHITE = "white";
@@ -341,8 +356,91 @@ function resultToSgf(value) {
   if (!winner) return "";
   if (value.resignation === true || value.reason === "resign") return `${winner}+R`;
   if (value.reason === "timeout" || value.timeout === true) return `${winner}+T`;
+  // A Gomoku five has no score to report.
+  if (value.reason === "five") return `${winner}+`;
   const margin = value.margin ?? value.difference ?? value.score;
   return Number.isFinite(Number(margin)) ? `${winner}+${Math.abs(Number(margin))}` : winner;
+}
+
+function ruleSetToSgf(ruleSet) {
+  return ruleSet === GOMOKU_RENJU ? "Renju" : "Freestyle";
+}
+
+/** Gomoku and Othello records: moves from the game's starting position. */
+function exportOtherGameSgf(record, replay, options, limits, gameType) {
+  if (gameType !== GAME_GOMOKU && gameType !== GAME_OTHELLO) {
+    throw new SgfError(`Unsupported game type '${gameType}'`, "UNSUPPORTED_GAME");
+  }
+  if (replay.complete === false) {
+    throw new SgfError("Gomoku and Othello records always start from the first move", "INVALID_REPLAY");
+  }
+  const base = replay.base;
+  const { width, height } = inferDimensions(base, limits);
+  const board = validateBoard(base, width, height);
+  const topology = normalizedTopology(options.topology ?? base.topology);
+  const warnings = [
+    warning(
+      "NONSTANDARD_TOPOLOGY",
+      `Topology '${topology}' is stored in the ignorable ${SGF_EXTENSION_PROPERTIES.topology} extension.`,
+    ),
+  ];
+  if (width !== height) {
+    warnings.push(
+      warning("RECTANGULAR_BOARD", "The rectangular board uses the standard SZ[width:height] form."),
+    );
+  }
+  const root = [
+    property("FF", "4"),
+    property("GM", String(SGF_GAME_CODES[gameType])),
+    property("CA", "UTF-8"),
+    property("AP", "Topology Go:1"),
+    property("SZ", width === height ? width : `${width}:${height}`),
+    ...(gameType === GAME_GOMOKU ? [property("RU", ruleSetToSgf(base.ruleSet))] : []),
+    property(SGF_EXTENSION_PROPERTIES.topology, topology),
+  ];
+  const blackName = metadataValue(record, options, "blackPlayer", "blackName", "PB");
+  const whiteName = metadataValue(record, options, "whitePlayer", "whiteName", "PW");
+  const result = resultToSgf(metadataValue(record, options, "result", "RE"));
+  if (blackName !== undefined) root.push(property("PB", blackName));
+  if (whiteName !== undefined) root.push(property("PW", whiteName));
+  if (result) root.push(property("RE", result));
+  // Othello's four starting discs; a Gomoku board starts empty.
+  const blackSetup = [];
+  const whiteSetup = [];
+  for (let row = 0; row < height; row += 1) {
+    for (let col = 0; col < width; col += 1) {
+      if (board[row][col] === BLACK) blackSetup.push(encodeSgfPoint(row, col, width, height));
+      if (board[row][col] === WHITE) whiteSetup.push(encodeSgfPoint(row, col, width, height));
+    }
+  }
+  if (blackSetup.length) root.push(property("AB", blackSetup));
+  if (whiteSetup.length) root.push(property("AW", whiteSetup));
+
+  const nodes = [`;${root.join("")}`];
+  for (let index = 0; index < replay.events.length; index += 1) {
+    const event = replay.events[index];
+    if (!isPlainObject(event)) {
+      throw new SgfError(`Replay event ${index} must be an object`, "INVALID_REPLAY_EVENT");
+    }
+    if (event.type === "play") {
+      const color = colorToSgf(event.color, `event ${index} color`);
+      nodes.push(`;${property(color, encodeSgfPoint(event.row, event.col, width, height))}`);
+    } else if (event.type !== "resign") {
+      // Resignation is stored in RE, as for Go.
+      warnings.push(
+        warning(
+          "SKIPPED_EVENT",
+          `Replay event ${index} has unsupported type '${event.type}' and was skipped.`,
+          { eventIndex: index },
+        ),
+      );
+    }
+  }
+  const sgf = `(${nodes.join("\n")})`;
+  if (new TextEncoder().encode(sgf).byteLength > limits.maxBytes) {
+    throw new SgfError("Exported SGF exceeds the configured byte limit", "SGF_TOO_LARGE");
+  }
+  return { sgf, warnings };
 }
 
 /**
@@ -355,6 +453,8 @@ export function exportSgf(input, options = {}) {
   const limits = mergeLimits(options.limits);
   const { record, replay } = normalizeExportInput(input);
   const base = replay.base;
+  const gameType = gameTypeOf(base);
+  if (gameType !== GAME_GO) return exportOtherGameSgf(record, replay, options, limits, gameType);
   const { width, height } = inferDimensions(base, limits);
   const board = validateBoard(base, width, height);
   const warnings = [];
@@ -948,6 +1048,169 @@ function restorePartialReplayBase(root, replay, warnings) {
   }
 }
 
+function readTopology(root, options, warnings) {
+  const topologyValue = firstProperty(root, SGF_EXTENSION_PROPERTIES.topology);
+  const fallbackTopology = normalizedTopology(options.defaultTopology ?? "cylinder");
+  if (topologyValue !== undefined) return normalizedTopology(topologyValue);
+  warnings.push(
+    warning(
+      "TOPOLOGY_ASSUMED",
+      `SGF has no ${SGF_EXTENSION_PROPERTIES.topology}; '${fallbackTopology}' was selected for replay.`,
+    ),
+  );
+  return fallbackTopology;
+}
+
+function gomokuRuleSetFromSgf(value, warnings) {
+  const rule = String(value ?? "").trim().toLowerCase();
+  if (/renju|连珠|連珠|禁手/u.test(rule)) return GOMOKU_RENJU;
+  if (rule && !/^(?:freestyle|free|gomoku|自由.*)$/u.test(rule)) {
+    warnings.push(warning(
+      "UNKNOWN_GOMOKU_RULE",
+      `Unknown Gomoku rules '${value}'; freestyle rules (five or more wins) were selected.`,
+    ));
+  }
+  return GOMOKU_FREESTYLE;
+}
+
+function sameBoard(left, right) {
+  return left.every((row, rowIndex) => row.every((point, col) => point === right[rowIndex][col]));
+}
+
+/**
+ * Gomoku (GM[4]) and Othello (GM[2]): replay every main-line move from the
+ * game's start under its real rules, so the result is exactly the record
+ * the engine would have written.
+ */
+function importOtherGameSgf({ root, nodes, info, limits, warnings, options, gameType }) {
+  const rules = rulesFor(gameType);
+  const gameName = gameType === GAME_GOMOKU ? "Gomoku" : "Othello";
+  for (const identifier of [
+    SGF_EXTENSION_PROPERTIES.partialBase,
+    SGF_EXTENSION_PROPERTIES.replayComplete,
+  ]) {
+    if (propertyValues(root, identifier).some((value) => value !== "1")) {
+      throw new SgfError(`${gameName} records always start from the first move`, "INVALID_PARTIAL_BASE");
+    }
+  }
+  const sizeValue = firstProperty(root, "SZ");
+  const fallbackSize = rules.defaults.width;
+  if (sizeValue === undefined) {
+    warnings.push(warning(
+      "DEFAULT_SIZE_ASSUMED",
+      `SZ was absent; the ${gameName} default ${fallbackSize}x${fallbackSize} was assumed.`,
+    ));
+  }
+  const { width, height } = parseSize(sizeValue ?? String(fallbackSize), limits);
+  const metadata = readMetadata(root, info, warnings, width * height);
+  const topology = readTopology(root, options, warnings);
+  const ruleSet = gameType === GAME_GOMOKU ? gomokuRuleSetFromSgf(metadata.rules, warnings) : undefined;
+  let game;
+  try {
+    game = rules.create(rules.normalizeSettings({
+      gameType,
+      width,
+      height,
+      topology,
+      ...(ruleSet ? { ruleSet } : {}),
+    }));
+  } catch (error) {
+    throw new SgfError(error.message, "INVALID_BOARD_SIZE");
+  }
+
+  const setup = Array.from({ length: height }, () => Array(width).fill(EMPTY));
+  const setupBudget = { remaining: 2 * width * height };
+  setSetupStones(setup, propertyValues(root, "AB"), BLACK, width, height, setupBudget);
+  setSetupStones(setup, propertyValues(root, "AW"), WHITE, width, height, setupBudget);
+  const hasSetup = setup.some((row) => row.some((point) => point !== EMPTY));
+  if (hasSetup && !sameBoard(setup, game.getState().board)) {
+    throw new SgfError(
+      gameType === GAME_GOMOKU
+        ? "Gomoku records with setup stones cannot be replayed"
+        : "Othello records must start from the four centre discs",
+      "UNSUPPORTED_SETUP",
+    );
+  }
+  const firstPlayer = firstProperty(root, "PL");
+  if (firstPlayer !== undefined && colorFromSgf(firstPlayer, "PL") !== BLACK) {
+    throw new SgfError(`${gameName} records must start with Black to move`, "UNSUPPORTED_SETUP");
+  }
+
+  const unknownExtensions = [];
+  let skippedPasses = 0;
+  for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
+    const node = nodes[nodeIndex];
+    if (nodeIndex > 0 && ["AB", "AW", "AE"].some((id) => propertyValues(node, id).length)) {
+      warnings.push(warning(
+        "IGNORED_MIDGAME_SETUP",
+        "Mid-game setup properties cannot be represented by replay events and were ignored.",
+        { nodeIndex },
+      ));
+    }
+    for (const { identifier, values } of node.properties) {
+      if (identifier === "B" || identifier === "W") {
+        if (values.length !== 1) {
+          throw new SgfError(`${identifier} must have exactly one value`, "INVALID_MOVE", { nodeIndex });
+        }
+        const color = identifier === "B" ? BLACK : WHITE;
+        const value = values[0];
+        if (value === "" || (value.toLowerCase() === "tt" && width <= 19 && height <= 19)) {
+          // Othello passes are automatic: the engine skips a player with no
+          // move. Gomoku has no passes at all.
+          if (gameType === GAME_GOMOKU) {
+            throw new SgfError("Gomoku has no passes", "INVALID_MOVE", { nodeIndex });
+          }
+          skippedPasses += 1;
+          continue;
+        }
+        const { row, col } = decodeSgfPoint(value, width, height);
+        if (game.phase !== "play") {
+          throw new SgfError(`Node ${nodeIndex} plays after the game ended`, "ILLEGAL_MOVE", { nodeIndex });
+        }
+        if (color !== game.currentPlayer) {
+          throw new SgfError(
+            `Node ${nodeIndex} plays ${identifier} when ${colorToSgf(game.currentPlayer)} is to move`,
+            "ILLEGAL_MOVE",
+            { nodeIndex },
+          );
+        }
+        const played = game.play(row, col);
+        if (!played.ok) {
+          throw new SgfError(
+            `Node ${nodeIndex} move ${identifier}[${value}] is illegal (${played.reason})`,
+            "ILLEGAL_MOVE",
+            { nodeIndex, reason: played.reason },
+          );
+        }
+      } else if (identifier.startsWith("X") && identifier !== SGF_EXTENSION_PROPERTIES.topology &&
+          identifier !== SGF_EXTENSION_PROPERTIES.partialBase &&
+          identifier !== SGF_EXTENSION_PROPERTIES.replayComplete) {
+        unknownExtensions.push({ identifier, values: [...values], nodeIndex });
+      }
+    }
+  }
+  if (skippedPasses) {
+    warnings.push(warning(
+      "OTHELLO_PASSES_SKIPPED",
+      `${skippedPasses} recorded pass(es) were skipped; Othello passes happen automatically.`,
+    ));
+  }
+  // Resignations are stored in RE.
+  const resigned = /^([BW])\+R(?:esign)?$/iu.exec(metadata.result.trim());
+  if (resigned && game.phase === "play") {
+    game.resign(resigned[1].toUpperCase() === "B" ? WHITE : BLACK);
+  }
+  return {
+    replay: game.getReplayState(),
+    width,
+    height,
+    metadata: { ...metadata, gameType, ...(ruleSet ? { ruleSet } : {}), topology },
+    extensionEvents: [],
+    extensions: { unknown: unknownExtensions },
+    warnings,
+  };
+}
+
 /**
  * Parse an SGF collection and import the first game tree's main branch.
  * Returns replay-ready data plus metadata, dimensions, extension events and
@@ -996,7 +1259,8 @@ export function importSgf(input, options = {}) {
     }
   }
   const gm = firstProperty(root, "GM");
-  if (gm !== undefined && gm !== "1") {
+  const otherGame = [GAME_GOMOKU, GAME_OTHELLO].find((type) => gm === String(SGF_GAME_CODES[type]));
+  if (gm !== undefined && gm !== "1" && !otherGame) {
     throw new SgfError(`Unsupported SGF game type GM[${gm}]`, "UNSUPPORTED_GAME");
   }
   if (gm === undefined) warnings.push(warning("MISSING_GM", "GM was absent; Go (GM[1]) was assumed."));
@@ -1013,26 +1277,16 @@ export function importSgf(input, options = {}) {
       ),
     );
   }
+  if (otherGame) {
+    return importOtherGameSgf({ root, nodes, info, limits, warnings, options, gameType: otherGame });
+  }
 
   const sizeValue = firstProperty(root, "SZ");
   if (sizeValue === undefined) warnings.push(warning("MISSING_SIZE", "SZ was absent; 19x19 was assumed."));
   const { width, height } = parseSize(sizeValue ?? "19", limits);
   const metadata = readMetadata(root, info, warnings, width * height);
   const scoringRule = normalizeRule(metadata.rules, warnings);
-
-  const topologyValue = firstProperty(root, SGF_EXTENSION_PROPERTIES.topology);
-  const fallbackTopology = normalizedTopology(options.defaultTopology ?? "cylinder");
-  let topology = fallbackTopology;
-  if (topologyValue !== undefined) {
-    topology = normalizedTopology(topologyValue);
-  } else {
-    warnings.push(
-      warning(
-        "TOPOLOGY_ASSUMED",
-        `SGF has no ${SGF_EXTENSION_PROPERTIES.topology}; '${fallbackTopology}' was selected for replay.`,
-      ),
-    );
-  }
+  const topology = readTopology(root, options, warnings);
 
   const board = Array.from({ length: height }, () => Array(width).fill(EMPTY));
   const setupBudget = { remaining: 2 * width * height };

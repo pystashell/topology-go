@@ -69,10 +69,6 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "白方子数": "White discs",
   "五子棋棋盘每边至少 11 路。": "Gomoku boards need at least 11 lines per side.",
   "黑白棋棋盘宽高须为 6–30 的偶数。": "Othello boards need even sides from 6 to 30.",
-  "这是黑白棋棋谱（GM[2]）；目前只能导入围棋 SGF。":
-    "This is an Othello record (GM[2]); only Go SGF files can be imported for now.",
-  "这是五子棋棋谱（GM[4]）；目前只能导入围棋 SGF。":
-    "This is a Gomoku record (GM[4]); only Go SGF files can be imported for now.",
   "这个棋类暂不支持 AI 对手、AI 分析或 SGF 棋谱。":
     "This game does not support AI opponents, AI analysis or SGF records yet.",
   "五子棋和黑白棋暂不支持 AI，请选择好友或本地双人对局。":
@@ -642,6 +638,10 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "贴目无效，已按 0 目复盘": "The invalid komi was replaced with 0 for replay",
   "缺少尺寸，已按 19 × 19 解释": "The missing board size was interpreted as 19 × 19",
   "缺少棋类标记，已按围棋解释": "The missing game type was interpreted as Go",
+  "缺少尺寸，已按该棋默认尺寸解释": "The missing board size was interpreted as the game's default",
+  "未知五子棋规则已按自由规则解释": "The unknown Gomoku rules were interpreted as freestyle",
+  "棋谱中的停着已跳过，黑白棋会自动跳过无子可下的一方":
+    "Recorded passes were skipped; Othello skips a player with no move automatically",
   "属性名已规范化": "Property identifiers were normalized",
   "回正视角": "Reset view",
   "回正甜甜圈": "Reset torus",
@@ -1012,6 +1012,13 @@ export const ENGLISH_PATTERNS = Object.freeze([
     },
   },
   {
+    pattern: /^已导入 (.+)，共 (\d+) 手；可播放或切换视图。(.*)$/u,
+    replace: (_, filename, moves, notes) => {
+      const noteCopy = notes.trim();
+      return `Imported ${filename} with ${countOf(moves, "move")}. You can replay or change views.${noteCopy ? ` ${capturedPhrase(noteCopy)}` : ""}`;
+    },
+  },
+  {
     pattern: /^已导入 (.+)：原谱未写异形拓扑，按当前选择的(竹筒|甜甜圈|莫比乌斯)复盘。(.*)$/u,
     replace: (_, filename, topology, notes) => {
       const noteCopy = notes.trim();
@@ -1334,8 +1341,8 @@ export const ENGLISH_PATTERNS = Object.freeze([
     }[axis]} · ${min}–${max}`,
   },
   {
-    pattern: /^这份 SGF 不是围棋棋谱（GM\[(.*)\]）；目前只能导入围棋 SGF。$/u,
-    replace: "This SGF file is not a Go record (GM[$1]); only Go SGF files can be imported for now.",
+    pattern: /^这份 SGF 不是围棋、五子棋或黑白棋棋谱（GM\[(.*)\]），无法导入。$/u,
+    replace: "This SGF file is not a Go, Gomoku or Othello record (GM[$1]) and cannot be imported.",
   },
   // Gomoku and Othello AI (src/main.js): the engine's name ("Rapfi",
   // "拓扑黑白棋 AI") and difficulty are captured. Kept after the KataGo and
