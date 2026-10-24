@@ -37,6 +37,7 @@
   "overrides": {
     "@tensorflow/tfjs": {
       "argparse": "^2.0.1"
-    }
+    },
+    "undici": "^7.30.1"
   }
 }
