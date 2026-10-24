@@ -17,8 +17,8 @@ import {
 import { CHAT_CHANNEL_SPECTATORS } from "../src/multiplayer/chat.js";
 import { GAME_GO } from "../src/game/gameTypes.js";
 import { lobbySummaryFromRoom } from "../src/multiplayer/lobby.js";
+import { STORAGE_KEY, loadRoomSnapshot, saveRoomSnapshot } from "./roomStorage.js";
 
-const STORAGE_KEY = "room";
 // The lobby mirrors the room's expiry. Refresh an otherwise unchanged entry
 // once the room's TTL has slid this far past the last published one.
 export const LOBBY_EXPIRY_REFRESH_MS = 30 * 60 * 1_000;
@@ -69,6 +69,8 @@ export class BadukRoom {
     this.indexPublication = null;
     // playerId -> when this instance last persisted that member's connection.
     this.connectionWrites = new Map();
+    // Chunks the stored snapshot uses (see roomStorage.js); 0 when inline.
+    this.storedChunks = 0;
 
     if (typeof ctx.setWebSocketAutoResponse === "function") {
       ctx.setWebSocketAutoResponse(
@@ -77,8 +79,10 @@ export class BadukRoom {
     }
 
     ctx.blockConcurrencyWhile(async () => {
-      const stored = await ctx.storage.get(STORAGE_KEY);
-      if (!stored) return;
+      const raw = await ctx.storage.get(STORAGE_KEY);
+      if (!raw) return;
+      const { snapshot: stored, chunks } = await loadRoomSnapshot(ctx.storage, raw);
+      this.storedChunks = chunks;
       try {
         this.engine = RoomEngine.restore(stored);
       } catch (error) {
@@ -303,12 +307,15 @@ export class BadukRoom {
     if (this.unavailableError?.code !== "ROOM_COMMIT_FAILED") return;
     let stored;
     try {
-      stored = await this.ctx.storage.get(STORAGE_KEY);
-      if (!stored) {
+      const raw = await this.ctx.storage.get(STORAGE_KEY);
+      if (!raw) {
         this.engine = null;
         this.unavailableError = null;
         return;
       }
+      const loaded = await loadRoomSnapshot(this.ctx.storage, raw);
+      stored = loaded.snapshot;
+      this.storedChunks = loaded.chunks;
       this.engine = RoomEngine.restore(stored);
       this.unavailableError = null;
       this.queueIndexPublish();
@@ -385,8 +392,8 @@ export class BadukRoom {
       ) {
         return jsonResponse({ error: "加入凭据无效。", code: "BAD_REQUEST" }, 400);
       }
-      const stored = await this.ctx.storage.get(STORAGE_KEY);
-      if (!stored) {
+      const raw = await this.ctx.storage.get(STORAGE_KEY);
+      if (!raw) {
         if (this.unavailableError?.code === "ROOM_COMMIT_FAILED") {
           // A failed first-room write was confirmed not to have committed.
           // Reopen the empty object so the same create credential can retry.
@@ -395,6 +402,7 @@ export class BadukRoom {
         }
         return jsonResponse({ error: "加入结果尚未确认。", code: "JOIN_NOT_COMMITTED" }, 404);
       }
+      const { snapshot: stored, chunks } = await loadRoomSnapshot(this.ctx.storage, raw);
       let recovered;
       try {
         recovered = RoomEngine.restore(stored);
@@ -406,6 +414,7 @@ export class BadukRoom {
       // Discard the speculative engine and reopen from that exact snapshot.
       if (this.unavailableError?.code === "ROOM_COMMIT_FAILED") {
         this.engine = recovered;
+        this.storedChunks = chunks;
         this.unavailableError = null;
         this.queueIndexPublish();
         await this.scheduleAlarmAfterCommit();
@@ -761,7 +770,7 @@ export class BadukRoom {
       // persisted directory projection its own strictly ordered version.
       this.engine.bumpDirectoryRevision();
       const snapshot = this.engine.serialize();
-      await this.ctx.storage.put(STORAGE_KEY, snapshot);
+      this.storedChunks = await saveRoomSnapshot(this.ctx.storage, snapshot, this.storedChunks);
     } catch (error) {
       // Includes serialization/validation failures before a write and writes
       // whose outcome is unknown. Never reuse their in-memory success receipts.
@@ -926,6 +935,7 @@ export class BadukRoom {
         await this.ctx.storage.deleteAlarm();
       }
       await this.ctx.storage.deleteAll();
+      this.storedChunks = 0;
       const removal = this.removeRoomIndexEntry(roomCode, incarnationId);
       if (typeof this.ctx.waitUntil === "function") this.ctx.waitUntil(removal);
       else void removal;
