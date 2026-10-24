@@ -956,21 +956,39 @@ function savedGameTypeChoice() {
     return {
       gameType: availableGameType(parsed?.gameType),
       ruleSet: normalizeRuleSet(parsed?.ruleSet),
+      sizesByGame: parsed?.sizesByGame ?? null,
     };
   } catch {
     return null;
   }
 }
 
+/** Remember the chosen game and the board size last used for each game. */
 function rememberGameTypeChoice() {
   if (!ENABLE_MULTI_GAME) return;
   try {
     window.localStorage.setItem(
       GAME_TYPE_KEY,
-      JSON.stringify({ gameType: pendingGameType, ruleSet: pendingRuleSet }),
+      JSON.stringify({
+        gameType: pendingGameType,
+        ruleSet: pendingRuleSet,
+        sizesByGame: Object.fromEntries(pendingDimensionsByGame),
+      }),
     );
   } catch {
     // The choice still applies to this tab when storage is unavailable.
+  }
+}
+
+/** Load saved board sizes per game, clamped to what each game offers. */
+function restoreSizesByGame(sizesByGame) {
+  if (!sizesByGame || typeof sizesByGame !== "object") return;
+  for (const [savedGame, size] of Object.entries(sizesByGame)) {
+    if (availableGameType(savedGame) !== savedGame) continue;
+    pendingDimensionsByGame.set(savedGame, {
+      width: clampBoardDimension(savedGame, size?.width),
+      height: clampBoardDimension(savedGame, size?.height),
+    });
   }
 }
 
@@ -3970,13 +3988,7 @@ function restoreLobbyBoardSettings() {
   };
   // Settings saved before multiple games have no gameType: they are Go.
   const gameType = availableGameType(saved.gameType ?? GAME_GO);
-  for (const [savedGame, size] of Object.entries(saved.sizesByGame ?? {})) {
-    if (availableGameType(savedGame) !== savedGame) continue;
-    pendingDimensionsByGame.set(savedGame, {
-      width: clampBoardDimension(savedGame, size?.width),
-      height: clampBoardDimension(savedGame, size?.height),
-    });
-  }
+  restoreSizesByGame(saved.sizesByGame);
   const options = {
     gameType,
     ...(gameType === GAME_GOMOKU ? { ruleSet: normalizeRuleSet(saved.ruleSet) } : {}),
@@ -7098,6 +7110,7 @@ for (const button of elements.sizeButtons) {
     const size = Number(button.dataset.boardSize);
     if (!isBoardSetupMode()) return;
     setPendingDimensions(size, size);
+    rememberGameTypeChoice();
     resetLobbyPreview();
   });
 }
@@ -7144,6 +7157,7 @@ function commitPendingDimensionInputs() {
   elements.boardLimitNote.hidden = !note;
   elements.customWidth.setAttribute("aria-invalid", "false");
   elements.customHeight.setAttribute("aria-invalid", "false");
+  rememberGameTypeChoice();
   resetLobbyPreview();
   setMessage(isNextGameSetup()
     ? `下一局预览已更新为 ${pendingWidth} × ${pendingHeight}；确认后会使用这套设置。`
@@ -7163,6 +7177,7 @@ function scheduleLobbyDimensionPreview() {
   if (lobbyPreviewFrame !== null) window.cancelAnimationFrame(lobbyPreviewFrame);
   lobbyPreviewFrame = null;
   setPendingDimensions(width, height);
+  rememberGameTypeChoice();
   resetLobbyPreview();
 }
 
@@ -7920,12 +7935,16 @@ elements.onlineMatchAiModel.value = preferredAIModelId;
 syncAIDialogModelPresentation();
 syncAIMatchModePresentation();
 const savedGameChoice = savedGameTypeChoice();
-if (savedGameChoice && savedGameChoice.gameType !== GAME_GO) {
+if (savedGameChoice) {
+  // Each game reopens on the board size this browser last used for it.
+  restoreSizesByGame(savedGameChoice.sizesByGame);
   setPendingGameType(savedGameChoice.gameType, { ruleSet: savedGameChoice.ruleSet });
   const limits = BOARD_LIMITS[pendingGameType];
-  setPendingDimensions(limits.defaultWidth, limits.defaultHeight);
-} else if (savedGameChoice) {
-  setPendingGameType(GAME_GO, { ruleSet: savedGameChoice.ruleSet });
+  const remembered = pendingDimensionsByGame.get(pendingGameType);
+  setPendingDimensions(
+    remembered?.width ?? limits.defaultWidth,
+    remembered?.height ?? limits.defaultHeight,
+  );
 } else {
   syncGameTypeControls();
 }
