@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { appSource } from "./helpers/appSource.js";
 
 const root = new URL("../", import.meta.url);
 
@@ -20,7 +21,7 @@ test("the online undo response is placed immediately below the turn card", async
 
 test("friend invitations require a human white seat in both UI and room engine", async () => {
   const [main, engine] = await Promise.all([
-    readFile(new URL("src/main.js", root), "utf8"),
+    appSource(),
     readFile(new URL("src/multiplayer/roomEngine.js", root), "utf8"),
   ]);
 
@@ -35,7 +36,7 @@ test("friend invitations require a human white seat in both UI and room engine",
 test("lobby refresh reuses cards and lazily paints visible board previews", async () => {
   const [html, main] = await Promise.all([
     readFile(new URL("index.html", root), "utf8"),
-    readFile(new URL("src/main.js", root), "utf8"),
+    appSource(),
   ]);
   const renderStart = main.indexOf("async function renderLobbyRooms()");
   const refreshStart = main.indexOf("async function refreshLobby", renderStart);
@@ -67,7 +68,7 @@ test("online match mode lives in the connected room header", async () => {
 test("invitation details show for friend and guest-AI rounds", async () => {
   const [html, main] = await Promise.all([
     readFile(new URL("index.html", root), "utf8"),
-    readFile(new URL("src/main.js", root), "utf8"),
+    appSource(),
   ]);
 
   assert.match(html, /id="friend-room-code-row"/u);
@@ -84,7 +85,7 @@ test("invitation details show for friend and guest-AI rounds", async () => {
 
 test("spectator chat has separate channel controls", async () => {
   const html = await readFile(new URL("index.html", root), "utf8");
-  const main = await readFile(new URL("src/main.js", root), "utf8");
+  const main = await appSource();
 
   assert.match(html, /id="chat-channel-tabs"/u);
   assert.match(html, /data-chat-channel="spectators"/u);

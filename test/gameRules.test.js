@@ -39,6 +39,7 @@ import {
   MATCH_MODE_LOCAL,
   RoomEngine,
 } from "../src/multiplayer/roomEngine.js";
+import { appSource } from "./helpers/appSource.js";
 
 const PUBLIC_FIELDS = [
   "size", "width", "height", "komi", "scoringRule", "topology", "board",
@@ -358,7 +359,7 @@ function legacyHydratePublicGame() {
 }
 
 test("main.js hydrates public room states through the rules registry", () => {
-  const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+  const main = appSource();
   const start = main.indexOf("function hydratePublicGame(");
   const end = main.indexOf("\nfunction ", start + 1);
   assert.ok(start >= 0 && end > start);

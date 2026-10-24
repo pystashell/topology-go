@@ -8,8 +8,9 @@ import { ENABLE_MULTI_GAME, isGameType } from "../src/game/gameTypes.js";
 import { gameTypeOf } from "../src/game/rules/index.js";
 import { gameSettingsSummary } from "../src/ui/gameUi.js";
 import { aiSeatName, defaultAIModelIdForGame } from "../src/ai/modelCatalog.js";
+import { appSource } from "./helpers/appSource.js";
 
-const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+const main = appSource();
 const slice = (from, to) => {
   const start = main.indexOf(from);
   const end = main.indexOf(to, start);

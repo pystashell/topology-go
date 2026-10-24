@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { appSource } from "./helpers/appSource.js";
 
 // Windows checkouts may use CRLF; the multi-line patterns below expect LF.
 const readSource = (path) => readFileSync(new URL(path, import.meta.url), "utf8").replace(/\r\n/gu, "\n");
 const htmlSource = readSource("../index.html");
-const mainSource = readSource("../src/main.js");
+const mainSource = appSource();
 
 test("view mode controls are scoped to the view switch, not the board stage", () => {
   // The stage keeps data-view-mode for CSS, so an unscoped attribute query

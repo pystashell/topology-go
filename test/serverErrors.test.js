@@ -13,6 +13,7 @@ import {
   SERVER_ERROR_COPY,
   errorCopy,
 } from "../src/i18n/serverErrors.js";
+import { appSource } from "./helpers/appSource.js";
 
 const CJK = /[\u3400-\u9fff\uff01-\uff60\u3000-\u303f]/u;
 const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
@@ -84,7 +85,7 @@ test("the UI helper follows the active locale", () => {
 });
 
 test("main.js shows room, lobby and chat errors through the localized helper", () => {
-  const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+  const main = appSource();
   assert.match(main, /const message = localizedErrorMessage\(error\);\s*if \(elements\.onlineDialog\.open\) showOnlineError\(message\);/u);
   assert.match(main, /setMessage\(localizedErrorMessage\(error, "房间拒绝了这个操作。"\), true\)/u);
   assert.match(main, /localizedErrorMessage\(lobbyLoadError, "暂时无法读取在线大厅。"\)/u);

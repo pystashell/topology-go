@@ -10,8 +10,9 @@ import {
   reduceReviewCandidateState,
 } from "../src/ai/replayReview.js";
 import { COORDINATE_LETTERS } from "../src/multiplayer/chat.js";
+import { appSource } from "./helpers/appSource.js";
 
-const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+const main = appSource();
 const slice = (from, to) => {
   const start = main.indexOf(from);
   const end = main.indexOf(to, start);
@@ -22,7 +23,7 @@ const slice = (from, to) => {
 const source = [
   slice("function boardWidth(", "function boardPointCount("),
   slice("function displayedBoardState()", "function displayedTopology()"),
-  slice("function formatReviewMove(", "function syncChatChannelIdentity()"),
+  slice("function formatReviewMove(", "function activeBoardView()"),
   slice("function applyReviewCandidateAction(", "function syncReplayEntryAvailability()"),
   slice("function handleHover(", "for (const button of elements.sidebarTabs)"),
   "({ applyReviewCandidateAction, handleHover })",

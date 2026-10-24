@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { appSource } from "./helpers/appSource.js";
 
-const mainSource = readFileSync(new URL("../src/main.js", import.meta.url), "utf8").replace(/\r\n/gu, "\n");
+const mainSource = appSource().replace(/\r\n/gu, "\n");
 
 function functionSource(name) {
   const match = new RegExp(`function\\s+${name}\\s*\\(`).exec(mainSource);

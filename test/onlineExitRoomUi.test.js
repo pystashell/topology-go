@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { appSource } from "./helpers/appSource.js";
 
 const htmlSource = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-const mainSource = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+const mainSource = appSource();
 const styleSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 
 function elementMarkup(id) {
