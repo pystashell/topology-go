@@ -1,4 +1,4 @@
-# 交接文档（2026-10-21）
+# 交接文档（2026-10-24）
 
 这份文档给接手的下一个开发会话看，无论是本地 Claude Code 会话还是人。读完就能接着做，不用翻聊天记录。
 
@@ -6,92 +6,79 @@
 
 | 项目 | 状态 |
 | --- | --- |
-| `main` | `aa32d9a`，包含围棋、五子棋（自由/连珠）、黑白棋，三种拓扑（圆柱/环面/莫比乌斯），本地对弈、联机、大厅、复盘，以及三种棋的 AI |
-| 测试 | `npm test` 857/857 通过；PR 检查（`.github/workflows/ci.yml`）全绿 |
-| 待发布分支 | `release/0.3.0-rc.1`：最新 `main` 加上 `public/version.json` 改为 `0.3.0-rc.1` 的那一次提交 |
-| 线上 | **仍是旧版本**：<https://topology-go.pystashell.workers.dev/>，只有围棋，不含本轮修复 |
-| 为什么没上线 | GitHub `production` 环境缺 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`。`release.yml` 第一步就因此退出，`0.2.0-rc.9` 和 `0.3.0-rc.1` 都试过，都失败 |
+| `main` | 围棋、五子棋（自由/连珠）、黑白棋，三种拓扑（圆柱/环面/莫比乌斯），本地对弈、联机、大厅、复盘、三种棋的 AI 和 SGF 棋谱；房间可以不公开、移出成员、判对方弃局、访客执白对 AI |
+| 测试 | `npm test` 全过（约 890 项，含真实 workerd/SQLite 运行时测试）；PR 检查（`.github/workflows/ci.yml`）全绿 |
+| 线上 | <https://topology-go.pystashell.workers.dev/>，`/version.json` 给出当前版本。`0.3.0-rc.1` 于 2026-10-24 上线（多棋种首次上线）；本轮工作合并后发布 `0.3.0-rc.2` |
+| 发布方式 | GitHub `production` 环境仍缺 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`，所以在负责人的电脑上执行发布脚本。那台机器的 Wrangler 已登录负责人的 Cloudflare 账户，见 §3 |
 
-已合并的 PR（详细说明和验证记录都在 PR 正文里）：
+已合并的 PR（说明和验证记录都在 PR 正文里）：
 
-- #1 `codex/大厅版` → main：在线大厅、计时、SGF、英文界面、矩形棋盘；2026-10-17 一轮审查的修复，涉及依赖漏洞、AI 提速、SGF、限流、座位锁、安全头、UI 和视图
-- #2 `feat/multi-game` → main：通用拓扑模块、规则注册表、五子棋（含连珠禁手）、黑白棋、联机/大厅/视图/UI 全部多棋种化
-- #3 `feat/game-ai` → main：五子棋 AI 用 Rapfi，黑白棋 AI 为自研引擎，AI 接入本地、自对弈和联机
+- #1 `codex/大厅版`：在线大厅、计时、SGF、英文界面、矩形棋盘，以及一轮审查修复
+- #2 `feat/multi-game`：通用拓扑模块、规则注册表、五子棋（含连珠禁手）、黑白棋，联机/大厅/视图/UI 全部多棋种化
+- #3 `feat/game-ai`：五子棋 AI 用 Rapfi，黑白棋 AI 是自研引擎
+- #4 `docs/handoff`：上一版交接文档、设计笔记、浏览器检查脚本
+- `feat/handoff-backlog`：本轮，把上一版交接文档的待办全部处理完，见 §6
 
 ## 2. 负责人（owner）已做的决定
 
 - 交流用中文。节奏优先：dev 验证通过就上线，负责人看完再给反馈。
-- **上线方式（目前）**：B 方案，由负责人在自己电脑上执行发布（见 §3）。
-  - 以后如果在 GitHub 配好两个 Cloudflare secret（A 方案），开发会话就可以自己触发 `release.yml`。
-- 五子棋同时支持**自由五子**（五连及以上胜）和**连珠**（黑方三三、四四、长连禁手），开局时选。
-  - 禁手点直接拒绝落子，不判负；不做开局规则（如 Swap2）。
-- 五子棋 AI 用 **Rapfi**。负责人接受 GPL-3：代码是 GPL-3，权重是 CC0。
-- 黑白棋 AI：负责人要求开源免费、能直接在客户端用。调研结论：没有开源引擎能正确处理环面/圆柱/莫比乌斯，详见 PR #3 和本文 §6。因此使用**自研纯 JS 引擎**。
-  - 曾提出可选的 `multimcts`（MIT）作为第二个对手，负责人尚未回复。
-- 围棋行为必须保持**一手不差**：有黄金样本测试守护，见 §5。
-- 尚未决定：页面标题仍是“3D Baduk · 奇异棋盘围棋”，已不只围棋，要不要改名？
+- **产品名统一为 Topology Go**（2026-10-24）。页面标题是“Topology Go · 拓扑棋盘上的围棋、五子棋、黑白棋”，品牌副标题是“围棋 · 五子棋 · 黑白棋”，package 名为 `topology-go`。线上 Worker 名 `topology-go` 不变。协议名、存储键、Durable Object 类名仍保留 `bamboo-baduk` / `Baduk`，因为它们已经持久化或在线上协议里使用，不能改。
+- **不加 multimcts**（2026-10-24）：它是 Python 写的通用 MCTS，浏览器里跑不了，棋力也不会超过现有引擎。
+- 五子棋同时支持**自由五子**（五连及以上胜）和**连珠**（黑方三三、四四、长连禁手），开局时选。禁手点直接拒绝落子，不判负；不做开局规则（如 Swap2）。
+- 五子棋 AI 用 **Rapfi**，负责人接受 GPL-3：代码是 GPL-3，权重是 CC0。黑白棋 AI 是**自研纯 JS 引擎**，原因是没有开源引擎能正确处理环面、圆柱和莫比乌斯。
+- 围棋行为必须保持**一手不差**，由黄金样本测试守护（§5）。
 
 ## 3. 发布
 
-### B 方案：负责人本地执行（Windows PowerShell）
-
 ```powershell
 git fetch origin
-git checkout release/0.3.0-rc.1
-git pull
+git checkout -B release/x.y.z origin/main
+npm.cmd run release:version -- x.y.z      # 只改 public/version.json
+git commit -am "release: prepare x.y.z"
+git push -u origin release/x.y.z
 npm.cmd ci
-npx.cmd wrangler login
-npm.cmd run release:publish -- 0.3.0-rc.1   # 跑测试、构建、部署、打 tag、建 GitHub Release
-# 没有登录 gh 时可改用：npm.cmd run deploy   （只部署）
+npm.cmd run release:publish -- x.y.z      # 跑测试、构建、部署、打 tag、建 GitHub Release
 ```
 
-验证：<https://topology-go.pystashell.workers.dev/version.json> 显示 `0.3.0-rc.1` 即成功。
+- 发布前先问负责人。负责人同意后，开发会话可以在那台机器上直接执行（`npx wrangler whoami` 能看到账户）。
+- 验证：`/version.json` 显示新版本；再运行 `node scripts/live-room-smoke.mjs https://topology-go.pystashell.workers.dev/`（会在线上建两个临时房间，下完一局围棋和一局五子棋）。
+- 发布脚本拒绝在 `main`/`master` 上运行，要求工作区干净，且版本号与 `public/version.json` 一致。
+- A 方案（在 GitHub 配好两个 secret 之后）：用 GitHub Actions 的 “Release candidate” 工作流 `workflow_dispatch`，参数为 `ref=release/x.y.z`、`version=x.y.z`、`confirm=RELEASE`。细节和回滚见 `docs/RELEASES.md`。每版的回滚边界也写在那里，本轮的见“0.3.0-rc.2 的兼容边界”。
+- `release/0.2.0-rc.9` 已作废，可以删除。
 
-### 准备下一个版本
-
-发布脚本拒绝在 `main`/`master` 上运行，要求工作区干净，且版本号与 `public/version.json` 一致。流程：
-
-```bash
-git checkout -B release/0.3.0-rc.2 origin/main
-npm run release:version -- 0.3.0-rc.2   # 只改 public/version.json
-git commit -am "release: prepare 0.3.0-rc.2"
-git push -u origin release/0.3.0-rc.2
-```
-
-然后告诉负责人分支名和版本号，让他按 B 方案执行。
-
-A 方案（配好 secret 之后）：用 GitHub Actions 的 “Release candidate” 工作流 `workflow_dispatch`，参数为 `ref=release/x.y.z`、`version=x.y.z`、`confirm=RELEASE`。不要开 “Required reviewers”，否则每次都要人工批准。细节见 `docs/RELEASES.md`。
-
-`release/0.2.0-rc.9` 分支已作废，被 `0.3.0-rc.1` 取代，可以删除。
-
-## 4. 架构速览（新代码）
+## 4. 架构速览
 
 ```text
 src/topology/            唯一的邻接/直线来源：getTopology(kind,w,h) → step/neighbors4/neighbors8/ray/line/fromCover
-                         莫比乌斯过接缝：行镜像 + 竖直方向翻转（"/" 变 "\"）
 src/game/gameTypes.js    棋种常量、尺寸限制（五子棋 ≥11；黑白棋 6–30 偶数）、错误码
-src/game/rules/          rulesFor(gameType)：go.js / gomoku.js / othello.js（create/fromState/hydratePublic/
-                         normalizeSettings/capabilities/roomActions/matchModes/positionFingerprint/viewMarkers）
-src/game/goEngine.js     围棋（邻接改为委托 topology；其余不变）
-src/game/gomokuEngine.js + lineRuns.js + renju.js   五子棋与连珠禁手（含递归“真三”判定）
-src/game/othelloEngine.js 黑白棋（射线遇边界/空点/回到起点即停；自动跳过回合，无 pass 事件）
+src/game/rules/          rulesFor(gameType)：go.js / gomoku.js / othello.js（能力表 capabilities 决定 UI 显示哪些控件）
+src/game/goEngine.js     围棋；gomokuEngine.js + lineRuns.js + renju.js 五子棋与连珠禁手；othelloEngine.js 黑白棋
 src/game/replay.js       按 gameTypeOf(base) 分派复盘
-src/multiplayer/roomEngine.js  房间状态机。经规则注册表建/恢复引擎；schema 2（全围棋）/3（含其他棋）双写；
-                         按棋种限制动作与对局方式；旧页面在非围棋房间收到 426
-src/multiplayer/lobby*.js 大厅摘要/筛选/预览（含棋种）
-worker/                  Cloudflare Worker + Durable Objects（BadukRoom, BadukLobby）；限流绑定见 wrangler.jsonc
-src/view/                5 种视图；gameMarkers.js（五连高亮、禁手 ✕、黑白棋可落点/翻转）、boardStyle.js
+src/game/sgf.js          SGF：围棋 GM[1]，五子棋 GM[4]（RU[Freestyle|Renju]），黑白棋 GM[2]（起始四子写 AB/AW）；拓扑写在 XTOP
+src/multiplayer/roomEngine.js  房间状态机：schema 2（全围棋）/3（含其他棋）双写；不公开房间、移出成员、判弃局、访客对 AI
+src/multiplayer/lobby*.js 大厅摘要/筛选/预览
+worker/                  Cloudflare Worker + Durable Objects（BadukRoom, BadukLobby）；roomStorage.js 负责大房间分块存储
+src/view/                5 种视图；pointerGestures.js 管触摸策略（手机竖滑滚动页面、“固定页面”）
 src/ui/gameUi.js         各棋种的文案、结果、控件可见性（纯函数，有测试）
-src/main.js              UI 主文件（约 7–8k 行，仍偏大）
-src/ai/                  围棋：KataGo（katagoWorker.js、mcts.js）；其他棋：gameAiRegistry.js + gameAiClient.js
-  gomoku/                Rapfi：flatView.js（拓扑→≤22 平面视窗）、tactics.js（跨接缝必胜/必挡/VCF）、worker
+src/main.js              页面主文件（约 7300 行），拥有页面状态
+src/app/                 从 main.js 拆出的页面部分：lobbyScreen（大厅）、chatPanel（聊天）、recordFiles（SGF 文件）、
+                         roomManagement（公开开关、成员列表、判弃局）。各自持有自己的状态，通过 main.js 末尾的导出列表读页面状态
+src/ai/                  围棋：KataGo；其他棋：gameAiRegistry.js + gameAiClient.js
+  gomoku/                Rapfi：flatView.js（拓扑 → ≤22 路平面视窗）、tactics.js（跨接缝必胜/必挡/VCF）、worker
   othello/               自研：射线表、PVS + 置换表、按拓扑拟合的评估、终局精确求解、worker
-  fallback/              规则校验过的兜底 AI（引擎起不来时使用）
 public/engines/rapfi/    Rapfi wasm + 权重 + COPYING + 源码包 + SOURCE.md（GPL 合规材料，勿删）
 public/_headers          CSP 等安全头；只有 katagoWorker-* 和 gomokuAiWorker-* 允许 'wasm-unsafe-eval'
 ```
 
-设计文档在 `docs/design/multi-game-plan.md` 和 `docs/design/game-ai-interface.md`，后者定义 AI worker 协议。其中的行号是当时的快照，以现有代码为准。产品规格见 `docs/PRODUCT_REQUIREMENTS.md`。
+联机新功能的要点：
+
+- **不公开房间**：建房时勾选，或房主在“房间管理”里切换。只有不公开的房间才存 `listed: false`。房间照常推送带版本号的快照，大厅把 `listed: false` 当作带版本的删除处理，所以迟到的旧快照不会把房间放回大厅。
+- **移出成员**：房主可以随时移出观众；白方只能在两局之间移出，对局中移出等于替对方决定胜负。被移出的连接收到 `REMOVED_FROM_ROOM`，以 4401 关闭，所有版本的页面都会停止重连。
+- **判对方弃局**：对方离线满 2 分钟（或已离开）后，按对方认输结束本局，点目阶段同样可用。离线时间不写存储，记在其他仍然连着的 WebSocket attachment 上，所以休眠后照样能恢复；对象彻底重启后会从重启时刻重新计时。
+- **访客执白对 AI**：`request_game` 带 `mode: "human-ai"` 和 `aiOpponent: "guest"`，走和好友对局一样的邀请流程。AI 执黑，在房主浏览器里运行。座位锁定规则同好友对局，访客悔棋会撤回自己和 AI 各一手，谁离开谁判负。
+- **大房间分块存储**：房间超过 1.5 MiB 时，`room` 下存清单，`room:chunk:N` 存分段，一次原子写入。
+
+设计文档在 `docs/design/`，其中的行号是当时的快照，以现有代码为准。产品规格见 `docs/PRODUCT_REQUIREMENTS.md`（正文以围棋为主）。
 
 ## 5. 开发规则与验证
 
@@ -99,38 +86,51 @@ public/_headers          CSP 等安全头；只有 katagoWorker-* 和 gomokuAiWo
 
 ```bash
 npm ci
-npm test                                  # 857 项；含真实 workerd/SQLite 运行时测试
+npm test
 npm run build
 npx wrangler deploy --dry-run --strict
-npm audit --audit-level=moderate          # CI 会因任何 moderate+ 漏洞失败
+npm audit --audit-level=moderate
 ```
 
-- **围棋不能变**：`test/goGoldenMaster.test.js` 守护。邻居顺序是持久化行为，它决定提子顺序和存档校验，不能改。需要核对时可以运行 `node scripts/generate-go-golden.mjs --check`。
-- **测试按函数名定位 main.js 中的函数，这些名字不能改**：`hydratePublicGame`、`applyOnlineRoom`、`enterReplay`、`enterNextGameSetup`、`startConfiguredNextGame`、`startImmediateRematch` 等。
-- **i18n**：中文原文就是查找键。`test/i18nCoverage.test.js` 和 `test/serverErrors.test.js` 会拦截未翻译的文案和未登记的服务端错误码。
+- **围棋不能变**：`test/goGoldenMaster.test.js` 守护。邻居顺序是持久化行为，决定提子顺序和存档校验，不能改。需要核对时运行 `node scripts/generate-go-golden.mjs --check`。
+- **页面函数名不能改**：UI 接线测试按函数名在 `src/main.js` 和 `src/app/*.js` 里查找（`test/helpers/appSource.js`），例如 `hydratePublicGame`、`applyOnlineRoom`、`enterReplay`、`enterNextGameSetup`、`startConfiguredNextGame`、`startImmediateRematch`。
+- **继续拆 main.js 的规则**：把一个变量和所有给它赋值的函数一起搬走；`main.js` 里需要改它的地方换成调用新模块的小函数（例如 `clearChatReference()`）。新模块的顶层初始化不能读 `main.js` 的绑定，因为循环导入时 `main.js` 还没执行。
+- **i18n**：中文原文就是查找键。`test/i18nCoverage.test.js`（扫描 main.js 和 src/app）和 `test/serverErrors.test.js` 会拦截未翻译的文案和未登记的服务端错误码。
 - **CSP**：不要写内联脚本或内联样式。新的需要 wasm 的 worker 必须在 `public/_headers` 里单独授权。
+- **Windows**：仓库按 `core.autocrlf=true` 检出为 CRLF。读源码做多行匹配的测试要先把 `\r\n` 换成 `\n`（`appSource()` 已经这样处理）。
 - **测试开关**：重测试用环境变量打开：`GOMOKU_AI_HEAVY=1`、`OTHELLO_AI_FULL=1`、`OTHELLO_AI_PERF=1`。
-- **本地联机**：`npm run dev`（先 build，再起 wrangler dev，端口 8787）。冒烟测试：
-  - `node scripts/live-room-smoke.mjs http://127.0.0.1:8787/`（含五子棋整局）
-  - `node scripts/live-scoring-smoke.mjs http://127.0.0.1:8787/`
-- **浏览器验证**：`scripts/browser-checks/`，需要单独安装 Playwright，见该目录的 README。
+- **本地联机**：`npm run dev`（先构建，再起 wrangler dev，端口 8787）。冒烟测试：`node scripts/live-room-smoke.mjs http://127.0.0.1:8787/`、`node scripts/live-scoring-smoke.mjs http://127.0.0.1:8787/`。
+- **浏览器检查**：`scripts/browser-checks/`，需要单独装 Playwright（见该目录 README）。改 UI 或房间逻辑时跑相关脚本：`csp`、`go`、`local`、`online`、`sgf`、`rooms`、`webkit`（iPhone 13 配置的 WebKit）。本轮拆分 main.js 后，这 7 个脚本全部跑过。
 - **重建 Rapfi**：需要 emsdk，运行 `scripts/build-rapfi.sh`。产物逐字节可复现，版本信息见 `public/engines/rapfi/SOURCE.md`。
 
-## 6. 已知问题与待办（按优先级大致排列）
+## 6. 上一版待办的处理结果与剩余问题
 
-1. **上线**：等负责人按 B 方案发布 `0.3.0-rc.1`，然后收集反馈。
-2. **改名**（待负责人决定）：页面标题、OG 标签、`package.json`/`wrangler.jsonc` 名称不统一（3D Baduk / Topology Go / bamboo-baduk）。注意 Worker 名 `topology-go` 决定了线上域名，不能随便改。
-3. 联机 AI 对局中，人类座位固定属于房主，访客加入只能观战。要让访客和 AI 下，得改房间模型。
-4. 黑白棋 AI 在 8×8 环面执黑偏弱：对随机对手约 87%（4 秒约 91%）。这是环面完全对称、通常白方最后落子造成的结构性劣势。
-5. Rapfi 神经网络只覆盖平面 13–22 路（自由五子）和 15 路（连珠），其他尺寸用经典评估加我们的战术层。不支持 wasm SIMD 的浏览器（Safari 16.4 以前）只用战术层。
-6. 五子棋、黑白棋没有 SGF 导入导出（GM[4]/GM[2]），按钮已隐藏；“邀请对局”副标题对所有棋种都提到 AI；棋盘尺寸记忆只在当前标签页有效。
-7. 联机：没有不公开房间和踢人；点目阶段没有超时，也不能判对方弃局；单局 30×30 超过约 1500 手时单值存储会逼近 2 MiB。
-8. 手机：环面平面视图和 3D 环面/莫比乌斯视图中，从棋盘上开始的竖向滑动不会滚动页面（这些视图需要竖向拖动）。
-9. 尚未在真机 iOS/Safari 上测试过。
-10. `src/main.js` 过大，拆分是独立的后续工作。
+上一版交接文档的 10 项待办处理如下：
+
+| # | 待办 | 结果 |
+| --- | --- | --- |
+| 1 | 上线 | `0.3.0-rc.1` 已上线（2026-10-24），线上冒烟全过。顺带修了一个只在 Windows 上失败的测试（CRLF） |
+| 2 | 改名 | 已统一为 Topology Go，见 §2；分享预览图已重画 |
+| 3 | 访客与 AI 对局 | 已完成：在线对局方式“访客执白对 AI” |
+| 4 | 黑白棋 8×8 环面执黑偏弱 | **未解决，是结构性问题**，见下 |
+| 5 | Rapfi 网络尺寸覆盖 | **改不了**，见下 |
+| 6 | 五子棋/黑白棋 SGF、邀请副标题、尺寸记忆 | SGF 已完成（GM[4]/GM[2]）。三种棋都有 AI 了，副标题“选择 AI、好友……”已经准确，不用改。尺寸记忆改成存 localStorage |
+| 7 | 不公开房间、踢人、点目超时与弃局、超长对局存储 | 全部完成，见 §4 |
+| 8 | 手机竖滑 | 默认竖向起手滚动页面，横向起手仍能任意转动；工具栏“固定页面”可恢复全拖动（每台设备记住） |
+| 9 | iOS/Safari | 用 iPhone 13 配置的 WebKit 跑过：加载、点按落子、Rapfi wasm（SIMD）、黑白棋 AI、WebGL、触摸策略都正常。**真机仍未测** |
+| 10 | 拆分 main.js | 第一阶段完成：拆出 4 个模块（约 1300 行），main.js 从 8274 行降到约 7300 行。后续见下 |
+
+剩余问题（按优先级大致排列）：
+
+1. **GitHub 发布 secret**：配好 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` 后，发布就不必依赖负责人的电脑（A 方案）。这需要负责人在 Cloudflare 创建 token。
+2. **iOS 真机**：WebKit 模拟不能代替真机，至少应在一台 iPhone 上试一次触摸手势、对话框和下拉框。WebKit 会把 `<select>` 内部的样式算到页面 CSP 头上（`style-src-attr`），不影响功能；检查脚本已单独忽略这一种。
+3. **黑白棋 8×8 环面执黑**：困难级（每步 50 ms）对随机对手 100 局，执黑 64 胜 28 负 8 和。棋盘完全对称时通常是白方最后落子，黑方只能靠逼出奇数次停着翻盘。权重调参试过：固定深度 3、配对种子各 600 局，基线 80.2%，调奇偶、子数、稀缺度等单项都没有更好（76–78.5%）。要提升，得在中盘做更深的精确求解，或者换成结合评估的 MCTS，属于引擎层面的工作。实验脚本：`scripts/othello-weight-experiments.mjs`。
+4. **Rapfi 网络覆盖**：网络只覆盖平面 13–22 路（自由五子）和 15 路（连珠）。Rapfi 不支持矩形棋盘，也没有“墙”格子；`YXBLOCK` 只是不让根节点选那些点，搜索里仍把它们当空格。所以没法把小棋盘嵌进 13 路、或者把连珠大棋盘截成 15 路视窗来套用网络。要解决只能改 Rapfi 本体并重新编译，或者训练新网络。
+5. **继续拆分 main.js**：剩下的大块（AI worker、复盘/分析 worker、联机房间同步、视图管理）共享的状态较多，例如 `applyOnlineRoom` 会改很多变量。建议按 §5 的规则一次搬一块，每块都跑一遍浏览器检查。
+6. 联机：判弃局只按“离线时间”算；双方都在线但一方在点目阶段一直不确认，仍然只能靠对方继续对局或认输。
 
 ## 7. 本地新会话建议的第一步
 
-1. `git checkout main && git pull && npm ci && npm test`：确认 857 项全过。
-2. 读本文件和 `docs/design/*`。
-3. 如果负责人已经发布 `0.3.0-rc.1`，从他的反馈开始。如果还没有，先协助他完成 §3 的 B 方案。
+1. `git checkout main && git pull && npm ci && npm test`：确认全过。
+2. 读本文件、`CLAUDE.md` 和 `docs/RELEASES.md`。
+3. 问负责人有没有对 `0.3.0-rc.2` 的反馈，从反馈开始；没有的话，从 §6 的剩余问题里挑。
