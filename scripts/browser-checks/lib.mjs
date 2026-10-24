@@ -159,6 +159,13 @@ export async function cjkLeftovers(page) {
       if (!hidden) found.add(value);
     }
     for (const element of document.querySelectorAll("[aria-label], [title], [placeholder]")) {
+      // Attributes inside a hidden screen (the lobby behind a room) are
+      // neither shown nor read out; that screen re-renders when it opens.
+      let hidden = false;
+      for (let current = element; current; current = current.parentElement) {
+        if (current.hidden || getComputedStyle(current).display === "none") { hidden = true; break; }
+      }
+      if (hidden) continue;
       for (const attribute of ["aria-label", "title", "placeholder"]) {
         const value = element.getAttribute(attribute);
         if (value && cjk.test(value)) found.add(`@${attribute}: ${value}`);
