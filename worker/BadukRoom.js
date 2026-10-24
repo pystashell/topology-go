@@ -716,10 +716,28 @@ export class BadukRoom {
         this.broadcastPresence(socket);
         this.closeSocket(socket, 1000, "Membership left");
       }
+      if (command.action === "remove_member" && result.removedPlayerId) {
+        this.closeRemovedMember(result.removedPlayerId);
+      }
     } catch (error) {
       console.error("Unable to notify committed room command", error);
     }
     await this.scheduleAlarmAfterCommit();
+  }
+
+  /** Tell a member the host removed that their seat is gone and close it. */
+  closeRemovedMember(playerId) {
+    for (const socket of this.ctx.getWebSockets?.() ?? []) {
+      const attachment = this.readAttachment(socket);
+      if (attachment.identity?.playerId !== playerId) continue;
+      this.sendError(socket, {
+        code: "REMOVED_FROM_ROOM",
+        message: "你已被房主移出房间。",
+      });
+      socket.serializeAttachment({ ...attachment, identity: null });
+      // 4401 ends the session on every client version: no reconnect.
+      this.closeSocket(socket, 4401, "Removed by host");
+    }
   }
 
   /**
@@ -816,7 +834,9 @@ export class BadukRoom {
       expiresAt,
       ...visible
     } = summary;
-    const key = JSON.stringify(visible);
+    // An unlisted room publishes listed: false, which the lobby treats as a
+    // versioned removal.
+    const key = JSON.stringify({ ...visible, listed: room.listed !== false });
     const previous = this.indexPublication;
     if (previous?.key === key &&
         expiresAt - previous.expiresAt < LOBBY_EXPIRY_REFRESH_MS) {

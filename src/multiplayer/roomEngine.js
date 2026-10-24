@@ -59,6 +59,9 @@ import {
 export const ROOM_TTL_MS = 24 * 60 * 60 * 1_000;
 export const MAX_SPECTATORS = 32;
 export const PLAYER_RESERVATION_TTL_MS = 60 * 1_000;
+// How long the other side of a round must be offline before a player may
+// claim the game as abandoned (it ends as that side's resignation).
+export const ABANDONMENT_GRACE_MS = 2 * 60 * 1_000;
 export const SPECTATOR_RESERVATION_TTL_MS = 60 * 1_000;
 export const SPECTATOR_RECONNECT_GRACE_MS = 5 * 60 * 1_000;
 export const SPECTATOR_COMMAND_MEMBER_BURST = 3;
@@ -539,12 +542,21 @@ function controllersForMode({
   mode,
   hostId,
   whiteId = null,
+  guestId = null,
   aiModelId = undefined,
   aiModelIds = null,
   gameType = GAME_GO,
 }) {
   const blackAIModelId = aiModelIds?.[BLACK] ?? aiModelId;
   const whiteAIModelId = aiModelIds?.[WHITE] ?? aiModelId;
+  if (mode === MATCH_MODE_HUMAN_AI && guestId) {
+    // The seated guest plays White against an AI that runs in the host's
+    // browser, so the host operates Black.
+    return {
+      [BLACK]: controller("ai", hostId, blackAIModelId, gameType),
+      [WHITE]: controller("human", guestId),
+    };
+  }
   if (mode === MATCH_MODE_LOCAL) {
     return {
       [BLACK]: controller("human", hostId),
@@ -1010,6 +1022,17 @@ function validController(value, gameType = GAME_GO) {
   );
 }
 
+/** A human-AI round or invitation where a guest plays White against the host's AI. */
+function isGuestAIControllers(match) {
+  const black = match?.controllers?.[BLACK];
+  const white = match?.controllers?.[WHITE];
+  return match?.mode === MATCH_MODE_HUMAN_AI &&
+    black?.kind === "ai" &&
+    white?.kind === "human" &&
+    typeof white.operatorId === "string" &&
+    white.operatorId !== black.operatorId;
+}
+
 function validateMatchState(state) {
   const match = state.match;
   // The round's controllers drive the stored game; an invitation's drive the
@@ -1047,7 +1070,7 @@ function validateMatchState(state) {
       request.requestRevision < 1 ||
       typeof request.requestedBy !== "string" ||
       !VALID_MATCH_MODES.has(request.mode) ||
-      request.mode !== MATCH_MODE_FRIEND ||
+      !(request.mode === MATCH_MODE_FRIEND || isGuestAIControllers(request)) ||
       !validController(request.controllers?.[BLACK], requestGameType) ||
       !validController(request.controllers?.[WHITE], requestGameType) ||
       !Number.isFinite(request.requestedAt) ||
@@ -1130,6 +1153,8 @@ function validateSerializedState(state) {
       (!Number.isSafeInteger(state.scoringRevision) || state.scoringRevision < 1)) ||
     !Array.isArray(state.members) ||
     !Array.isArray(state.receipts) ||
+    // Only an unlisted room stores the flag.
+    (state.listed !== undefined && state.listed !== false) ||
     !state.game
   ) {
     throw new RoomEngineError(
@@ -1260,6 +1285,18 @@ export class RoomEngine {
     this.state = state;
     this.game = game;
     this.connections = new Map();
+    // playerId -> when this instance saw the player's last socket close.
+    this.offlineSince = new Map();
+    // When this instance first ran. A player already offline then counts as
+    // offline from that moment: a restart only ever delays a claim.
+    this.startedAt = null;
+  }
+
+  /** Since when a seated member has been offline, as far as this instance knows. */
+  offlineSinceFor(member, now) {
+    const known = this.offlineSince.get(member.playerId);
+    if (known !== undefined) return known;
+    return Math.max(member.lastSeenAt ?? member.joinedAt, this.startedAt ?? now);
   }
 
   static create({
@@ -1279,6 +1316,7 @@ export class RoomEngine {
     playerId,
     tokenHash,
     startImmediately = true,
+    listed = true,
     now: nowInput,
   }) {
     const now = readNow(nowInput);
@@ -1323,6 +1361,9 @@ export class RoomEngine {
         400,
         "BAD_REQUEST",
       );
+    }
+    if (typeof listed !== "boolean") {
+      throw new RoomEngineError("listed must be a boolean.", 400, "BAD_REQUEST");
     }
     const initialMatch = {
       roundId: startImmediately ? 1 : 0,
@@ -1380,6 +1421,9 @@ export class RoomEngine {
       updatedAt: now,
       expiresAt: now + ROOM_TTL_MS,
       expiredAt: null,
+      // Unlisted rooms never appear in the lobby; others store nothing, so
+      // their snapshots stay exactly as before.
+      ...(listed ? {} : { listed: false }),
     };
     return new RoomEngine(state, game);
   }
@@ -1653,6 +1697,7 @@ export class RoomEngine {
       revision: this.state.revision,
       directoryRevision: this.state.directoryRevision,
       incarnationId: this.state.incarnationId,
+      listed: this.isListed(),
       match: clone(this.state.match),
       moveCount: this.state.moveCount,
       timeControl,
@@ -1685,6 +1730,7 @@ export class RoomEngine {
       directoryRevision: this.state.directoryRevision,
       incarnationId: this.state.incarnationId,
       version: this.state.revision,
+      listed: this.isListed(),
       positionToken: positionToken(this.game, this.state),
       scoringToken: this.scoringToken(),
       match: clone(this.state.match),
@@ -1967,6 +2013,7 @@ export class RoomEngine {
       connectionId ?? crypto.randomUUID(),
     );
     this.connections.set(normalizedConnectionId, identity.playerId);
+    this.offlineSince.delete(identity.playerId);
     const member = this.requireMember(identity.playerId);
     // A null marker is a reservation that expires unless this connection is
     // recorded; the caller must persist it.
@@ -1997,6 +2044,7 @@ export class RoomEngine {
     const member = this.requireMember(normalizePlayerId(playerId));
     const normalizedConnectionId = normalizePlayerId(connectionId);
     this.connections.set(normalizedConnectionId, member.playerId);
+    this.offlineSince.delete(member.playerId);
     if (
       member.role === "spectator" ||
       (member.role === "player" &&
@@ -2019,6 +2067,12 @@ export class RoomEngine {
       // Start the reconnect grace from the actual disconnect, rather than the
       // last command the observer happened to send while watching.
       member.lastSeenAt = now;
+    }
+    // A seated player's last connection starts the abandonment grace. It
+    // is kept in memory only, so socket churn writes nothing.
+    if (member?.role === "player" && member.automated !== true &&
+        !this.isOnline(member.playerId)) {
+      this.offlineSince.set(member.playerId, now);
     }
     return {
       changed: false,
@@ -2118,6 +2172,124 @@ export class RoomEngine {
       identity: this.identityFor(member),
       ...(forfeit ? { move: clone(forfeit) } : {}),
       room: this.snapshot(now),
+    };
+  }
+
+  requireRoomHost(member) {
+    this.requirePlayer(member);
+    if (member.color !== BLACK || this.hostPlayer()?.playerId !== member.playerId) {
+      throw new RoomEngineError("只有房主可以管理房间。", 403, "FORBIDDEN");
+    }
+  }
+
+  /** The host lists the room in the lobby or keeps it for invited people only. */
+  setListed({ playerId, payload = {}, now: nowInput }) {
+    const now = readNow(nowInput);
+    this.prepare(now);
+    const member = this.requireMember(normalizePlayerId(playerId));
+    this.requireRoomHost(member);
+    if (typeof payload.listed !== "boolean") {
+      throw new RoomEngineError("listed must be a boolean.", 400, "BAD_REQUEST");
+    }
+    if (payload.listed) delete this.state.listed;
+    else this.state.listed = false;
+    this.touchMember(member, now);
+    this.commit(now);
+    return {
+      changed: true,
+      revision: this.state.revision,
+      move: { ok: true, type: "listing_changed", listed: payload.listed },
+      room: this.snapshotFor(member.playerId, now),
+    };
+  }
+
+  /**
+   * The host removes a spectator, or the White player between rounds. A
+   * seated opponent cannot be removed mid-game: that would decide the game.
+   */
+  removeMember({ playerId, payload = {}, now: nowInput }) {
+    const now = readNow(nowInput);
+    this.prepare(now);
+    const member = this.requireMember(normalizePlayerId(playerId));
+    this.requireRoomHost(member);
+    const targetId = normalizePlayerId(payload.playerId);
+    const target = this.member(targetId);
+    if (!target) {
+      throw new RoomEngineError("这位成员已经不在房间里。", 404, "MEMBER_NOT_FOUND");
+    }
+    if (target.playerId === member.playerId || target.automated === true) {
+      throw new RoomEngineError("不能移出自己或 AI 席位。", 400, "BAD_REQUEST");
+    }
+    if (target.role === "player" && this.friendRoundInProgress()) {
+      throw new RoomEngineError(
+        "本局进行中，不能移出对手；请等本局结束后再操作。",
+        409,
+        "GAME_IN_PROGRESS",
+      );
+    }
+    const left = this.leave({ playerId: target.playerId, now });
+    return {
+      changed: true,
+      revision: left.revision,
+      removedPlayerId: target.playerId,
+      move: { ok: true, type: "member_removed", playerId: target.playerId, role: target.role },
+      room: this.snapshotFor(member.playerId, now),
+    };
+  }
+
+  /**
+   * A player whose opponent has been offline for ABANDONMENT_GRACE_MS (or
+   * has left) ends the round: the absent side resigns. This is the only way
+   * to finish an untimed game, or a Go count, that the other side walked
+   * away from.
+   */
+  claimAbandonment({ playerId, now: nowInput }) {
+    const now = readNow(nowInput);
+    this.prepare(now);
+    const member = this.requireMember(normalizePlayerId(playerId));
+    this.requirePlayer(member);
+    if (
+      this.state.match?.status !== MATCH_STATUS_PLAYING ||
+      this.currentRoundResult() ||
+      this.game.phase === PHASE_FINISHED
+    ) {
+      throw new RoomEngineError("当前没有进行中的对局。", 409, "GAME_NOT_STARTED");
+    }
+    const mine = [BLACK, WHITE].filter(
+      (color) => this.controllerFor(color)?.operatorId === member.playerId,
+    );
+    if (mine.length !== 1) {
+      throw new RoomEngineError("只有对局中的一方可以判对方弃局。", 403, "FORBIDDEN");
+    }
+    const absentColor = mine[0] === BLACK ? WHITE : BLACK;
+    const operatorId = this.controllerFor(absentColor)?.operatorId ?? null;
+    const operator = operatorId ? this.member(operatorId) : null;
+    if (operator && this.isOnline(operator.playerId)) {
+      throw new RoomEngineError("对方仍在线，不能判弃局。", 409, "OPPONENT_CONNECTED");
+    }
+    const offlineSince = operator ? this.offlineSinceFor(operator, now) : -Infinity;
+    if (now - offlineSince < ABANDONMENT_GRACE_MS) {
+      throw new RoomEngineError(
+        "对方离线还不到 2 分钟，请稍后再判弃局。",
+        409,
+        "ABANDONMENT_TOO_EARLY",
+        true,
+      );
+    }
+    const forfeit = this.recordResignation(absentColor, now);
+    this.markRoundFinished(now);
+    this.state.scoreConfirmations = [];
+    this.state.scoringRevision += 1;
+    this.state.undoRequest = null;
+    this.bumpPositionEpoch();
+    this.syncTimeControlRunning(now);
+    this.touchMember(member, now);
+    this.commit(now);
+    return {
+      changed: true,
+      revision: this.state.revision,
+      move: { ...clone(forfeit), type: "abandonment_claimed", color: absentColor },
+      room: this.snapshotFor(member.playerId, now),
     };
   }
 
@@ -2259,6 +2431,9 @@ export class RoomEngine {
     if (action === "leave") return this.leave({ playerId, now });
     if (action === "claim_seat") return this.claimSeat({ playerId, now });
     if (action === "release_seat") return this.releaseSeat({ playerId, now });
+    if (action === "set_listed") return this.setListed({ playerId, payload, now });
+    if (action === "remove_member") return this.removeMember({ playerId, payload, now });
+    if (action === "claim_abandonment") return this.claimAbandonment({ playerId, now });
 
     this.requirePlayer(member);
     this.assertActionSupported(action);
@@ -2532,10 +2707,12 @@ export class RoomEngine {
       this.assertGamePlaying();
       const humanController = this.controllerFor(member.color);
       const aiController = this.controllerFor(member.color === BLACK ? WHITE : BLACK);
+      // The guest of a guest-AI round undoes against the host's AI, which
+      // recomputes from the new position.
       if (humanController?.kind !== "human" ||
           humanController.operatorId !== member.playerId ||
           aiController?.kind !== "ai" ||
-          aiController.operatorId !== member.playerId) {
+          (aiController.operatorId !== member.playerId && !this.isGuestAIRound())) {
         throw new RoomEngineError(
           "This browser does not control a human-AI match.",
           409,
@@ -3165,6 +3342,7 @@ export class RoomEngine {
 
   advance(nowInput, { includeRoom = true } = {}) {
     const now = readNow(nowInput);
+    if (this.startedAt === null) this.startedAt = now;
     // Internal callers only need the flags; building a full snapshot hashes
     // the whole position history, so they opt out of the returned room.
     const room = () => (includeRoom ? this.snapshot(now) : null);
@@ -3291,7 +3469,7 @@ export class RoomEngine {
     const whiteId = this.humanWhitePlayer()?.playerId ?? null;
     const request = this.state.match?.request;
     if (this.state.match?.status === MATCH_STATUS_INVITED &&
-        request?.mode === MATCH_MODE_FRIEND &&
+        (request?.mode === MATCH_MODE_FRIEND || isGuestAIControllers(request)) &&
         (request.requestedBy !== hostId ||
           request.controllers?.[WHITE]?.operatorId !== whiteId)) {
       // An invitation belongs to its original two players. A new occupant of
@@ -3438,7 +3616,17 @@ export class RoomEngine {
    * with an immediately playing round joinable.
    */
   friendRoundInProgress() {
-    return this.state.match?.mode === MATCH_MODE_FRIEND && this.roundInProgress();
+    return (this.state.match?.mode === MATCH_MODE_FRIEND || this.isGuestAIRound()) &&
+      this.roundInProgress();
+  }
+
+  /** The current round is a guest playing White against the host's AI. */
+  isGuestAIRound() {
+    return isGuestAIControllers(this.state.match);
+  }
+
+  isListed() {
+    return this.state.listed !== false;
   }
 
   roundInProgress() {
@@ -3629,15 +3817,23 @@ export class RoomEngine {
     const mode = normalizeMatchMode(payload.mode ?? this.state.match?.mode);
     const settings = normalizeRoundSettings(payload, this.game, this.state.timeControl);
     assertMatchModeForGame(mode, settings);
+    if (payload.aiOpponent !== undefined &&
+        !(mode === MATCH_MODE_HUMAN_AI && ["host", "guest"].includes(payload.aiOpponent))) {
+      throw new RoomEngineError("aiOpponent must be host or guest in a human-AI game.", 400, "BAD_REQUEST");
+    }
+    // Human-AI with the guest: an invitation like a friend game, then the
+    // guest plays White against the AI the host's browser runs as Black.
+    const guestAI = mode === MATCH_MODE_HUMAN_AI && payload.aiOpponent === "guest";
     const controllers = controllersForMode({
       mode,
       hostId: member.playerId,
       whiteId: this.humanWhitePlayer()?.playerId ?? null,
+      guestId: guestAI ? this.humanWhitePlayer()?.playerId ?? null : null,
       aiModelId: payload.aiModelId,
       aiModelIds: payload.aiModelIds,
       gameType: gameTypeOf(settings),
     });
-    if (mode !== MATCH_MODE_FRIEND) {
+    if (mode !== MATCH_MODE_FRIEND && !guestAI) {
       const occupiedWhite = this.state.members.find(
         (candidate) => candidate.role === "player" && candidate.color === WHITE,
       );
@@ -4104,6 +4300,7 @@ export class RoomEngine {
   }
 
   assertAvailable(now) {
+    if (this.startedAt === null) this.startedAt = now;
     if (this.state.expiredAt !== null || now >= this.state.expiresAt) {
       throw new RoomEngineError(
         "没有找到这个房间，可能已经过期了。",
