@@ -55,11 +55,11 @@ export const ENGLISH_STATIC = Object.freeze({
   "◉ 立体莫比乌斯": "◉ 3D Möbius",
   "19 × 19 · 竹筒 · 中国规则": "19 × 19 · Cylinder · Chinese rules",
   "19 路 · 竹筒": "19 × 19 · Cylinder",
-  "3D Baduk · 奇异棋盘围棋": "3D Baduk · Go on Unusual Boards",
-  "3D Baduk 棋盘区域": "3D Baduk board area",
-  "3D Baduk 首页": "3D Baduk home",
-  "3D Baduk：支持竹筒、甜甜圈与莫比乌斯棋盘、KataGo AI、音效、悔棋、完整复盘、在线对局以及平面和三维视图。":
-    "3D Baduk supports cylinder, torus, and Möbius boards, KataGo AI, sound effects, undo, full-game replay, online play, and flat and 3D views.",
+  "Topology Go · 拓扑棋盘上的围棋、五子棋、黑白棋": "Topology Go · Go, Gomoku & Othello on Unusual Boards",
+  "Topology Go 棋盘区域": "Topology Go board area",
+  "Topology Go 首页": "Topology Go home",
+  "Topology Go：在竹筒、甜甜圈与莫比乌斯棋盘上下围棋、五子棋和黑白棋，内置浏览器 AI，支持悔棋、完整复盘、在线大厅与对局，以及平面和三维视图。":
+    "Topology Go: play Go, Gomoku and Othello on cylinder, torus and Möbius boards, with in-browser AI, undo, full-game replay, an online lobby and rooms, and flat and 3D views.",
   "AI · 白方": "AI · White",
   "AI 自对弈": "AI vs AI",
   "AI 和 AI 自动对弈": "AI vs AI autoplay",
@@ -167,7 +167,7 @@ export const ENGLISH_STATIC = Object.freeze({
   "复盘播放器": "Replay player",
   "复盘播放控制": "Replay controls",
   "复盘整局": "Replay full game",
-  "奇异棋盘围棋": "Go on Unusual Boards",
+  "围棋 · 五子棋 · 黑白棋": "Go · Gomoku · Othello",
   "尚未开始": "Not started",
   "实时联机": "Live online",
   "宽度": "Width",
@@ -230,8 +230,8 @@ export const ENGLISH_STATIC = Object.freeze({
   "本机 AI 对手": "Local AI opponent",
   "标准 · 20 分钟 + 5×30 秒":
     "Standard · 20 minutes + 5×30 seconds",
-  "标准棋步保持兼容，接缝规则写入 3D Baduk 扩展属性":
-    "Standard moves remain compatible; seam rules are stored in 3D Baduk extension properties",
+  "标准棋步保持兼容，接缝规则写入 Topology Go 扩展属性":
+    "Standard moves remain compatible; seam rules are stored in Topology Go extension properties",
   "桌面端右键、触屏单指可向上下左右或斜向拖动平面，改变两个方向的展开起点。":
     "Right-drag on desktop or drag with one finger on touch screens in any cardinal or diagonal direction to shift the flat view's horizontal and vertical seams.",
   "桌面端右键、触屏单指可横向拖动平面；滑过完整一圈后棋盘会上下翻转，再滑一圈才恢复方向。":
@@ -379,7 +379,7 @@ export const ENGLISH_STATIC = Object.freeze({
   "黑方 · 你先行": "Black · You move first",
   "黑方提子": "Black captures",
   "黑方落子": "Black to move",
-  "3D Baduk：竹筒棋盘上的围棋": "3D Baduk: Go on a cylinder board",
+  "Topology Go：竹筒棋盘上的围棋": "Topology Go: Go on a cylinder board",
   // Online dialog identity recovery panels
   "此浏览器保存了房间身份": "This browser saved a room identity",
   "请选择要恢复的身份；若要以新身份观战或加入，请使用下方按钮。":

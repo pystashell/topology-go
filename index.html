@@ -6,43 +6,43 @@
     <meta name="theme-color" content="#101715" />
     <meta
       name="description"
-      content="3D Baduk：支持竹筒、甜甜圈与莫比乌斯棋盘、KataGo AI、音效、悔棋、完整复盘、在线对局以及平面和三维视图。"
+      content="Topology Go：在竹筒、甜甜圈与莫比乌斯棋盘上下围棋、五子棋和黑白棋，内置浏览器 AI，支持悔棋、完整复盘、在线大厅与对局，以及平面和三维视图。"
     />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="/icons/icon-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="3D Baduk" />
-    <meta property="og:title" content="3D Baduk · 奇异棋盘围棋" />
+    <meta property="og:site_name" content="Topology Go" />
+    <meta property="og:title" content="Topology Go · 拓扑棋盘上的围棋、五子棋、黑白棋" />
     <meta
       property="og:description"
-      content="3D Baduk：支持竹筒、甜甜圈与莫比乌斯棋盘、KataGo AI、音效、悔棋、完整复盘、在线对局以及平面和三维视图。"
+      content="Topology Go：在竹筒、甜甜圈与莫比乌斯棋盘上下围棋、五子棋和黑白棋，内置浏览器 AI，支持悔棋、完整复盘、在线大厅与对局，以及平面和三维视图。"
     />
     <!-- Link previews need an absolute image URL: the public deployment (README). -->
     <meta property="og:image" content="https://topology-go.pystashell.workers.dev/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="3D Baduk：竹筒棋盘上的围棋" />
+    <meta property="og:image:alt" content="Topology Go：竹筒棋盘上的围棋" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="3D Baduk · 奇异棋盘围棋" />
+    <meta name="twitter:title" content="Topology Go · 拓扑棋盘上的围棋、五子棋、黑白棋" />
     <meta
       name="twitter:description"
-      content="3D Baduk：支持竹筒、甜甜圈与莫比乌斯棋盘、KataGo AI、音效、悔棋、完整复盘、在线对局以及平面和三维视图。"
+      content="Topology Go：在竹筒、甜甜圈与莫比乌斯棋盘上下围棋、五子棋和黑白棋，内置浏览器 AI，支持悔棋、完整复盘、在线大厅与对局，以及平面和三维视图。"
     />
     <meta name="twitter:image" content="https://topology-go.pystashell.workers.dev/og-image.png" />
-    <title>3D Baduk · 奇异棋盘围棋</title>
+    <title>Topology Go · 拓扑棋盘上的围棋、五子棋、黑白棋</title>
   </head>
   <body>
     <div id="app">
       <header class="topbar">
-        <a class="brand" href="/single" aria-label="3D Baduk 首页">
+        <a class="brand" href="/single" aria-label="Topology Go 首页">
           <span class="brand-mark" aria-hidden="true">
             <span></span><span></span><span></span>
           </span>
           <span>
-            <strong>3D Baduk</strong>
-            <small>奇异棋盘围棋</small>
+            <strong>Topology Go</strong>
+            <small>围棋 · 五子棋 · 黑白棋</small>
           </span>
         </a>
         <div class="topbar-actions">
@@ -61,7 +61,7 @@
       <main id="lobby-screen" class="online-lobby" aria-labelledby="lobby-title" hidden>
         <section class="lobby-hero">
           <div>
-            <span class="eyebrow">3D Baduk Online</span>
+            <span class="eyebrow">Topology Go Online</span>
             <h1 id="lobby-title">奇异棋盘在线大厅</h1>
             <p>创建竹筒、甜甜圈或莫比乌斯棋局；好友、人机、AI 自对弈和同机双人都可实时同步并开放观战。</p>
           </div>
@@ -147,7 +147,7 @@
           data-topology="cylinder"
           data-chat-pick-hint="📍 点击一个棋点引用到聊天（不会落子）"
           data-analysis-pick-hint="◇ 点击棋点，只在本页建立分析分支"
-          aria-label="3D Baduk 棋盘区域"
+          aria-label="Topology Go 棋盘区域"
         >
           <div id="flat-scene" class="view-surface" aria-label="可横向滑动的竹筒表面平面展开棋盘" hidden></div>
           <div id="arc-scene" class="view-surface" aria-label="可横向循环滑动的3D弧面棋盘"></div>
@@ -522,7 +522,7 @@
             <div>
               <span class="eyebrow">SGF 棋谱</span>
               <strong id="record-actions-title">保存或打开异形棋谱</strong>
-              <small>标准棋步保持兼容，接缝规则写入 3D Baduk 扩展属性</small>
+              <small>标准棋步保持兼容，接缝规则写入 Topology Go 扩展属性</small>
             </div>
             <div class="record-action-buttons">
               <button id="export-sgf" class="secondary-button" type="button">导出 SGF</button>

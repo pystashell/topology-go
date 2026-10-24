@@ -375,7 +375,7 @@ export function exportSgf(input, options = {}) {
     property("FF", "4"),
     property("GM", "1"),
     property("CA", "UTF-8"),
-    property("AP", "3D Baduk:1"),
+    property("AP", "Topology Go:1"),
     property("SZ", width === height ? width : `${width}:${height}`),
     property("KM", formatNumber(base.komi ?? 0, "komi")),
     property("RU", rules),
