@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { appSource } from "./helpers/appSource.js";
 
 const root = new URL("../", import.meta.url);
 
@@ -20,7 +21,7 @@ test("the online undo response is placed immediately below the turn card", async
 
 test("friend invitations require a human white seat in both UI and room engine", async () => {
   const [main, engine] = await Promise.all([
-    readFile(new URL("src/main.js", root), "utf8"),
+    appSource(),
     readFile(new URL("src/multiplayer/roomEngine.js", root), "utf8"),
   ]);
 
@@ -35,7 +36,7 @@ test("friend invitations require a human white seat in both UI and room engine",
 test("lobby refresh reuses cards and lazily paints visible board previews", async () => {
   const [html, main] = await Promise.all([
     readFile(new URL("index.html", root), "utf8"),
-    readFile(new URL("src/main.js", root), "utf8"),
+    appSource(),
   ]);
   const renderStart = main.indexOf("async function renderLobbyRooms()");
   const refreshStart = main.indexOf("async function refreshLobby", renderStart);
@@ -64,15 +65,19 @@ test("online match mode lives in the connected room header", async () => {
   assert.equal(html.match(/id="online-match-options"/gu)?.length, 1);
 });
 
-test("friend invitation details are conditional on friend mode", async () => {
+test("invitation details show for friend and guest-AI rounds", async () => {
   const [html, main] = await Promise.all([
     readFile(new URL("index.html", root), "utf8"),
-    readFile(new URL("src/main.js", root), "utf8"),
+    appSource(),
   ]);
 
   assert.match(html, /id="friend-room-code-row"/u);
   assert.match(html, /id="friend-seat-list"/u);
-  assert.match(main, /showFriendInvitationDetails = active && selectedOnlineMode === ONLINE_MODE_FRIEND/u);
+  // Both invite the guest in the White seat.
+  assert.match(
+    main,
+    /showFriendInvitationDetails = active &&\s*\[ONLINE_MODE_FRIEND, ONLINE_MODE_GUEST_AI\]\.includes\(selectedOnlineMode\)/u,
+  );
   assert.match(main, /elements\.friendRoomCodeRow\.hidden = !showFriendInvitationDetails/u);
   assert.match(main, /elements\.copyRoomLink\.hidden = !showFriendInvitationDetails/u);
   assert.match(main, /elements\.friendSeatList\.hidden = !showFriendInvitationDetails/u);
@@ -80,7 +85,7 @@ test("friend invitation details are conditional on friend mode", async () => {
 
 test("spectator chat has separate channel controls", async () => {
   const html = await readFile(new URL("index.html", root), "utf8");
-  const main = await readFile(new URL("src/main.js", root), "utf8");
+  const main = await appSource();
 
   assert.match(html, /id="chat-channel-tabs"/u);
   assert.match(html, /data-chat-channel="spectators"/u);

@@ -11,8 +11,7 @@ import {
   mobiusWindowCopies,
 } from "./flatBoardLayout.js";
 import {
-  applyBoardTouchAction,
-  boardTouchAction,
+  registerBoardTouchTargets,
   invalidatePendingTapOnAdditionalPointer,
   pointerGestureRoles,
   preventBoardContextMenu,
@@ -157,10 +156,7 @@ export class FlatBoard {
     this.wrapRows = this.topology === "torus";
     this.isMobius = this.topology === "mobius";
     this.container.dataset.topology = this.topology;
-    applyBoardTouchAction(
-      [this.container, this.canvas],
-      boardTouchAction({ view: "flat", topology: this.topology }),
-    );
+    registerBoardTouchTargets([this.container, this.canvas], { view: "flat", topology: this.topology });
     this.updateAriaLabel();
     this.board = Array.from({ length: height }, () => Array(width).fill(null));
     this.currentPlayer = "black";

@@ -226,7 +226,7 @@ export const gomokuRules = Object.freeze({
     resign: true,
     ai: true,
     analysis: false,
-    sgf: false,
+    sgf: true,
   }),
   roomActions: readonlySet(NON_GO_ROOM_ACTIONS),
   // AI rounds run the game's own engine in the host browser (see

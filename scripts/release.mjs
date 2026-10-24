@@ -246,7 +246,7 @@ function ensurePublishedTag(context) {
       "--annotate",
       context.release.tag,
       "--message",
-      `3D Baduk ${context.release.tag}`,
+      `Topology Go ${context.release.tag}`,
       context.head,
     ]);
   }
@@ -379,7 +379,7 @@ function createGithubRelease(context, cloudflare) {
       "--target",
       context.head,
       "--title",
-      `3D Baduk ${context.release.tag}`,
+      `Topology Go ${context.release.tag}`,
       "--notes-file",
       notesPath,
       "--generate-notes",

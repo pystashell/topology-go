@@ -351,14 +351,12 @@ export function rulesSummaryTitle(gameType, topology, { showGame = true } = {}) 
 }
 
 /**
- * Friendly copy for an SGF record of another game (GM[2] Othello, GM[4]
- * Gomoku); only Go records can be imported for now.
+ * Friendly copy for an SGF record of a game we do not play: Go (GM[1]),
+ * Othello (GM[2]) and Gomoku (GM[4]) records can all be imported.
  */
 export function sgfOtherGameNote(error) {
   const gm = /GM\[(\d+)\]/u.exec(String(error?.message ?? ""))?.[1] ?? "";
-  if (gm === "2") return "这是黑白棋棋谱（GM[2]）；目前只能导入围棋 SGF。";
-  if (gm === "4") return "这是五子棋棋谱（GM[4]）；目前只能导入围棋 SGF。";
-  return `这份 SGF 不是围棋棋谱（GM[${gm || "?"}]）；目前只能导入围棋 SGF。`;
+  return `这份 SGF 不是围棋、五子棋或黑白棋棋谱（GM[${gm || "?"}]），无法导入。`;
 }
 
 /** Lobby card labels: the game badge and, for Gomoku, its rule set. */

@@ -26,6 +26,9 @@ Then, from `scripts/browser-checks`:
 | `node csp.mjs` | Under the real `_headers` CSP: view switches, a local KataGo self-play game (b10), the lobby, and room creation over WebSocket. Fails on any CSP violation. |
 | `node local.mjs` | Gomoku (freestyle and Renju) and Othello against the AI on cylinder, torus and Möbius, played to a result. Also AI self-play with pause/undo/resume, direct undo against the AI, and an English pass checking for leftover Chinese. |
 | `node online.mjs` | Online rooms with an AI seat run by the host browser, plus a guest and a spectator. Checks that undo stays in sync and that every view ends on the same result. |
+| `node sgf.mjs` | SGF for every game: AI self-play a Gomoku (Renju, torus) and an Othello (Möbius) game, export each record, import it on a fresh page and replay it to the end. Also a Go import, an unsupported GM[3] record and an English pass. |
+| `node rooms.mjs` | Room management against `wrangler dev`: an unlisted room kept out of the lobby (then listed and unlisted again), the host removing a spectator, the guest playing White against the host's AI with undo, and the host claiming the game after the guest has been offline for two minutes. Ends with an English pass. About 3 minutes. |
+| `node webkit.mjs` | An iPhone 13 profile in WebKit (closest to iOS Safari without a device; `npx playwright install webkit` once): load, tap to play Go, Gomoku and Othello AI replies, WebGL and wasm SIMD, and the phone page-scroll policy with the Fix page button. WebKit reports the internal styles of `<select>` elements and of its own screenshots against the CSP; the script ignores exactly those. |
 | `node go.mjs` | Go regression: the AI dialog still offers KataGo b10/b18, and KataGo plays a real reply. |
 
 ## Environment variables

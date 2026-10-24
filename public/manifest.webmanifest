@@ -1,7 +1,7 @@
 {
-  "name": "3D Baduk · Go on Unusual Boards",
-  "short_name": "3D Baduk",
-  "description": "Go on cylinder, torus and Möbius boards with KataGo AI, online rooms, replay and flat or 3D views.",
+  "name": "Topology Go · Go, Gomoku & Othello on Unusual Boards",
+  "short_name": "Topology Go",
+  "description": "Go, Gomoku and Othello on cylinder, torus and Möbius boards with in-browser AI, online rooms, replay and flat or 3D views.",
   "lang": "en",
   "start_url": "/single",
   "scope": "/",

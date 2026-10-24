@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
+import { appSource } from "./helpers/appSource.js";
 
-const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+const main = appSource();
 const slice = (from, to) => main.slice(main.indexOf(from), main.indexOf(to));
 const source = [
   slice("function cancelOnlineDialog()", "function roomSeat("),
@@ -21,6 +22,7 @@ function harness(mode = "lobby") {
     cancelOnline: { addEventListener: (type, callback) => { handlers[type] = callback; } },
     onlineDialog: { open: true, addEventListener: (type, callback) => { handlers[type] = callback; } },
     playerName: { value: "Alice", focus: noop },
+    roomUnlisted: { checked: false },
     roomCodeInput: { value: "AB23CD", focus: noop },
   };
   const request = (options) => new Promise((resolve, reject) => pending.push({ options, resolve, reject }));

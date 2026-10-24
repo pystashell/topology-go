@@ -1,9 +1,9 @@
-# 3D Baduk 产品需求与技术复刻规范
+# Topology Go 产品需求与技术复刻规范
 
 > 文档版本：1.4
 > 代码快照：`codex/大厅版` 当前工作区，包含 setup-first 在线房间、持久多轮对局、隐藏大厅单向索引、矩形棋盘、SGF、AI 自对弈、聊天、权威计时、观战分析和版本化发布等增量；最终测试与线上状态仍以第 20、21 节的实测证据为准
-> 产品名称：**3D Baduk（奇异棋盘围棋）**
-> 公开入口：<https://bamboo-baduk.pystashell.workers.dev/>（不代表当前工作区增量已部署）
+> 产品名称：**Topology Go（拓扑棋盘上的围棋、五子棋、黑白棋）**；2026-10 之前叫 3D Baduk（奇异棋盘围棋）。本规范正文以围棋为主，五子棋、黑白棋见 `docs/design/multi-game-plan.md`
+> 公开入口：<https://topology-go.pystashell.workers.dev/>（不代表当前工作区增量已部署）
 > 目标读者：需要在不了解历史讨论的情况下，完整复刻本项目的产品、前端、规则引擎、AI、联机服务和部署流程的工程团队或 AI
 
 ## 0. 文档效力、状态和原则
@@ -1243,7 +1243,7 @@ interface StoredRoomV2 {
 └────────────────────────────────────────┴───────────────────┘
 ~~~
 
-顶部必须直接并列三个拓扑快捷按钮“竹筒 / 甜甜圈 / 莫比乌斯”，设置区也提供对应的三项详细选择；两处高亮和 `aria-pressed` 始终同步。产品名始终显示“3D Baduk”，不得恢复“桶围棋”；竹筒只是棋盘类型。
+顶部必须直接并列三个拓扑快捷按钮“竹筒 / 甜甜圈 / 莫比乌斯”，设置区也提供对应的三项详细选择；两处高亮和 `aria-pressed` 始终同步。产品名始终显示“Topology Go”，不得恢复“桶围棋”或“3D Baduk”；竹筒只是棋盘类型。
 
 侧栏参考 OGS 的信息密度而不复制品牌：黑白棋手/时钟卡始终位于标签栏上方；下方固定五个标签“棋局 / 分析 / 聊天 / 棋谱 / 棋盘设置”。五个标签及其面板在 local/online、当前支持的 controller 组合和观战身份下必须是**同一组 DOM 节点**，只根据 match session snapshot 改内容、权限、disabled/hidden 子控件和提示；不得销毁本地侧栏再创建联机侧栏。一次只显示一个标签面板，隐藏面板不得占布局或进入键盘 Tab 顺序；标签切换不修改棋局、复盘光标、AI 请求或房间状态。
 
@@ -1697,7 +1697,7 @@ npm run deploy
 规范配置：
 
 ~~~text
-worker name       = bamboo-baduk
+worker name       = topology-go
 main              = worker/index.js
 compatibility     = 2026-07-01
 assets directory  = dist
@@ -1709,7 +1709,7 @@ observability     = enabled
 workers.dev       = enabled
 ~~~
 
-部署前必须确认 Wrangler 登录的是预期账户。不得猜测 workers.dev 子域；从部署输出读取真实 URL。目标公开地址为 <https://bamboo-baduk.pystashell.workers.dev/>。
+部署前必须确认 Wrangler 登录的是预期账户。不得猜测 workers.dev 子域；从部署输出读取真实 URL。目标公开地址为 <https://topology-go.pystashell.workers.dev/>。
 
 ### 21.3 部署前检查
 
@@ -1725,13 +1725,13 @@ workers.dev       = enabled
 
 部署成功不等于交付成功。必须验证：
 
-1. 打开真实 URL 得到最新页面标题“3D Baduk”，默认配置正确。
+1. 打开真实 URL 得到最新页面标题“Topology Go”，默认配置正确。
 2. `GET /api/rooms/health` 返回 200，`GET /version.json` 返回本次 SemVer，页面侧栏显示同一版本。
 3. b10 和 b18 四个分片均返回 200、正确 MIME/长度、可缓存；不存在大于平台单文件上限的合并 b18。
 4. 运行：
 
    ~~~powershell
-   npm run test:live -- https://bamboo-baduk.pystashell.workers.dev/
+   npm run test:live -- https://topology-go.pystashell.workers.dev/
    ~~~
 
    smoke 至少验证两个真实 WS 使用 `bamboo-baduk-v2`、双方状态一致、未审查 Unicode 正文及其 `D4` 权威坐标、固定表情包、计时快照、pass 和离开。
@@ -1775,7 +1775,7 @@ npm.cmd run release:rollback -- v0.2.0-rc.1 --yes
 
 ### 21.6 GitHub 交付面
 
-- 代码仓库为 [pystashell/bamboo-cylinder-baduk](https://github.com/pystashell/bamboo-cylinder-baduk)。历史仓库名可保留，但页面产品名和 README 标题使用 3D Baduk。
+- 代码仓库为 [pystashell/topology-go](https://github.com/pystashell/topology-go)（原名 bamboo-cylinder-baduk）。页面产品名和 README 标题使用 Topology Go。
 - README 首屏和 GitHub About 的 homepage 必须包含可直接玩的线上 URL；仓库 description 应说明“异形拓扑的 3D 围棋，支持竹筒/甜甜圈/莫比乌斯、浏览器 KataGo、联机与复盘”。
 - README 必须包含：玩法/拓扑、Flat/Arc/3D、矩形尺寸、主时间/读秒、侧栏/观战、规则差异、AI 本地资源与公平限制、在线隐私/聊天 TTL、SGF 扩展、版本/回滚、开发/测试/部署、第三方许可。
 - 交付提交不得重写或丢弃他人未相关修改；提交作者信息使用用户认可的公开/noreply 身份。推送后核对远端 commit，而非只看本地成功。

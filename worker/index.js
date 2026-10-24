@@ -191,6 +191,8 @@ async function createRoom(request, env) {
         gameType: body.gameType,
         ruleSet: body.ruleSet,
         multiGame: body.multiGame === true,
+        // Unlisted rooms are joined by code or link only.
+        listed: body.listed !== false,
         playerId,
         tokenHash,
         // Online rooms open in reusable setup state until an invitation starts a round.

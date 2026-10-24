@@ -1,6 +1,6 @@
 # Topology Go: Baduk Beyond Flat Boards
 
-A fully playable Go game on cylinders, tori, and Möbius strips—built during OpenAI Build Week with Codex and GPT-5.6.
+A fully playable Go game on cylinders, tori, and Möbius strips—built during OpenAI Build Week with Codex and GPT-5.6. Gomoku (freestyle and Renju) and Othello now share the same boards, views, lobby and AI opponents.
 
 **Live demo:**
 https://topology-go.pystashell.workers.dev/
@@ -66,6 +66,13 @@ A complete game can also be replayed on the cylinder, torus, or Möbius strip, a
 - Territory traversal and dead-stone marking
 - Chinese area scoring and simplified territory scoring (Japanese-style; seki eyes are not excluded)
 - Configurable komi
+
+### Gomoku and Othello
+
+- Gomoku with freestyle rules (five or more wins) or Renju (Black's double three, double four and overline are refused)
+- Othello on even boards from 6×6 to 30×30; rays that wrap back to their start flip nothing
+- Fives, flips and Renju forbidden points work across every seam
+- Both games support the same local, AI, online, lobby and replay features as Go
 
 ### Ways to play
 
@@ -200,6 +207,11 @@ The available models are:
 Inference runs locally in the player's browser inside a Web Worker. No account or paid inference API is required.
 
 Because ordinary KataGo networks were trained on standard flat Go boards, the project does not claim that their normal-board strength transfers perfectly to unusual topologies.
+
+The other games have their own engines, also running in a Web Worker:
+
+- **Gomoku: [Rapfi](https://github.com/dhbloo/rapfi)** (GPL-3, networks CC0), compiled to WebAssembly. It sees a flat window of the topology board; our own exact tactics handle wins, blocks and VCF across seams first. See [public/engines/rapfi/SOURCE.md](public/engines/rapfi/SOURCE.md).
+- **Othello: our own engine.** No open-source Othello engine handles wrap-around boards, so this one builds its rays from the real topology and searches with PVS, a transposition table and an exact endgame solver.
 
 ---
 

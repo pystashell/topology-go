@@ -4,8 +4,9 @@ import test from "node:test";
 import vm from "node:vm";
 
 import { translateText } from "../src/i18n.js";
+import { appSource } from "./helpers/appSource.js";
 
-const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+const main = appSource();
 const constant = (name) => {
   const match = new RegExp(`const ${name} = ([\\d_]+);`, "u").exec(main);
   assert.ok(match, `expected ${name}`);

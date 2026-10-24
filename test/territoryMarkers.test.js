@@ -16,9 +16,10 @@ import {
   territoryPointsSignature,
   updateTerritoryMarkerLayer,
 } from "../src/view/territoryMarkers.js";
+import { appSource } from "./helpers/appSource.js";
 
 test("main sends scored regions to the active renderer and every renderer supports them", () => {
-  const source = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+  const source = appSource();
   assert.match(source, /territoryRegions:\s*territoryRegionsForState\(state\)/);
   assert.match(source, /\["resign",\s*"timeout"\]\.includes\(state\.result\?\.reason\)/);
   assert.match(source, /activeBoardView\(\)\?\.setPosition\(viewState\)/);

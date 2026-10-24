@@ -45,13 +45,31 @@ test("SQLite Durable Object validation, rollback, post-commit failure and restar
     assert.equal((await response.json()).code, "ROOM_RESTORE_FAILED");
     assert.deepEqual(await (await request("schema", "/stored")).json(), original);
   });
-  for (const fault of ["serialize", "oversize", "rollback", "alarm"]) {
+  await t.test("a snapshot over the storage value limit is stored in chunks and survives a restart", async () => {
+    assert.equal((await request("big", "/seed")).status, 200);
+    const first = await (await request("big", "/command?fault=oversize")).json();
+    assert.ok(first.messages.some(message => message.type === "ack"), JSON.stringify(first));
+    assert.equal(first.unavailable, null);
+    const keys = await (await request("big", "/stored-keys")).json();
+    assert.ok(keys.includes("room:chunk:0") && keys.includes("room:chunk:9"), keys.join());
+    try { await request("big", "/reset"); } catch {}
+    const restored = await (await request("big", "/stored")).json();
+    assert.equal(restored.padding.length, 9 * 1024 * 1024);
+    assert.equal(restored.game.board[0][0], "black");
+    const retry = await (await request("big", "/command")).json();
+    assert.equal(retry.messages[0].type, "ack");
+    // Back under the limit, the room is one value again and the chunks go.
+    assert.equal((await request("big", "/shrink")).status, 200);
+    const after = await (await request("big", "/stored-keys")).json();
+    assert.deepEqual(after.filter(key => key.startsWith("room")), ["room"]);
+    assert.equal((await (await request("big", "/stored")).json()).moveCount, 1);
+  });
+  for (const fault of ["serialize", "rollback", "alarm"]) {
     await t.test(fault, async () => {
       assert.equal((await request(fault, "/seed")).status, 200);
       const first = await (await request(fault, `/command?fault=${fault}`)).json();
       const retry = await (await request(fault, "/command")).json();
       const committed = fault === "alarm";
-      if (fault === "oversize") assert.match(first.failure, /SQLITE_TOOBIG/);
       for (const result of [first, retry]) {
         assert.equal(result.messages.some(message => message.type === "ack"), committed);
         assert.equal(result.unavailable, committed ? null : "ROOM_COMMIT_FAILED");

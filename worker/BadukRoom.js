@@ -17,8 +17,8 @@ import {
 import { CHAT_CHANNEL_SPECTATORS } from "../src/multiplayer/chat.js";
 import { GAME_GO } from "../src/game/gameTypes.js";
 import { lobbySummaryFromRoom } from "../src/multiplayer/lobby.js";
+import { STORAGE_KEY, loadRoomSnapshot, saveRoomSnapshot } from "./roomStorage.js";
 
-const STORAGE_KEY = "room";
 // The lobby mirrors the room's expiry. Refresh an otherwise unchanged entry
 // once the room's TTL has slid this far past the last published one.
 export const LOBBY_EXPIRY_REFRESH_MS = 30 * 60 * 1_000;
@@ -53,7 +53,19 @@ function defaultAttachment() {
     connectionId: crypto.randomUUID(),
     identity: null,
     connectedAt: Date.now(),
+    offlineSince: {},
   };
+}
+
+// Players whose disconnect times a socket attachment remembers.
+const MAX_OFFLINE_ENTRIES = 8;
+
+function offlineEntries(value) {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .filter(([playerId, at]) => playerId.length <= 128 && Number.isFinite(at))
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, MAX_OFFLINE_ENTRIES));
 }
 
 export class BadukRoom {
@@ -69,6 +81,8 @@ export class BadukRoom {
     this.indexPublication = null;
     // playerId -> when this instance last persisted that member's connection.
     this.connectionWrites = new Map();
+    // Chunks the stored snapshot uses (see roomStorage.js); 0 when inline.
+    this.storedChunks = 0;
 
     if (typeof ctx.setWebSocketAutoResponse === "function") {
       ctx.setWebSocketAutoResponse(
@@ -77,8 +91,10 @@ export class BadukRoom {
     }
 
     ctx.blockConcurrencyWhile(async () => {
-      const stored = await ctx.storage.get(STORAGE_KEY);
-      if (!stored) return;
+      const raw = await ctx.storage.get(STORAGE_KEY);
+      if (!raw) return;
+      const { snapshot: stored, chunks } = await loadRoomSnapshot(ctx.storage, raw);
+      this.storedChunks = chunks;
       try {
         this.engine = RoomEngine.restore(stored);
       } catch (error) {
@@ -102,6 +118,11 @@ export class BadukRoom {
         } catch {
           this.closeSocket(socket, 4401, "Session expired");
         }
+      }
+      // Hibernation keeps attachments but not this object: restore when
+      // absent players went offline, so their abandonment grace continues.
+      for (const socket of ctx.getWebSockets()) {
+        this.engine.restoreOfflineSince(this.readAttachment(socket).offlineSince);
       }
 
       const advanced = this.engine.advance(now, { includeRoom: false });
@@ -303,12 +324,15 @@ export class BadukRoom {
     if (this.unavailableError?.code !== "ROOM_COMMIT_FAILED") return;
     let stored;
     try {
-      stored = await this.ctx.storage.get(STORAGE_KEY);
-      if (!stored) {
+      const raw = await this.ctx.storage.get(STORAGE_KEY);
+      if (!raw) {
         this.engine = null;
         this.unavailableError = null;
         return;
       }
+      const loaded = await loadRoomSnapshot(this.ctx.storage, raw);
+      stored = loaded.snapshot;
+      this.storedChunks = loaded.chunks;
       this.engine = RoomEngine.restore(stored);
       this.unavailableError = null;
       this.queueIndexPublish();
@@ -385,8 +409,8 @@ export class BadukRoom {
       ) {
         return jsonResponse({ error: "加入凭据无效。", code: "BAD_REQUEST" }, 400);
       }
-      const stored = await this.ctx.storage.get(STORAGE_KEY);
-      if (!stored) {
+      const raw = await this.ctx.storage.get(STORAGE_KEY);
+      if (!raw) {
         if (this.unavailableError?.code === "ROOM_COMMIT_FAILED") {
           // A failed first-room write was confirmed not to have committed.
           // Reopen the empty object so the same create credential can retry.
@@ -395,6 +419,7 @@ export class BadukRoom {
         }
         return jsonResponse({ error: "加入结果尚未确认。", code: "JOIN_NOT_COMMITTED" }, 404);
       }
+      const { snapshot: stored, chunks } = await loadRoomSnapshot(this.ctx.storage, raw);
       let recovered;
       try {
         recovered = RoomEngine.restore(stored);
@@ -406,6 +431,7 @@ export class BadukRoom {
       // Discard the speculative engine and reopen from that exact snapshot.
       if (this.unavailableError?.code === "ROOM_COMMIT_FAILED") {
         this.engine = recovered;
+        this.storedChunks = chunks;
         this.unavailableError = null;
         this.queueIndexPublish();
         await this.scheduleAlarmAfterCommit();
@@ -707,10 +733,28 @@ export class BadukRoom {
         this.broadcastPresence(socket);
         this.closeSocket(socket, 1000, "Membership left");
       }
+      if (command.action === "remove_member" && result.removedPlayerId) {
+        this.closeRemovedMember(result.removedPlayerId);
+      }
     } catch (error) {
       console.error("Unable to notify committed room command", error);
     }
     await this.scheduleAlarmAfterCommit();
+  }
+
+  /** Tell a member the host removed that their seat is gone and close it. */
+  closeRemovedMember(playerId) {
+    for (const socket of this.ctx.getWebSockets?.() ?? []) {
+      const attachment = this.readAttachment(socket);
+      if (attachment.identity?.playerId !== playerId) continue;
+      this.sendError(socket, {
+        code: "REMOVED_FROM_ROOM",
+        message: "你已被房主移出房间。",
+      });
+      socket.serializeAttachment({ ...attachment, identity: null });
+      // 4401 ends the session on every client version: no reconnect.
+      this.closeSocket(socket, 4401, "Removed by host");
+    }
   }
 
   /**
@@ -737,6 +781,9 @@ export class BadukRoom {
       const disconnected = this.engine.disconnect({
         connectionId: attachment.connectionId,
       });
+      if (disconnected?.playerOffline) {
+        this.rememberPlayerOffline(disconnected.playerId, Date.now(), socket);
+      }
       // Only a spectator's reconnect grace starts here and must survive a
       // restart, and the lobby must learn when a host's presence opens or
       // closes the room to joiners; other presence is not worth a rewrite.
@@ -754,6 +801,24 @@ export class BadukRoom {
     }
   }
 
+  /**
+   * Keep a seated player's disconnect time on every other open socket. The
+   * attachments outlive hibernation without a storage write.
+   */
+  rememberPlayerOffline(playerId, at, closingSocket) {
+    for (const socket of this.ctx.getWebSockets?.() ?? []) {
+      if (socket === closingSocket) continue;
+      const attachment = this.readAttachment(socket);
+      if (!attachment.identity) continue;
+      attachment.offlineSince = offlineEntries({ ...attachment.offlineSince, [playerId]: at });
+      try {
+        socket.serializeAttachment(attachment);
+      } catch (error) {
+        console.error("Unable to remember an offline player on a socket", error);
+      }
+    }
+  }
+
   async persist() {
     if (!this.engine) return;
     try {
@@ -761,7 +826,7 @@ export class BadukRoom {
       // persisted directory projection its own strictly ordered version.
       this.engine.bumpDirectoryRevision();
       const snapshot = this.engine.serialize();
-      await this.ctx.storage.put(STORAGE_KEY, snapshot);
+      this.storedChunks = await saveRoomSnapshot(this.ctx.storage, snapshot, this.storedChunks);
     } catch (error) {
       // Includes serialization/validation failures before a write and writes
       // whose outcome is unknown. Never reuse their in-memory success receipts.
@@ -807,7 +872,9 @@ export class BadukRoom {
       expiresAt,
       ...visible
     } = summary;
-    const key = JSON.stringify(visible);
+    // An unlisted room publishes listed: false, which the lobby treats as a
+    // versioned removal.
+    const key = JSON.stringify({ ...visible, listed: room.listed !== false });
     const previous = this.indexPublication;
     if (previous?.key === key &&
         expiresAt - previous.expiresAt < LOBBY_EXPIRY_REFRESH_MS) {
@@ -926,6 +993,7 @@ export class BadukRoom {
         await this.ctx.storage.deleteAlarm();
       }
       await this.ctx.storage.deleteAll();
+      this.storedChunks = 0;
       const removal = this.removeRoomIndexEntry(roomCode, incarnationId);
       if (typeof this.ctx.waitUntil === "function") this.ctx.waitUntil(removal);
       else void removal;
@@ -1083,6 +1151,7 @@ export class BadukRoom {
       identity,
       connectedAt:
         typeof value.connectedAt === "number" ? value.connectedAt : Date.now(),
+      offlineSince: offlineEntries(value.offlineSince),
     };
   }
 

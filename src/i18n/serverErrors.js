@@ -58,6 +58,10 @@ export const SERVER_ERROR_COPY = Object.freeze({
   WAITING_FOR_OPPONENT: "请等待对手加入。",
   SPECTATOR_FULL: "观战人数已满。",
   SPECTATOR_RATE_LIMITED: "观战请求过于频繁，请稍后再试。",
+  MEMBER_NOT_FOUND: "这位成员已经不在房间里。",
+  OPPONENT_CONNECTED: "对方仍在线，不能判弃局。",
+  ABANDONMENT_TOO_EARLY: "对方离线还不到 2 分钟，请稍后再判弃局。",
+  REMOVED_FROM_ROOM: "你已被房主移出房间。",
   CHAT_RATE_LIMITED: "发言太快了，请稍等一下再发送。",
   COMMAND_RATE_LIMITED: "操作太频繁了，请稍等一下再试。",
   SCORING_TOGGLE_LIMIT: "本次点目的死子标记次数已达上限，请确认结果或继续对局。",
@@ -127,6 +131,17 @@ export const ENGLISH_SERVER_ERRORS = Object.freeze({
   "请等待对手加入。": "Wait for your opponent to join.",
   "观战人数已满。": "This room has no spectator places left.",
   "观战请求过于频繁，请稍后再试。": "Too many spectator requests. Try again shortly.",
+  "这位成员已经不在房间里。": "That person is no longer in the room.",
+  "对方仍在线，不能判弃局。": "Your opponent is still online, so the game cannot be claimed as abandoned.",
+  "对方离线还不到 2 分钟，请稍后再判弃局。":
+    "Your opponent has been offline for less than 2 minutes. Claim the game a little later.",
+  "你已被房主移出房间。": "The host removed you from the room.",
+  "只有房主可以管理房间。": "Only the host can manage the room.",
+  "不能移出自己或 AI 席位。": "You cannot remove yourself or the AI seat.",
+  "本局进行中，不能移出对手；请等本局结束后再操作。":
+    "The game is in progress, so your opponent cannot be removed. Wait until it ends.",
+  "当前没有进行中的对局。": "No game is in progress.",
+  "只有对局中的一方可以判对方弃局。": "Only a player in the game can claim it as abandoned.",
   "发言太快了，请稍等一下再发送。": "You are sending messages too quickly. Wait a moment.",
   "操作太频繁了，请稍等一下再试。": "Too many actions. Wait a moment and try again.",
   "本次点目的死子标记次数已达上限，请确认结果或继续对局。":

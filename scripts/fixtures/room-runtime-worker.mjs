@@ -1,6 +1,7 @@
 // Test-only entrypoint. Never imported by worker/index.js or deployed.
 import { BadukRoom } from "../../worker/BadukRoom.js";
 import { RoomEngine } from "../../src/multiplayer/roomEngine.js";
+import { loadRoomSnapshot } from "../../worker/roomStorage.js";
 
 export class RuntimeRoom extends BadukRoom {
   markUnavailable(code, error, stored) {
@@ -17,7 +18,19 @@ export class RuntimeRoom extends BadukRoom {
       await this.persist();
       return Response.json({ ok: true });
     }
-    if (url.pathname === "/stored") return Response.json(await this.ctx.storage.get("room"));
+    if (url.pathname === "/stored") {
+      const { snapshot } = await loadRoomSnapshot(this.ctx.storage, await this.ctx.storage.get("room"));
+      return Response.json(typeof snapshot === "string" ? JSON.parse(snapshot) : snapshot);
+    }
+    if (url.pathname === "/stored-keys") {
+      const listed = await this.ctx.storage.list();
+      return Response.json([...listed.keys()]);
+    }
+    if (url.pathname === "/shrink") {
+      delete this.engine.state.padding;
+      await this.persist();
+      return Response.json({ ok: true });
+    }
     if (url.pathname === "/unsupported-schema") {
       const stored = await this.ctx.storage.get("room");
       stored.schemaVersion = 999;
@@ -29,9 +42,9 @@ export class RuntimeRoom extends BadukRoom {
       const fault = url.searchParams.get("fault");
       if (fault === "serialize") this.engine.serialize = () => { throw new TypeError("injected serialization failure"); };
       if (fault === "oversize") {
-        const serialize = this.engine.serialize.bind(this.engine);
-        // Exceed workerd 1.20260930.2's 8 MiB row limit; older runtimes used 2 MiB.
-        this.engine.serialize = () => ({ ...serialize(), padding: "x".repeat(9 * 1024 * 1024) });
+        // Over workerd 1.20260930.2's 8 MiB row limit (2 MiB in production):
+        // stored as chunks since roomStorage.js.
+        this.engine.state.padding = "x".repeat(9 * 1024 * 1024);
       }
       if (fault === "alarm") this.scheduleAlarm = async () => { throw new Error("injected post-commit alarm failure"); };
       this.rollbackWrite = fault === "rollback";

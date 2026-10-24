@@ -37,20 +37,46 @@ export function preventBoardContextMenu(event) {
 }
 
 /**
+ * Views whose one-finger drag goes in every direction: panning the flat
+ * torus and rotating the 3D torus and Mobius band.
+ */
+export function needsFreeBoardDrag({ view, topology }) {
+  if (view === "flat") return topology === "torus";
+  if (view === "arc") return false;
+  return topology !== "cylinder";
+}
+
+/**
  * Browser touch gestures each board view leaves to the page.
  *
- * Views whose only one-finger drag is horizontal (the flat cylinder and
- * Mobius pans, the arc slide, spinning the 3D cylinder about its axis) let
- * vertical swipes scroll the page; a pinch still reaches the view, and a drag
- * that starts horizontally keeps control even if it then turns vertical.
- * Views that need free 2D dragging (panning the flat torus, rotating the 3D
- * torus and Mobius band) keep every gesture; there the page scrolls from
+ * Every view lets a one-finger swipe that starts vertically scroll the page
+ * (pan-y); a pinch still reaches the view, and a drag that starts
+ * horizontally keeps control even if it then turns vertical, so free-drag
+ * views still turn in every direction. Fixing the page (pageScrollLocked)
+ * gives free-drag views every gesture instead; the page then scrolls from
  * outside the board stage, which never fills a phone screen.
  */
-export function boardTouchAction({ view, topology }) {
-  if (view === "flat") return topology === "torus" ? "none" : "pan-y";
-  if (view === "arc") return "pan-y";
-  return topology === "cylinder" ? "pan-y" : "none";
+export function boardTouchAction({ view, topology, pageScrollLocked = false }) {
+  return pageScrollLocked && needsFreeBoardDrag({ view, topology }) ? "none" : "pan-y";
+}
+
+// Each view's touch elements by container, so a new page-scroll choice
+// reaches views that already exist. A rebuilt view replaces its entry.
+const touchTargets = new Map();
+let pageScrollLocked = false;
+
+/** Apply and remember a view's touch policy (elements[0] is its container). */
+export function registerBoardTouchTargets(elements, { view, topology }) {
+  touchTargets.set(elements[0], { elements, view, topology });
+  applyBoardTouchAction(elements, boardTouchAction({ view, topology, pageScrollLocked }));
+}
+
+/** Fix the page under free-drag views (true) or let vertical swipes scroll it. */
+export function setBoardPageScrollLocked(locked) {
+  pageScrollLocked = Boolean(locked);
+  for (const { elements, view, topology } of touchTargets.values()) {
+    applyBoardTouchAction(elements, boardTouchAction({ view, topology, pageScrollLocked }));
+  }
 }
 
 /**
