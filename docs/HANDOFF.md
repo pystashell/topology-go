@@ -17,7 +17,7 @@
 - #2 `feat/multi-game`：通用拓扑模块、规则注册表、五子棋（含连珠禁手）、黑白棋，联机/大厅/视图/UI 全部多棋种化
 - #3 `feat/game-ai`：五子棋 AI 用 Rapfi，黑白棋 AI 是自研引擎
 - #4 `docs/handoff`：上一版交接文档、设计笔记、浏览器检查脚本
-- `feat/handoff-backlog`：本轮，把上一版交接文档的待办全部处理完，见 §6
+- #5 `feat/handoff-backlog`：本轮，处理上一版交接文档的全部待办，见 §6
 
 ## 2. 负责人（owner）已做的决定
 
