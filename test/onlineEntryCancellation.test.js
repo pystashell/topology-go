@@ -21,6 +21,7 @@ function harness(mode = "lobby") {
     cancelOnline: { addEventListener: (type, callback) => { handlers[type] = callback; } },
     onlineDialog: { open: true, addEventListener: (type, callback) => { handlers[type] = callback; } },
     playerName: { value: "Alice", focus: noop },
+    roomUnlisted: { checked: false },
     roomCodeInput: { value: "AB23CD", focus: noop },
   };
   const request = (options) => new Promise((resolve, reject) => pending.push({ options, resolve, reject }));

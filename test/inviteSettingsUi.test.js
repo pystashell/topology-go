@@ -7,6 +7,7 @@ import { translateText } from "../src/i18n.js";
 import { ENABLE_MULTI_GAME, isGameType } from "../src/game/gameTypes.js";
 import { gameTypeOf } from "../src/game/rules/index.js";
 import { gameSettingsSummary } from "../src/ui/gameUi.js";
+import { aiSeatName, defaultAIModelIdForGame } from "../src/ai/modelCatalog.js";
 
 const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 const slice = (from, to) => {
@@ -20,15 +21,25 @@ function summaryHarness() {
   const source = [
     slice("function availableGameType(", "function gameRulesOf("),
     slice("function boardSettingsSummary(", "function onlineBoardSummaryText()"),
+    slice("function onlineModeOption(", "function onlineModeLabel("),
     slice("function onlineInvitationSummary(", "function updateRoomUI()"),
     "({ boardSettingsSummary, onlineInvitationSummary })",
   ].join("\n");
   return vm.runInNewContext(source, {
     ENABLE_MULTI_GAME,
     GAME_GO: "go",
+    BLACK: "black",
+    WHITE: "white",
+    MATCH_CONTROLLER_AI: "ai",
+    MATCH_CONTROLLER_HUMAN: "human",
+    ONLINE_MODE_FRIEND: "friend",
+    ONLINE_MODE_HUMAN_AI: "human-ai",
+    ONLINE_MODE_GUEST_AI: "guest-ai",
     isGameType,
     gameTypeOf,
     gameSettingsSummary,
+    aiSeatName,
+    defaultAIModelIdForGame,
   });
 }
 
@@ -56,6 +67,20 @@ test("a received invitation names the clock and komi the host chose", () => {
     `${GO_PREFIX_EN}9 × 9 · Cylinder · Chinese rules · Komi 6.5 · 5 min + 3×20 sec`,
   );
   assert.equal(onlineInvitationSummary(null), "等待被邀请方回应。");
+});
+
+test("an invitation to play the host's AI says the guest plays White", () => {
+  const { onlineInvitationSummary } = summaryHarness();
+  const summary = onlineInvitationSummary({
+    mode: "human-ai",
+    controllers: {
+      black: { kind: "ai", operatorId: "host", modelId: "rapfi" },
+      white: { kind: "human", operatorId: "guest" },
+    },
+    settings: { gameType: "gomoku", ruleSet: "renju", width: 15, height: 15, topology: "torus" },
+  });
+  assert.match(summary, /^访客执白，AI 执黑（Rapfi.*）· 五子棋 · 15 × 15 · 甜甜圈/u);
+  assert.match(translateText(summary, {}, "en"), /^Guest plays White, AI plays Black \(Rapfi.*\) · Gomoku · 15 × 15 · Torus/u);
 });
 
 test("settings summaries cover untimed and absolute clocks in both languages", () => {
@@ -106,7 +131,10 @@ test("inviting a friend creates the room in place with the configured settings",
   const dialog = slice("function showOnlineDialog(", "function closeOnlineDialog()");
   assert.match(dialog, /onlineBoardSummarySection\.hidden = !\["all", "create"\]\.includes\(intent\)/u);
   const create = slice("async function createOnlineRoom(", "async function joinOnlineRoom(");
-  assert.match(create, /roomClient\.createRoom\(\{ name, \.\.\.getNewGameOptions\(\), signal \}\)/u);
+  assert.match(
+    create,
+    /roomClient\.createRoom\(\{\s*name,\s*\.\.\.getNewGameOptions\(\),[\s\S]*?listed: !elements\.roomUnlisted\.checked,\s*signal,\s*\}\)/u,
+  );
 });
 
 test("settings carried into the lobby are restored before its create flow", () => {

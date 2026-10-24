@@ -1292,6 +1292,19 @@ export class RoomEngine {
     this.startedAt = null;
   }
 
+  /**
+   * Offline times a previous instance saw (kept on the sockets that stayed
+   * open). Players who are connected again are skipped.
+   */
+  restoreOfflineSince(entries) {
+    for (const [playerId, at] of Object.entries(entries ?? {})) {
+      const member = this.member(playerId);
+      if (!member || member.role !== "player" || this.isOnline(playerId) || !Number.isFinite(at)) continue;
+      const known = this.offlineSince.get(playerId);
+      if (known === undefined || at > known) this.offlineSince.set(playerId, at);
+    }
+  }
+
   /** Since when a seated member has been offline, as far as this instance knows. */
   offlineSinceFor(member, now) {
     const known = this.offlineSince.get(member.playerId);
@@ -2068,17 +2081,18 @@ export class RoomEngine {
       // last command the observer happened to send while watching.
       member.lastSeenAt = now;
     }
-    // A seated player's last connection starts the abandonment grace. It
-    // is kept in memory only, so socket churn writes nothing.
-    if (member?.role === "player" && member.automated !== true &&
-        !this.isOnline(member.playerId)) {
-      this.offlineSince.set(member.playerId, now);
-    }
+    // A seated player's last connection starts the abandonment grace. It is
+    // not stored, so socket churn writes nothing; the room object keeps it
+    // on the other sockets (see restoreOfflineSince).
+    const playerOffline = member?.role === "player" && member.automated !== true &&
+      !this.isOnline(member.playerId);
+    if (playerOffline) this.offlineSince.set(member.playerId, now);
     return {
       changed: false,
       revision: this.state.revision,
       // The grace start must be stored; nothing else here is durable.
       spectatorOffline,
+      ...(playerOffline ? { playerOffline: true, playerId: member.playerId } : {}),
     };
   }
 

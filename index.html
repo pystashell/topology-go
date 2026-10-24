@@ -185,6 +185,10 @@
               <span aria-hidden="true">↻</span>
               <span class="toolbar-label">自动旋转</span>
             </button>
+            <button id="toggle-page-scroll" class="icon-button" type="button" aria-label="固定页面" aria-pressed="false" hidden>
+              <span aria-hidden="true">⇕</span>
+              <span class="toolbar-label">固定页面</span>
+            </button>
             <button id="toggle-sound" class="icon-button" type="button" aria-label="关闭音效" aria-pressed="true">
               <span id="sound-icon" aria-hidden="true">♪</span>
               <span id="sound-label" class="toolbar-label">音效开</span>
@@ -230,11 +234,12 @@
                 <label class="input-row" for="online-match-mode">
                   <span>
                     <strong>双方控制方式</strong>
-                    <small>好友需要接受邀请；其他模式由本浏览器控制</small>
+                    <small>好友和访客需要接受邀请；AI 都在本浏览器中运行</small>
                   </span>
                   <select id="online-match-mode">
                     <option value="friend">邀请好友</option>
                     <option value="human-ai">我和 AI</option>
+                    <option value="guest-ai">访客执白对 AI</option>
                     <option value="ai-ai">AI 对 AI</option>
                     <option value="local">同机双人</option>
                   </select>
@@ -263,7 +268,7 @@
                 <label id="online-match-black-ai-model-field" class="input-row" for="online-match-black-ai-model" hidden>
                   <span>
                     <strong>黑方 AI</strong>
-                    <small>AI 对 AI 时黑白双方可分别选择模型</small>
+                    <small id="online-match-black-ai-model-note">AI 对 AI 时黑白双方可分别选择模型</small>
                   </span>
                   <select id="online-match-black-ai-model">
                     <option value="b10">b10 · 快速</option>
@@ -273,7 +278,7 @@
                 <label id="online-match-black-ai-level-field" class="input-row" for="online-match-black-ai-level" hidden>
                   <span>
                     <strong>黑方 AI 难度</strong>
-                    <small>AI 对 AI 时黑白双方可分别选择难度</small>
+                    <small id="online-match-black-ai-level-note">AI 对 AI 时黑白双方可分别选择难度</small>
                   </span>
                   <select id="online-match-black-ai-level">
                     <option value="easy">简单</option>
@@ -286,6 +291,7 @@
                 <span>房间</span>
                 <strong id="room-code">------</strong>
                 <span id="local-role" class="role-badge">旁观</span>
+                <span id="room-unlisted-badge" class="role-badge unlisted-badge" hidden>不公开</span>
               </div>
               <div class="room-actions">
                 <button id="copy-room-link" class="secondary-button" type="button">复制邀请链接</button>
@@ -322,6 +328,16 @@
                 </div>
               </div>
               <p id="room-hint" class="room-hint">正在连接房间…</p>
+              <section id="abandonment-panel" class="game-invitation-panel abandonment-panel" hidden aria-live="polite">
+                <div>
+                  <span class="eyebrow">对方离线</span>
+                  <strong id="abandonment-title">对方已离线</strong>
+                  <small id="abandonment-note">离线满 2 分钟后可以判对方弃局。</small>
+                </div>
+                <div class="game-invitation-actions">
+                  <button id="claim-abandonment" class="secondary-button" type="button">判对方弃局</button>
+                </div>
+              </section>
               <section id="game-invitation-panel" class="game-invitation-panel" hidden aria-live="polite">
                 <div>
                   <span class="eyebrow">对局邀请</span>
@@ -333,6 +349,16 @@
                   <button id="decline-game-invitation" class="secondary-button" type="button">拒绝</button>
                   <button id="cancel-game-invitation" class="secondary-button" type="button">取消邀请</button>
                 </div>
+              </section>
+              <section id="room-manage-panel" class="room-manage-panel" hidden aria-label="房间管理">
+                <label class="dialog-check" for="room-listed">
+                  <input id="room-listed" type="checkbox" checked />
+                  <span>
+                    <strong>在大厅公开</strong>
+                    <small>关闭后只有拿到房间号或邀请链接的人能进入</small>
+                  </span>
+                </label>
+                <ul id="room-member-list" class="room-member-list" aria-label="房间成员" hidden></ul>
               </section>
             </div>
 
@@ -916,6 +942,13 @@
           <span>创建房间将使用</span>
           <strong id="online-board-summary">19 × 19 · 竹筒 · 中国规则 · 贴目 7.5 · 不计时</strong>
           <button id="online-modify-settings" class="text-button" type="button">修改棋盘设置</button>
+          <label class="dialog-check" for="room-unlisted">
+            <input id="room-unlisted" type="checkbox" />
+            <span>
+              <strong>不在大厅公开</strong>
+              <small>只有拿到房间号或邀请链接的人能进入</small>
+            </span>
+          </label>
         </section>
 
         <label class="dialog-field" for="player-name">

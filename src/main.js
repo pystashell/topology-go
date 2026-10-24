@@ -99,6 +99,7 @@ import {
   shouldRunAI,
 } from "./ai/matchMode.js";
 import { CylinderBoard } from "./view/CylinderBoard.js";
+import { needsFreeBoardDrag, setBoardPageScrollLocked } from "./view/pointerGestures.js";
 import { FlatBoard } from "./view/FlatBoard.js";
 import { ArcBoard } from "./view/ArcBoard.js";
 import { TorusBoard } from "./view/TorusBoard.js";
@@ -275,6 +276,17 @@ const elements = {
   onlineMatchAiLevel: $("#online-match-ai-level"),
   onlineMatchBlackAiLevelField: $("#online-match-black-ai-level-field"),
   onlineMatchBlackAiLevel: $("#online-match-black-ai-level"),
+  onlineMatchBlackAiModelNote: $("#online-match-black-ai-model-note"),
+  roomUnlisted: $("#room-unlisted"),
+  roomUnlistedBadge: $("#room-unlisted-badge"),
+  abandonmentPanel: $("#abandonment-panel"),
+  abandonmentTitle: $("#abandonment-title"),
+  abandonmentNote: $("#abandonment-note"),
+  claimAbandonment: $("#claim-abandonment"),
+  roomManagePanel: $("#room-manage-panel"),
+  roomListed: $("#room-listed"),
+  roomMemberList: $("#room-member-list"),
+  onlineMatchBlackAiLevelNote: $("#online-match-black-ai-level-note"),
   timeControlPreset: $("#time-control-preset"),
   customTimeFields: $("#custom-time-fields"),
   mainTimeMinutes: $("#main-time-minutes"),
@@ -284,6 +296,7 @@ const elements = {
   topologyButtons: [...document.querySelectorAll("[data-board-topology]")],
   resetView: $("#reset-view"),
   toggleRotation: $("#toggle-rotation"),
+  togglePageScroll: $("#toggle-page-scroll"),
   resetViewIcon: $("#reset-view-icon"),
   resetViewLabel: $("#reset-view-label"),
   gesturePrimary: $("#gesture-primary"),
@@ -456,6 +469,16 @@ const ONLINE_MODE_FRIEND = "friend";
 const ONLINE_MODE_HUMAN_AI = "human-ai";
 const ONLINE_MODE_AI_AI = "ai-ai";
 const ONLINE_MODE_LOCAL = "local";
+// Not a room mode: a human-AI round in which the guest plays White against
+// the AI the host's browser runs as Black (request_game aiOpponent: guest).
+const ONLINE_MODE_GUEST_AI = "guest-ai";
+// The room's ABANDONMENT_GRACE_MS: how long the other side of a round must
+// be offline before a player may claim the game.
+const ONLINE_ABANDONMENT_GRACE_MS = 2 * 60 * 1_000;
+// Opponent operator id -> when this page first saw them offline.
+const opponentOfflineSince = new Map();
+// The member list last drawn, so a re-render never replaces a button mid-click.
+let roomMemberListKey = "";
 let matchLifecycle = MATCH_LIFECYCLE_LOBBY;
 let lobbyPreviewFrame = null;
 let lobbyRefreshController = null;
@@ -566,7 +589,20 @@ const LOBBY_RATE_LIMIT_BACKOFF_MS = 60_000;
 const LOBBY_BOARD_SETTINGS_KEY = "3d-baduk-lobby-board-settings-v1";
 // The game (and Gomoku rule set) last chosen for a new board.
 const GAME_TYPE_KEY = "3d-baduk-game-type-v1";
+// Touch screens: whether free-drag boards keep vertical swipes from the page.
+const BOARD_SCROLL_LOCK_KEY = "topology-go-board-scroll-lock-v1";
 const roomClient = new RoomClient();
+
+function savedBoardPageScrollLocked() {
+  try {
+    return window.localStorage.getItem(BOARD_SCROLL_LOCK_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+let boardPageScrollLocked = savedBoardPageScrollLocked();
+setBoardPageScrollLocked(boardPageScrollLocked);
 
 function savedSoundEnabled() {
   try {
@@ -1160,6 +1196,7 @@ function tickClock() {
     }
   }
   syncClockUI(now);
+  if (hasOnlineSession()) syncAbandonmentPanel(now);
 }
 
 function ensureLocalTimedMoveAllowed() {
@@ -4179,10 +4216,24 @@ function roomSeat(color) {
   return onlineRoom?.players?.find((player) => player.color === color) ?? null;
 }
 
-function onlineModeLabel(mode = onlineRoom?.match?.mode) {
+/** The online-mode option of a round or invitation (guest-AI included). */
+function onlineModeOption(match) {
+  const black = match?.controllers?.[BLACK];
+  const white = match?.controllers?.[WHITE];
+  if (match?.mode === ONLINE_MODE_HUMAN_AI &&
+      black?.kind === MATCH_CONTROLLER_AI &&
+      white?.kind === MATCH_CONTROLLER_HUMAN &&
+      white.operatorId && white.operatorId !== black.operatorId) {
+    return ONLINE_MODE_GUEST_AI;
+  }
+  return match?.mode ?? ONLINE_MODE_FRIEND;
+}
+
+function onlineModeLabel(mode = onlineModeOption(onlineRoom?.match)) {
   return {
     [ONLINE_MODE_FRIEND]: "好友对局",
     [ONLINE_MODE_HUMAN_AI]: "在线人机",
+    [ONLINE_MODE_GUEST_AI]: "访客对 AI",
     [ONLINE_MODE_AI_AI]: "在线 AI 对弈",
     [ONLINE_MODE_LOCAL]: "在线同机双人",
   }[mode] ?? "在线房间";
@@ -4210,6 +4261,98 @@ function onlineControllerSeat(color) {
   };
 }
 
+/**
+ * The absent side of a round this page plays one colour of: the other
+ * colour's operator is offline (or gone). Null otherwise.
+ */
+function abandonmentClaim(now = Date.now()) {
+  if (!hasOnlineSession() || !roomClient.isConnected || !onlineStateSynchronized ||
+      onlineMatchStatus() !== ONLINE_MATCH_PLAYING || game?.phase === PHASE_FINISHED ||
+      currentTimeoutOutcome() || isReplaying()) {
+    return null;
+  }
+  const identity = currentIdentity();
+  const identityId = identity.playerId ?? identity.id;
+  const mine = [BLACK, WHITE].filter((color) => onlineController(color)?.operatorId === identityId);
+  if (!identityId || mine.length !== 1) return null;
+  const color = oppositeColor(mine[0]);
+  const operatorId = onlineController(color)?.operatorId ?? null;
+  const operator = onlineRoom?.players?.find((player) => player.id === operatorId);
+  if (operator?.online) {
+    opponentOfflineSince.delete(operatorId);
+    return null;
+  }
+  // Someone who left can be claimed at once; an offline player after the grace.
+  if (operator && !opponentOfflineSince.has(operatorId)) opponentOfflineSince.set(operatorId, now);
+  return { color, since: operator ? opponentOfflineSince.get(operatorId) : 0 };
+}
+
+function formatCountdown(ms) {
+  const seconds = Math.ceil(ms / 1_000);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function syncAbandonmentPanel(now = Date.now()) {
+  const claim = abandonmentClaim(now);
+  elements.abandonmentPanel.hidden = !claim;
+  if (!claim) return;
+  const remaining = Math.max(0, ONLINE_ABANDONMENT_GRACE_MS - (now - claim.since));
+  const title = `${colorName(claim.color)}已离线`;
+  if (elements.abandonmentTitle.textContent !== title) elements.abandonmentTitle.textContent = title;
+  const note = remaining > 0
+    ? `离线满 2 分钟后可以判对方弃局，还需 ${formatCountdown(remaining)}；对方回来后照常继续。`
+    : "对方离线已满 2 分钟；可以判对方弃局，本局按对方认输结束。";
+  if (elements.abandonmentNote.textContent !== note) elements.abandonmentNote.textContent = note;
+  elements.claimAbandonment.disabled = remaining > 0 || onlineCommandPending || onlineBusy;
+}
+
+/** Host tools: list the room in the lobby or not, and remove members. */
+function syncRoomManagement(controlsAvailable) {
+  const active = hasOnlineSession() && Boolean(onlineRoom);
+  const listed = onlineRoom?.listed !== false;
+  elements.roomUnlistedBadge.hidden = !active || listed;
+  elements.roomManagePanel.hidden = !active || !isOnlineHost();
+  if (elements.roomManagePanel.hidden) return;
+  elements.roomListed.checked = listed;
+  elements.roomListed.disabled = !controlsAvailable;
+  // Mid-game the White player stays: removing them would decide the game.
+  const seatsLocked = onlineMatchStatus() === ONLINE_MATCH_PLAYING &&
+    (onlineRoom.moveCount ?? 0) > 0 && game?.phase !== PHASE_FINISHED && !currentTimeoutOutcome();
+  const members = [
+    ...(onlineRoom.players ?? []).filter((player) =>
+      player.color === WHITE && player.role === "player" && player.automated !== true),
+    ...(onlineRoom.spectators ?? []),
+  ].map((member) => ({
+    id: member.id,
+    name: member.name,
+    role: member.role === "player" ? "白方" : "观战",
+    online: Boolean(member.online),
+    locked: member.role === "player" && seatsLocked,
+  }));
+  const key = JSON.stringify({ members, controlsAvailable });
+  elements.roomMemberList.hidden = members.length === 0;
+  if (key === roomMemberListKey) return;
+  roomMemberListKey = key;
+  elements.roomMemberList.replaceChildren(...members.map((member) => {
+    const item = document.createElement("li");
+    const name = document.createElement("span");
+    name.dataset.i18nIgnore = "";
+    name.textContent = member.name;
+    const detail = document.createElement("small");
+    detail.textContent = `${member.role} · ${member.online ? "在线" : "离线"}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "text-button";
+    remove.dataset.removeMember = member.id;
+    remove.textContent = "移出";
+    remove.disabled = !controlsAvailable || member.locked;
+    if (member.locked) remove.title = "本局结束后才能移出对手";
+    item.append(name, detail, remove);
+    return item;
+  }));
+  applyDocumentTranslations(elements.roomMemberList);
+}
+
 function onlineWhiteSeatIsOpen() {
   if (!onlineRoom || roomSeat(WHITE)) return false;
   const controller = onlineController(WHITE);
@@ -4220,7 +4363,11 @@ function onlineWhiteSeatIsOpen() {
 
 function onlineInvitationSummary(request = onlineRoom?.match?.request) {
   if (!request?.settings) return "等待被邀请方回应。";
-  return boardSettingsSummary(request.settings);
+  const summary = boardSettingsSummary(request.settings);
+  if (onlineModeOption(request) !== ONLINE_MODE_GUEST_AI) return summary;
+  const modelId = request.controllers[BLACK].modelId ??
+    defaultAIModelIdForGame(gameTypeOf(request.settings));
+  return `访客执白，AI 执黑（${aiSeatName(modelId)}）· ${summary}`;
 }
 
 function updateRoomUI() {
@@ -4481,6 +4628,8 @@ function updateRoomUI() {
       elements.roomHint.textContent += ` · ${spectatorCount} 人观战`;
     }
   }
+  syncRoomManagement(onlineControlsAvailable);
+  syncAbandonmentPanel();
 
   const gameRequest = active ? onlineRoom?.match?.request ?? null : null;
   const identityId = identity.playerId ?? identity.id;
@@ -4494,10 +4643,11 @@ function updateRoomUI() {
     active && roomMatchStatus === ONLINE_MATCH_INVITED && gameRequest
   );
   if (gameRequest) {
+    const guestAIRequest = onlineModeOption(gameRequest) === ONLINE_MODE_GUEST_AI;
     elements.gameInvitationTitle.textContent = ownsGameRequest
       ? "邀请已发出"
       : mayAnswerGameRequest
-        ? "房主邀请你开始对局"
+        ? guestAIRequest ? "房主邀请你执白对战 AI" : "房主邀请你开始对局"
         : "等待受邀玩家回应";
     elements.gameInvitationSummary.textContent = onlineInvitationSummary(gameRequest);
   }
@@ -4610,22 +4760,30 @@ function updateRoomUI() {
   // Games without an AI offer only friend and same-browser rounds.
   const pendingMatchModes = gameRulesOf({ gameType: pendingGameType }).matchModes;
   for (const option of elements.onlineMatchMode.options) {
-    option.disabled = Boolean(
-      occupiedWhiteMember && option.value !== ONLINE_MODE_FRIEND,
-    ) || !pendingMatchModes.includes(option.value);
-    option.hidden = !pendingMatchModes.includes(option.value);
+    const guestAI = option.value === ONLINE_MODE_GUEST_AI;
+    const offered = pendingMatchModes.includes(guestAI ? ONLINE_MODE_HUMAN_AI : option.value);
+    // Friend and guest-AI rounds need the guest in the White seat; the
+    // others need that seat free.
+    option.disabled = !offered || (guestAI
+      ? !invitedHumanWhite
+      : Boolean(occupiedWhiteMember && option.value !== ONLINE_MODE_FRIEND));
+    option.hidden = !offered;
   }
-  if (
-    (occupiedWhiteMember && elements.onlineMatchMode.value !== ONLINE_MODE_FRIEND) ||
-    !pendingMatchModes.includes(elements.onlineMatchMode.value)
-  ) {
+  if (elements.onlineMatchMode.selectedOptions[0]?.disabled) {
     elements.onlineMatchMode.value = ONLINE_MODE_FRIEND;
   }
   const selectedOnlineMode = elements.onlineMatchMode.value;
   const onlineModeUsesAI = [ONLINE_MODE_HUMAN_AI, ONLINE_MODE_AI_AI].includes(
     selectedOnlineMode,
   );
-  const onlineModeUsesBlackAI = selectedOnlineMode === ONLINE_MODE_AI_AI;
+  const onlineModeUsesBlackAI = [ONLINE_MODE_AI_AI, ONLINE_MODE_GUEST_AI].includes(selectedOnlineMode);
+  const guestAINote = "访客执白；AI 执黑，在你的浏览器中运行";
+  elements.onlineMatchBlackAiModelNote.textContent = selectedOnlineMode === ONLINE_MODE_GUEST_AI
+    ? guestAINote
+    : "AI 对 AI 时黑白双方可分别选择模型";
+  elements.onlineMatchBlackAiLevelNote.textContent = selectedOnlineMode === ONLINE_MODE_GUEST_AI
+    ? guestAINote
+    : "AI 对 AI 时黑白双方可分别选择难度";
   // Go picks a KataGo model; Gomoku and Othello show their engine and a
   // difficulty that only the host's browser uses.
   const onlineGameEngine = usesGameAiProtocol(pendingGameType);
@@ -4643,7 +4801,8 @@ function updateRoomUI() {
   elements.onlineMatchAiLevelField.hidden = !onlineGameEngine || !onlineModeUsesAI;
   elements.onlineMatchBlackAiLevel.disabled = !canChangeNextGameSettings || !onlineModeUsesBlackAI;
   elements.onlineMatchAiLevel.disabled = !canChangeNextGameSettings || !onlineModeUsesAI;
-  const showFriendInvitationDetails = active && selectedOnlineMode === ONLINE_MODE_FRIEND;
+  const showFriendInvitationDetails = active &&
+    [ONLINE_MODE_FRIEND, ONLINE_MODE_GUEST_AI].includes(selectedOnlineMode);
   elements.friendRoomCodeRow.hidden = !showFriendInvitationDetails;
   elements.copyRoomLink.hidden = !showFriendInvitationDetails;
   elements.friendSeatList.hidden = !showFriendInvitationDetails;
@@ -4996,7 +5155,7 @@ function applyOnlineRoom(room) {
     onlineAIPauseIntent = null;
   }
   if (!isOnlineNextGameSetup()) {
-    elements.onlineMatchMode.value = room.match?.mode ?? ONLINE_MODE_FRIEND;
+    elements.onlineMatchMode.value = onlineModeOption(room.match);
     reflectOnlineAIModelControls(room.match?.controllers);
   }
   const {
@@ -5069,7 +5228,7 @@ function applyOnlineRoom(room) {
     reflectGameOptions(options);
     rematchSetupTransport = MATCH_TRANSPORT_ONLINE;
     rematchPreviewGame = createGameFromOptions(options);
-    elements.onlineMatchMode.value = room.match?.request?.mode ?? room.match?.mode ?? ONLINE_MODE_FRIEND;
+    elements.onlineMatchMode.value = onlineModeOption(room.match?.request ?? room.match);
     reflectOnlineAIModelControls(room.match?.request?.controllers ?? room.match?.controllers);
     rebuildViews(options.width, options.height, options.topology);
     setViewMode(activeViewMode);
@@ -5609,6 +5768,7 @@ function selectedOnlineMatchMode() {
   return [
     ONLINE_MODE_FRIEND,
     ONLINE_MODE_HUMAN_AI,
+    ONLINE_MODE_GUEST_AI,
     ONLINE_MODE_AI_AI,
     ONLINE_MODE_LOCAL,
   ].includes(mode) ? mode : ONLINE_MODE_FRIEND;
@@ -5650,9 +5810,11 @@ function reflectOnlineAIModelControls(controllers = null) {
 
 function onlineGameRequestPayload(options) {
   const aiModelIds = selectedOnlineAIModelIds();
+  const mode = selectedOnlineMatchMode();
   return {
     ...options,
-    mode: selectedOnlineMatchMode(),
+    mode: mode === ONLINE_MODE_GUEST_AI ? ONLINE_MODE_HUMAN_AI : mode,
+    ...(mode === ONLINE_MODE_GUEST_AI ? { aiOpponent: "guest" } : {}),
     aiModelId: aiModelIds[WHITE],
     aiModelIds,
   };
@@ -5686,18 +5848,19 @@ async function requestOnlineGame(options) {
   const aiModelIds = selectedOnlineAIModelIds();
   const selectedModelIds = mode === ONLINE_MODE_AI_AI
     ? [aiModelIds[BLACK], aiModelIds[WHITE]]
-    : [aiModelIds[WHITE]];
+    : mode === ONLINE_MODE_GUEST_AI ? [aiModelIds[BLACK]] : [aiModelIds[WHITE]];
+  const invites = [ONLINE_MODE_FRIEND, ONLINE_MODE_GUEST_AI].includes(mode);
   if (
-    [ONLINE_MODE_HUMAN_AI, ONLINE_MODE_AI_AI].includes(mode) &&
+    [ONLINE_MODE_HUMAN_AI, ONLINE_MODE_GUEST_AI, ONLINE_MODE_AI_AI].includes(mode) &&
     !usesGameAiProtocol(pendingGameType) &&
     selectedModelIds.some((modelId) => getAIModel(modelId).heavy) &&
     !window.confirm(translateText(
       "b18 首次需要下载约 93.4 MB，并会占用数百 MB 内存与显存、增加耗电和发热。仅建议桌面端 WebGPU。确定使用吗？",
     ))
   ) return false;
-  setMessage(mode === ONLINE_MODE_FRIEND ? "正在发送对局邀请…" : "正在开始在线对局…");
+  setMessage(invites ? "正在发送对局邀请…" : "正在开始在线对局…");
   const sent = await sendOnlineCommand("request_game", onlineGameRequestPayload(options));
-  if (sent && mode === ONLINE_MODE_FRIEND) {
+  if (sent && invites) {
     setMessage("对局邀请已发出，等待对方接受。所有设置会保留在当前房间。", false);
   }
   return sent;
@@ -5882,7 +6045,7 @@ function enterNextGameSetup() {
     : MATCH_TRANSPORT_LOCAL;
   rematchPreviewGame = createGameFromOptions(options);
   if (hasOnlineSession()) {
-    elements.onlineMatchMode.value = onlineRoom?.match?.mode ?? ONLINE_MODE_FRIEND;
+    elements.onlineMatchMode.value = onlineModeOption(onlineRoom?.match);
     reflectOnlineAIModelControls(onlineRoom?.match?.controllers);
   }
   setSidebarTab("settings", { focus: true });
@@ -7322,6 +7485,17 @@ function setViewMode(mode) {
                 : "观察单面扭转与唯一边界 · 双指缩放"
               : finePointer ? "滚轮缩放" : "双指缩放",
         };
+  // On touch screens a free-drag board lets swipes that start vertically
+  // scroll the page, unless the page is fixed from the toolbar.
+  const freeDrag = needsFreeBoardDrag({
+    view: flatActive ? "flat" : arcActive ? "arc" : "3d",
+    topology: torus ? "torus" : mobius ? "mobius" : "cylinder",
+  });
+  elements.togglePageScroll.hidden = finePointer || !freeDrag;
+  elements.togglePageScroll.setAttribute("aria-pressed", String(boardPageScrollLocked));
+  if (!finePointer && freeDrag && !boardPageScrollLocked) {
+    viewCopy.primaryGesture = "横向起手可任意拖动 · 竖滑滚动页面";
+  }
 
   elements.toggleRotation.hidden = flatActive;
   elements.toggleRotation.setAttribute(
@@ -7348,6 +7522,20 @@ function setViewMode(mode) {
 for (const button of elements.viewButtons) {
   button.addEventListener("click", () => setViewMode(button.dataset.viewMode));
 }
+
+elements.togglePageScroll.addEventListener("click", () => {
+  boardPageScrollLocked = !boardPageScrollLocked;
+  try {
+    window.localStorage.setItem(BOARD_SCROLL_LOCK_KEY, String(boardPageScrollLocked));
+  } catch {
+    // The choice still applies to this page.
+  }
+  setBoardPageScrollLocked(boardPageScrollLocked);
+  setViewMode(activeViewMode);
+  setMessage(boardPageScrollLocked
+    ? "已固定页面：在棋盘上任意方向拖动都只转动棋盘，可从棋盘外滚动页面。"
+    : "竖向滑动会滚动页面；横向起手的拖动仍可转向任意方向。");
+});
 
 elements.resetView.addEventListener("click", () => {
   activeBoardView()?.resetView();
@@ -7388,7 +7576,13 @@ async function createOnlineRoom({ pendingPlayerId = "" } = {}) {
   try {
     const result = pendingPlayerId
       ? await roomClient.retryPendingCreate(pendingRequest.roomCode, pendingPlayerId, { signal })
-      : await roomClient.createRoom({ name, ...getNewGameOptions(), signal });
+      : await roomClient.createRoom({
+        name,
+        ...getNewGameOptions(),
+        // Unlisted rooms are joined by code or invitation link only.
+        listed: !elements.roomUnlisted.checked,
+        signal,
+      });
     if (signal.aborted) return;
     if (matchLifecycle === MATCH_LIFECYCLE_LOBBY) {
       matchLifecycle = MATCH_LIFECYCLE_WAITING;
@@ -7787,6 +7981,30 @@ elements.copyRoomLink.addEventListener("click", () => void copyInvitationLink())
 elements.leaveRoom.addEventListener("click", () => void leaveOnlineRoom());
 elements.attachRoomAi.addEventListener("click", showAIDialog);
 elements.detachRoomAi.addEventListener("click", () => void detachOnlineAI());
+elements.roomListed.addEventListener("change", async () => {
+  const listed = elements.roomListed.checked;
+  if (await sendOnlineCommand("set_listed", { listed })) {
+    setMessage(listed
+      ? "房间已在大厅公开。"
+      : "房间已不在大厅公开；只有拿到房间号或邀请链接的人能进入。", false);
+  } else {
+    elements.roomListed.checked = !listed;
+  }
+});
+elements.roomMemberList.addEventListener("click", async (event) => {
+  const button = event.target.closest?.("[data-remove-member]");
+  if (!button || button.disabled) return;
+  if (!window.confirm(translateText("确定把这位成员移出房间吗？对方需要重新加入才能回来。"))) return;
+  if (await sendOnlineCommand("remove_member", { playerId: button.dataset.removeMember })) {
+    setMessage("已把这位成员移出房间。", false);
+  }
+});
+elements.claimAbandonment.addEventListener("click", async () => {
+  if (!window.confirm(translateText("判对方弃局后，本局按对方认输结束。确定吗？"))) return;
+  if (await sendOnlineCommand("claim_abandonment")) {
+    setMessage("已判对方弃局，本局结束。", false);
+  }
+});
 elements.opponentSeatAction.addEventListener("click", async () => {
   const action = elements.opponentSeatAction.dataset.action;
   if (action === "release_seat") {

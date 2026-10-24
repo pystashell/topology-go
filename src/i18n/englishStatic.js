@@ -423,4 +423,21 @@ export const ENGLISH_STATIC = Object.freeze({
     "A player with no legal move is skipped automatically and the other continues; the game ends when neither side can move.",
   "终局时棋子多的一方获胜，数量相同为和棋。棋盘宽高须为 6–30 的偶数。":
     "The player with more discs at the end wins; equal counts are a draw. Board sides must be even, from 6 to 30.",
+  // Room management, guest vs AI and abandoned games.
+  "好友和访客需要接受邀请；AI 都在本浏览器中运行":
+    "Friends and guests accept an invitation; every AI runs in this browser",
+  "访客执白对 AI": "Guest (White) vs AI",
+  "不公开": "Unlisted",
+  "对方离线": "Opponent offline",
+  "对方已离线": "Your opponent is offline",
+  "离线满 2 分钟后可以判对方弃局。": "After 2 minutes offline you can claim the game as abandoned.",
+  "判对方弃局": "Claim abandoned game",
+  "在大厅公开": "Show in the lobby",
+  "关闭后只有拿到房间号或邀请链接的人能进入":
+    "When off, only people with the room code or invitation link can enter",
+  "不在大厅公开": "Keep out of the lobby",
+  "只有拿到房间号或邀请链接的人能进入": "Only people with the room code or invitation link can enter",
+  "房间管理": "Room management",
+  "房间成员": "Room members",
+  "固定页面": "Fix page",
 });

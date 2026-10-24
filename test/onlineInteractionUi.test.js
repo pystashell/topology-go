@@ -64,7 +64,7 @@ test("online match mode lives in the connected room header", async () => {
   assert.equal(html.match(/id="online-match-options"/gu)?.length, 1);
 });
 
-test("friend invitation details are conditional on friend mode", async () => {
+test("invitation details show for friend and guest-AI rounds", async () => {
   const [html, main] = await Promise.all([
     readFile(new URL("index.html", root), "utf8"),
     readFile(new URL("src/main.js", root), "utf8"),
@@ -72,7 +72,11 @@ test("friend invitation details are conditional on friend mode", async () => {
 
   assert.match(html, /id="friend-room-code-row"/u);
   assert.match(html, /id="friend-seat-list"/u);
-  assert.match(main, /showFriendInvitationDetails = active && selectedOnlineMode === ONLINE_MODE_FRIEND/u);
+  // Both invite the guest in the White seat.
+  assert.match(
+    main,
+    /showFriendInvitationDetails = active &&\s*\[ONLINE_MODE_FRIEND, ONLINE_MODE_GUEST_AI\]\.includes\(selectedOnlineMode\)/u,
+  );
   assert.match(main, /elements\.friendRoomCodeRow\.hidden = !showFriendInvitationDetails/u);
   assert.match(main, /elements\.copyRoomLink\.hidden = !showFriendInvitationDetails/u);
   assert.match(main, /elements\.friendSeatList\.hidden = !showFriendInvitationDetails/u);

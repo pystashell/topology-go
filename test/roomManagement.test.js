@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { BadukLobby } from "../worker/BadukLobby.js";
+import { BadukRoom } from "../worker/BadukRoom.js";
 import {
   ABANDONMENT_GRACE_MS,
   MATCH_MODE_FRIEND,
@@ -309,4 +310,66 @@ test("a guest-AI invitation ends when the guest gives up the seat", () => {
   act(room, "guest", "release_seat", {}, 1_400);
   assert.equal(room.state.match.status, MATCH_STATUS_SETUP);
   assert.equal(room.state.match.request, null);
+});
+
+/** A room object over fake storage and sockets; sockets survive a restart. */
+function durableRoom(stored, sockets) {
+  let ready;
+  const storage = {
+    value: structuredClone(stored), writes: 0, alarm: null,
+    async get() { return structuredClone(this.value); },
+    async put(_key, value) { this.writes += 1; this.value = structuredClone(value); },
+    async getAlarm() { return this.alarm; },
+    async setAlarm(value) { this.alarm = value; },
+    async deleteAlarm() { this.alarm = null; },
+  };
+  const ctx = {
+    storage,
+    id: { toString: () => "hibernation-room" },
+    getWebSockets: () => sockets.filter((socket) => socket.readyState < 2),
+    blockConcurrencyWhile(callback) { ready = callback(); },
+  };
+  return { room: new BadukRoom(ctx, {}), storage, ready: () => ready };
+}
+
+function hibernatingSocket(playerId) {
+  let attachment = { connectionId: `${playerId}-socket`, identity: { playerId, role: "player" } };
+  return {
+    readyState: 1,
+    messages: [],
+    deserializeAttachment: () => structuredClone(attachment),
+    serializeAttachment(value) { attachment = structuredClone(value); },
+    send(raw) { this.messages.push(JSON.parse(raw)); },
+  };
+}
+
+test("an opponent's offline time survives hibernation without a storage write", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_800_000_000_000 });
+  const start = Date.now();
+  const engine = setupRoom({ now: start });
+  engine.join({ name: "Guest", role: "player", playerId: "guest", tokenHash: GUEST_HASH, now: start });
+  const invited = act(engine, "host", "request_game", { mode: MATCH_MODE_FRIEND }, start + 1).room;
+  act(engine, "guest", "respond_game", {
+    requestRevision: invited.match.request.requestRevision, accept: true,
+  }, start + 2);
+  // Both have connected before, as connectByToken records.
+  for (const id of ["host", "guest"]) engine.member(id).lastConnectedAt = start + 2;
+  const sockets = [hibernatingSocket("host"), hibernatingSocket("guest")];
+  const first = durableRoom(engine.serialize(), sockets);
+  await first.ready();
+  assert.equal(first.room.engine.isOnline("guest"), true);
+
+  const writesBefore = first.storage.writes;
+  sockets[1].readyState = 3;
+  await first.room.webSocketClose(sockets[1], 1006, "gone");
+  assert.equal(first.storage.writes, writesBefore, "a player going offline writes nothing");
+  assert.equal(sockets[0].deserializeAttachment().offlineSince.guest, start);
+
+  // The object hibernates; a new instance wakes on the host's claim.
+  t.mock.timers.tick(ABANDONMENT_GRACE_MS + 1_000);
+  const woken = durableRoom(first.storage.value, sockets);
+  await woken.ready();
+  assert.equal(woken.room.engine.offlineSinceFor(woken.room.engine.member("guest"), Date.now()), start);
+  const claimed = act(woken.room.engine, "host", "claim_abandonment", {}, Date.now());
+  assert.equal(claimed.room.game.result.winner, "black");
 });

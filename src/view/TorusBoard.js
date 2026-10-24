@@ -12,8 +12,7 @@ import {
   torusRadii,
 } from "./torusGeometry.js";
 import {
-  applyBoardTouchAction,
-  boardTouchAction,
+  registerBoardTouchTargets,
   invalidatePendingTapOnAdditionalPointer,
   pointerGestureRoles,
   preventBoardContextMenu,
@@ -200,11 +199,9 @@ export class TorusBoard {
     this.controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
     this.onControlsChange = () => this.requestRender();
     this.controls.addEventListener("change", this.onControlsChange);
-    // Free rotation needs vertical drags too (the Mobius band is the same).
-    applyBoardTouchAction(
-      [this.container, this.renderer.domElement],
-      boardTouchAction({ view: "3d", topology: "torus" }),
-    );
+    // Free rotation turns every way; vertical swipes scroll the page unless
+    // the page is fixed (see pointerGestures.js). The Mobius band is the same.
+    registerBoardTouchTargets([this.container, this.renderer.domElement], { view: "3d", topology: "torus" });
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();

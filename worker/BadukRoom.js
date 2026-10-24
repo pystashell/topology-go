@@ -53,7 +53,19 @@ function defaultAttachment() {
     connectionId: crypto.randomUUID(),
     identity: null,
     connectedAt: Date.now(),
+    offlineSince: {},
   };
+}
+
+// Players whose disconnect times a socket attachment remembers.
+const MAX_OFFLINE_ENTRIES = 8;
+
+function offlineEntries(value) {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .filter(([playerId, at]) => playerId.length <= 128 && Number.isFinite(at))
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, MAX_OFFLINE_ENTRIES));
 }
 
 export class BadukRoom {
@@ -106,6 +118,11 @@ export class BadukRoom {
         } catch {
           this.closeSocket(socket, 4401, "Session expired");
         }
+      }
+      // Hibernation keeps attachments but not this object: restore when
+      // absent players went offline, so their abandonment grace continues.
+      for (const socket of ctx.getWebSockets()) {
+        this.engine.restoreOfflineSince(this.readAttachment(socket).offlineSince);
       }
 
       const advanced = this.engine.advance(now, { includeRoom: false });
@@ -764,6 +781,9 @@ export class BadukRoom {
       const disconnected = this.engine.disconnect({
         connectionId: attachment.connectionId,
       });
+      if (disconnected?.playerOffline) {
+        this.rememberPlayerOffline(disconnected.playerId, Date.now(), socket);
+      }
       // Only a spectator's reconnect grace starts here and must survive a
       // restart, and the lobby must learn when a host's presence opens or
       // closes the room to joiners; other presence is not worth a rewrite.
@@ -777,6 +797,24 @@ export class BadukRoom {
     } catch (error) {
       if (!(error instanceof RoomEngineError && error.code === "ROOM_NOT_FOUND")) {
         console.error("Unable to disconnect room socket", error);
+      }
+    }
+  }
+
+  /**
+   * Keep a seated player's disconnect time on every other open socket. The
+   * attachments outlive hibernation without a storage write.
+   */
+  rememberPlayerOffline(playerId, at, closingSocket) {
+    for (const socket of this.ctx.getWebSockets?.() ?? []) {
+      if (socket === closingSocket) continue;
+      const attachment = this.readAttachment(socket);
+      if (!attachment.identity) continue;
+      attachment.offlineSince = offlineEntries({ ...attachment.offlineSince, [playerId]: at });
+      try {
+        socket.serializeAttachment(attachment);
+      } catch (error) {
+        console.error("Unable to remember an offline player on a socket", error);
       }
     }
   }
@@ -1113,6 +1151,7 @@ export class BadukRoom {
       identity,
       connectedAt:
         typeof value.connectedAt === "number" ? value.connectedAt : Date.now(),
+      offlineSince: offlineEntries(value.offlineSince),
     };
   }
 
