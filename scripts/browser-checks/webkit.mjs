@@ -1,7 +1,8 @@
 // iPhone-sized WebKit pass (the closest stand-in for iOS Safari without a
 // device): the app loads without errors, taps place stones, Gomoku (Rapfi
 // wasm) and Othello AI replies arrive, 3D views get a WebGL context, and the
-// torus views let vertical swipes scroll the page until the page is fixed.
+// views that move up and down keep vertical drags unless swipes are handed
+// to the page.
 //   npx playwright install webkit   (once)
 import { webkit, devices } from "playwright";
 import { BASE, SHOTS } from "./lib.mjs";
@@ -131,39 +132,52 @@ for (const [gameType, topology] of [["gomoku", "torus"], ["othello", "mobius"]])
   await shot(`${gameType}-ai`);
 }
 
-// Torus views: vertical swipes scroll the page unless the page is fixed.
-await page.goto(`${BASE}/single`);
-await page.waitForTimeout(1_000);
-await configure("go", "torus");
+// Boards that move up and down (the flat torus, every 3D view) keep
+// vertical drags; sideways-only views (the arc) leave them to the page. The
+// toolbar can hand vertical swipes to the page on the others too.
 const touchAction = () => page.evaluate(() => {
   const canvas = [...document.querySelectorAll(".view-surface:not([hidden]) canvas")][0];
   return canvas ? getComputedStyle(canvas).touchAction : null;
 });
-results.scroll = {};
-for (const view of ["flat", "3d"]) {
+const viewState = async (view) => {
   await page.click(`.view-switch [data-view-mode="${view}"]`);
   await page.waitForTimeout(600);
-  results.scroll[view] = {
+  return {
     toggleVisible: await page.locator("#toggle-page-scroll").isVisible(),
-    default: await touchAction(),
+    touchAction: await touchAction(),
     hint: await text("#gesture-primary"),
   };
-}
+};
+results.scroll = {};
+await page.goto(`${BASE}/single`);
+await page.waitForTimeout(1_000);
+results.scroll.cylinderArc = await viewState("arc");
+results.scroll.cylinder3d = await viewState("3d");
+await configure("go", "torus");
+results.scroll.torusFlat = await viewState("flat");
+results.scroll.torus3d = await viewState("3d");
 await page.click("#toggle-page-scroll");
 await page.waitForTimeout(300);
-results.scroll.locked = { touchAction: await touchAction(), pressed: await page.getAttribute("#toggle-page-scroll", "aria-pressed") };
-await page.click('.view-switch [data-view-mode="flat"]');
-await page.waitForTimeout(400);
-results.scroll.lockedFlat = await touchAction();
+results.scroll.swipeScrolls = {
+  touchAction: await touchAction(),
+  pressed: await page.getAttribute("#toggle-page-scroll", "aria-pressed"),
+  hint: await text("#gesture-primary"),
+};
+results.scroll.swipeScrollsFlat = (await viewState("flat")).touchAction;
 await page.click("#toggle-page-scroll");
+await page.waitForTimeout(300);
+results.scroll.backToBoard = await touchAction();
 await shot("torus-3d");
 
 await browser.close();
 const ok = results.goTap.before !== results.goTap.after &&
   results.gomoku.afterAI && !results.gomoku.afterAI.startsWith("timeout") &&
   results.othello.afterAI && !results.othello.afterAI.startsWith("timeout") &&
-  results.scroll.flat.default === "pan-y" && results.scroll["3d"].default === "pan-y" &&
-  results.scroll.flat.toggleVisible && results.scroll.locked.touchAction === "none" &&
-  results.scroll.lockedFlat === "none";
+  results.scroll.cylinderArc.touchAction === "pan-y" && !results.scroll.cylinderArc.toggleVisible &&
+  results.scroll.cylinder3d.touchAction === "none" &&
+  results.scroll.torusFlat.touchAction === "none" && results.scroll.torusFlat.toggleVisible &&
+  results.scroll.torus3d.touchAction === "none" &&
+  results.scroll.swipeScrolls.touchAction === "pan-y" && results.scroll.swipeScrolls.pressed === "true" &&
+  results.scroll.swipeScrollsFlat === "pan-y" && results.scroll.backToBoard === "none";
 console.log(JSON.stringify({ ok, results, problems }, null, 2));
 process.exitCode = ok && problems.length === 0 ? 0 : 1;

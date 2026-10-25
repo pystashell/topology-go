@@ -199,8 +199,8 @@ export class TorusBoard {
     this.controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
     this.onControlsChange = () => this.requestRender();
     this.controls.addEventListener("change", this.onControlsChange);
-    // Free rotation turns every way; vertical swipes scroll the page unless
-    // the page is fixed (see pointerGestures.js). The Mobius band is the same.
+    // Free rotation turns every way, so the board keeps vertical drags (see
+    // pointerGestures.js). The Mobius band is the same.
     registerBoardTouchTargets([this.container, this.renderer.domElement], { view: "3d", topology: "torus" });
 
     this.raycaster = new THREE.Raycaster();

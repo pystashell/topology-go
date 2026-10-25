@@ -38,44 +38,46 @@ export function preventBoardContextMenu(event) {
 
 /**
  * Views whose one-finger drag goes in every direction: panning the flat
- * torus and rotating the 3D torus and Mobius band.
+ * torus, and every 3D view (the torus and Mobius band turn freely, the
+ * cylinder spins and tilts). The arc and the flat cylinder and Mobius strip
+ * only drag sideways.
  */
 export function needsFreeBoardDrag({ view, topology }) {
   if (view === "flat") return topology === "torus";
-  if (view === "arc") return false;
-  return topology !== "cylinder";
+  return view === "3d";
 }
 
 /**
  * Browser touch gestures each board view leaves to the page.
  *
- * Every view lets a one-finger swipe that starts vertically scroll the page
- * (pan-y); a pinch still reaches the view, and a drag that starts
- * horizontally keeps control even if it then turns vertical, so free-drag
- * views still turn in every direction. Fixing the page (pageScrollLocked)
- * gives free-drag views every gesture instead; the page then scrolls from
- * outside the board stage, which never fills a phone screen.
+ * Free-drag views keep every gesture, so up/down drags always move the
+ * board; the page scrolls from outside the board stage, which never fills a
+ * phone screen. Views that only drag sideways let swipes that start
+ * vertically scroll the page (pan-y); a pinch still reaches the view, and a
+ * drag that starts horizontally keeps control. A player may let vertical
+ * swipes scroll the page on free-drag views too (swipeScrollsPage); a drag
+ * must then start sideways to turn the board.
  */
-export function boardTouchAction({ view, topology, pageScrollLocked = false }) {
-  return pageScrollLocked && needsFreeBoardDrag({ view, topology }) ? "none" : "pan-y";
+export function boardTouchAction({ view, topology, swipeScrollsPage = false }) {
+  return needsFreeBoardDrag({ view, topology }) && !swipeScrollsPage ? "none" : "pan-y";
 }
 
-// Each view's touch elements by container, so a new page-scroll choice
-// reaches views that already exist. A rebuilt view replaces its entry.
+// Each view's touch elements by container, so a new choice reaches views
+// that already exist. A rebuilt view replaces its entry.
 const touchTargets = new Map();
-let pageScrollLocked = false;
+let swipeScrollsPage = false;
 
 /** Apply and remember a view's touch policy (elements[0] is its container). */
 export function registerBoardTouchTargets(elements, { view, topology }) {
   touchTargets.set(elements[0], { elements, view, topology });
-  applyBoardTouchAction(elements, boardTouchAction({ view, topology, pageScrollLocked }));
+  applyBoardTouchAction(elements, boardTouchAction({ view, topology, swipeScrollsPage }));
 }
 
-/** Fix the page under free-drag views (true) or let vertical swipes scroll it. */
-export function setBoardPageScrollLocked(locked) {
-  pageScrollLocked = Boolean(locked);
+/** Let vertical swipes on free-drag boards scroll the page (true) or move the board. */
+export function setBoardSwipeScrollsPage(enabled) {
+  swipeScrollsPage = Boolean(enabled);
   for (const { elements, view, topology } of touchTargets.values()) {
-    applyBoardTouchAction(elements, boardTouchAction({ view, topology, pageScrollLocked }));
+    applyBoardTouchAction(elements, boardTouchAction({ view, topology, swipeScrollsPage }));
   }
 }
 

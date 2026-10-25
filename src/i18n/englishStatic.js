@@ -439,5 +439,5 @@ export const ENGLISH_STATIC = Object.freeze({
   "只有拿到房间号或邀请链接的人能进入": "Only people with the room code or invitation link can enter",
   "房间管理": "Room management",
   "房间成员": "Room members",
-  "固定页面": "Fix page",
+  "竖滑滚动页面": "Swipe scrolls page",
 });
