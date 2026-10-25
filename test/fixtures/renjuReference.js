@@ -7,10 +7,14 @@
  * evaluated eagerly on every axis (no laziness), with the RIF 9.3 recursion
  * on the straight-four points.
  *
- * Columns wrap (a cylinder) and rows end at the top and bottom edges. With
- * `recursive: false` every straight-four point makes a three, which tests
- * use to show that a sample exercises the recursion.
+ * Lines are read on the board's cover (test/helpers/coverGeometry.js): a
+ * cylinder (the default) wraps columns, a torus also wraps rows, and a
+ * Mobius strip turns every other copy over. With `recursive: false` every
+ * straight-four point makes a three, which tests use to show that a sample
+ * exercises the recursion.
  */
+
+import { coverCell } from "../helpers/coverGeometry.js";
 
 const AXES = [[0, 1], [1, 0], [1, 1], [1, -1]];
 const CENTRE = 5;
@@ -84,16 +88,17 @@ function hasStraightFour(line, added) {
   return false;
 }
 
-export function createRenjuReference({ width, height, recursive = true }) {
+export function createRenjuReference({ width, height, topology = "cylinder", recursive = true }) {
   const memo = new Map();
 
+  // (row, col) are cover coordinates: the queried point sits in copy 0.
   function at(board, row, col) {
-    if (row < 0 || row >= height) return "#";
-    return board[row][((col % width) + width) % width];
+    const cell = coverCell(topology, width, height, row, col);
+    return cell ? board[cell.row][cell.col] : "#";
   }
 
   function cellAt(row, col) {
-    return { row, col: ((col % width) + width) % width };
+    return coverCell(topology, width, height, row, col);
   }
 
   function lineAt(board, row, col, [dRow, dCol]) {

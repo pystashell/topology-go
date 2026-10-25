@@ -88,10 +88,16 @@ public/_headers          CSP 等安全头；只有 katagoWorker-* 和 gomokuAiWo
 ```bash
 npm ci
 npm test
+npm run test:soak
+npm run test:coverage
 npm run build
 npx wrangler deploy --dry-run --strict
 npm audit --audit-level=moderate
 ```
+
+- **规则跑量测试**：`test/soak.*.test.js`（三种棋 × 三种拓扑）拿独立参考实现（`test/helpers/` 里的 goReference、renjuReference、othelloSoak，不共用引擎代码）逐手核对随机对局。`npm test` 跑快速档（小棋盘各 100 盘），`npm run test:soak`（SOAK=full）跑全量档：每种棋每个尺寸每种拓扑至少 10 盘，小棋盘各 100 盘，约 6,000 盘、80 万手。每个套件结束时还会断言边界情况真的出现过（禁全同长循环、打劫、跨接缝提子、死子、和棋；长连、四四、三三、下满和棋、最后一手成五；跳过、连续跳过、有空位终局、吃光）。CI 的 soak 任务和发布前检查都会跑全量档。
+- **覆盖率门槛**：`npm run test:coverage` 统计规则代码（src/game、src/topology 和翻子动画、AI 停顿）的覆盖率，低于行 95% / 分支 90% / 函数 95% 就失败；CI 用它代替 `npm test`。
+- **测出的 bug 要写成测试**：随机对局里找到的局面（例如 3×3 圆柱上的长循环禁全同、黑方只剩禁手点的和棋）固定在 `test/goEdgeCases.test.js`、`test/gomokuEdgeCases.test.js`、`test/othelloScenarios.test.js`。
 
 - **围棋不能变**：`test/goGoldenMaster.test.js` 守护。邻居顺序是持久化行为，决定提子顺序和存档校验，不能改。需要核对时运行 `node scripts/generate-go-golden.mjs --check`。
 - **页面函数名不能改**：UI 接线测试按函数名在 `src/main.js` 和 `src/app/*.js` 里查找（`test/helpers/appSource.js`），例如 `hydratePublicGame`、`applyOnlineRoom`、`enterReplay`、`enterNextGameSetup`、`startConfiguredNextGame`、`startImmediateRematch`。

@@ -214,6 +214,7 @@ function releaseMessage(release, head) {
 function runChecks(context) {
   const message = releaseMessage(context.release, context.head);
   execute(BIN.npm, ["test"]);
+  execute(BIN.npm, ["run", "test:soak"]);
   execute(BIN.npm, ["run", "build"]);
   execute(
     BIN.npm,
@@ -525,12 +526,13 @@ function printPlan(context) {
     `  channel: ${context.release.channel}`,
     `  toolchain: Node ${process.versions.node}, npm ${npmVersion}, Wrangler ${wranglerVersion}, ${ghVersion}`,
     "  1. npm test",
-    "  2. npm run build",
-    "  3. npm run deploy -- --dry-run --strict (preflight only)",
-    `  4. create and push annotated tag ${context.release.tag}`,
-    "  5. npm run deploy -- --strict --tag <tag> --message <tag+sha>",
-    "  6. verify Cloudflare Worker Version ID and Deployment ID via Wrangler JSON",
-    "  7. create a verified-tag GitHub Release containing both Cloudflare IDs",
+    "  2. npm run test:soak (every board size, random games against the references)",
+    "  3. npm run build",
+    "  4. npm run deploy -- --dry-run --strict (preflight only)",
+    `  5. create and push annotated tag ${context.release.tag}`,
+    "  6. npm run deploy -- --strict --tag <tag> --message <tag+sha>",
+    "  7. verify Cloudflare Worker Version ID and Deployment ID via Wrangler JSON",
+    "  8. create a verified-tag GitHub Release containing both Cloudflare IDs",
     "No tag, push, deployment, or GitHub Release was created by this plan command.",
   ].join("\n"));
 }
