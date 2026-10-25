@@ -27,10 +27,11 @@ export const LOBBY_EXPIRY_REFRESH_MS = 30 * 60 * 1_000;
 // is always recorded).
 export const CONNECTION_WRITE_INTERVAL_MS = 60 * 1_000;
 const MAX_SOCKET_CONNECTIONS = 64;
-// Pages ping every 10 s (answered without waking the room). A member socket
-// silent for longer than this lost its network; the room checks while
-// members are connected.
-const SILENT_SOCKET_MS = 45_000;
+// Pages ping every 10 s (answered without waking the room); a background
+// tab throttled to one timer a minute pings about once a minute. A member
+// socket silent for longer than this lost its network; the room checks
+// while members are connected.
+const SILENT_SOCKET_MS = 90_000;
 const SOCKET_SWEEP_MS = 30_000;
 const MAX_CLIENT_MESSAGE_BYTES = 8 * 1024;
 const POSITION_BOUND_ACTIONS = new Set([
@@ -956,7 +957,7 @@ export class BadukRoom {
   }
 
   /**
-   * Close the sockets of pages that stopped answering heartbeats: the
+   * Close the sockets of pages that stopped pinging for SILENT_SOCKET_MS: the
    * network under them died without a close, so the member is offline even
    * though the socket looks open. Pages that never pinged (older builds) are
    * left to the transport.

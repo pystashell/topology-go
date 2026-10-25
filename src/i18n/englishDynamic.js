@@ -913,6 +913,10 @@ export const ENGLISH_PATTERNS = Object.freeze([
       `${joinable} joinable · ${playing} in progress · ${waiting} waiting · ${spectators} watching · ${online} ${online === "1" ? "player" : "players"} online`,
   },
   {
+    pattern: /^你还连着房间 ([A-Z0-9]+)；先退出房间再移除。$/u,
+    replace: (_, code) => `You are still connected to room ${code}; leave the room before removing it.`,
+  },
+  {
     pattern: /^已从这台设备移除房间 ([A-Z0-9]+) 的记录。$/u,
     replace: (_, code) => `Removed room ${code} from this device.`,
   },

@@ -573,9 +573,11 @@ export class RoomClient {
     this.commandAckTimeoutMs = options.commandAckTimeoutMs ?? 12_000;
     this.snapshotTimeoutMs = options.snapshotTimeoutMs ?? 10_000;
     // While connected the page pings the room (the server answers "pong"
-    // without waking up). A connection with no message for an interval plus
-    // the timeout has silently died (a network switch, a dropped Wi-Fi) and
-    // is replaced; 0 turns heartbeats off.
+    // without waking up). A ping left without any message for the timeout
+    // means the connection silently died (a network switch, a dropped
+    // Wi-Fi), and it is replaced. A late timer (a background tab throttled
+    // to one wake-up a minute) is not silence: only an unanswered ping is.
+    // 0 turns heartbeats off.
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 10_000;
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 10_000;
     this.now = options.now ?? (() => Date.now());
@@ -599,7 +601,8 @@ export class RoomClient {
     this._reconnectTimer = null;
     this._snapshotTimer = null;
     this._heartbeatTimer = null;
-    this._lastMessageAt = 0;
+    // When the oldest ping still waiting for any message was sent, or null.
+    this._pingPendingSince = null;
     this._pendingCommands = new Map();
     this._nextSequence = 1;
     this._awaitingSnapshot = false;
@@ -1257,7 +1260,7 @@ export class RoomClient {
       if (generation !== this._socketGeneration) return;
       this.lastCloseCode = null;
       this.lastCloseReason = "";
-      this._lastMessageAt = this.now();
+      this._pingPendingSince = null;
       this._scheduleHeartbeat(socket, generation);
       this._setStatus(CONNECTION_STATUS.CONNECTED, {
         protocol: socket.protocol || this.protocolName,
@@ -1289,7 +1292,7 @@ export class RoomClient {
 
     attachSocketListener(socket, "message", (event) => {
       if (generation !== this._socketGeneration) return;
-      this._lastMessageAt = this.now();
+      this._pingPendingSince = null;
       this._handleMessage(event.data);
     });
 
@@ -1360,7 +1363,8 @@ export class RoomClient {
     this._heartbeatTimer = this.setTimeoutImpl(() => {
       this._heartbeatTimer = null;
       if (generation !== this._socketGeneration || socket.readyState !== 1) return;
-      if (this.now() - this._lastMessageAt > this.heartbeatIntervalMs + this.heartbeatTimeoutMs) {
+      const now = this.now();
+      if (this._pingPendingSince !== null && now - this._pingPendingSince >= this.heartbeatTimeoutMs) {
         this._dropSocket(socket, generation, "Heartbeat lost");
         return;
       }
@@ -1370,6 +1374,7 @@ export class RoomClient {
         this._dropSocket(socket, generation, "Heartbeat failed");
         return;
       }
+      this._pingPendingSince ??= now;
       this._scheduleHeartbeat(socket, generation);
     }, this.heartbeatIntervalMs);
   }

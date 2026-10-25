@@ -329,12 +329,20 @@ function renderMyLobbyRooms(myLobbyRooms) {
       ? "你在观战"
       : entry.color === WHITE ? "你执白" : entry.color === BLACK ? "你执黑" : "你的席位";
     const status = document.createElement("small");
-    if (entry.summary) {
-      const labels = lobbyGameLabels(entry.summary);
-      status.textContent = `${labels.badge} · ${entry.summary.width} × ${entry.summary.height} · ${lobbyStatusLabel(entry.summary.status)}`;
-    } else {
-      status.textContent = "不在公开列表（不公开或已过期）";
-    }
+    status.className = "lobby-my-room-status";
+    // One element per part, so each is translated on its own.
+    const parts = entry.summary
+      ? [
+          lobbyGameLabels(entry.summary).badge,
+          `${entry.summary.width} × ${entry.summary.height}`,
+          lobbyStatusLabel(entry.summary.status),
+        ]
+      : ["不在公开列表（不公开或已过期）"];
+    status.append(...parts.map((part) => {
+      const span = document.createElement("span");
+      span.textContent = part;
+      return span;
+    }));
     const actions = document.createElement("div");
     actions.className = "room-card-actions";
     const resume = document.createElement("button");
@@ -523,12 +531,15 @@ async function forgetLobbyRoom(code) {
     return;
   }
   lobbyForgetArmed = null;
-  const forgotten = roomClient.forgetStoredSessions(code);
+  const inRoom = roomClient.roomCode === code && roomClient.session;
+  const forgotten = !inRoom && roomClient.forgetStoredSessions(code);
   await renderLobbyRooms();
   // After the list redraw, which rewrites the status line.
-  announceLobby(forgotten
-    ? `已从这台设备移除房间 ${code} 的记录。`
-    : `无法移除房间 ${code} 的记录，请检查浏览器存储设置。`);
+  announceLobby(inRoom
+    ? `你还连着房间 ${code}；先退出房间再移除。`
+    : forgotten
+      ? `已从这台设备移除房间 ${code} 的记录。`
+      : `无法移除房间 ${code} 的记录，请检查浏览器存储设置。`);
 }
 
 /** Copy a room's share link (it opens as a spectator, like the room's own link). */

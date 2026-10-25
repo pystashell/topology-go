@@ -161,7 +161,9 @@ try {
   await guest.context().setOffline(true);
   await guest.waitForFunction(() => /网络已断开/u.test(document.querySelector("#room-hint")?.textContent ?? ""), null, { timeout: 10_000 });
   const offlineHint = await text(guest, "#room-hint");
-  await host.waitForFunction(() => /暂时离线/u.test(document.querySelector("#white-seat")?.textContent ?? ""), null, { timeout: 90_000 });
+  // The room notices a silent socket within about two minutes (90 s without
+  // a ping, checked every 30 s) unless the close reached it first.
+  await host.waitForFunction(() => /暂时离线/u.test(document.querySelector("#white-seat")?.textContent ?? ""), null, { timeout: 150_000 });
   const hostSeesOffline = await text(host, "#white-seat");
   await untilLobby(english, (selector) => {
     const dots = [...(document.querySelector(selector)?.querySelectorAll(".lobby-presence") ?? [])];
@@ -182,6 +184,15 @@ try {
   await host.waitForSelector("#lobby-my-rooms:not([hidden])", { timeout: 10_000 });
   record.myRooms = await host.$$eval("#lobby-my-room-list .lobby-my-room", (items) => items.map((item) => item.textContent.replace(/\s+/gu, " ").trim()));
   record.myRoomsShot = await shot(host, "lobby-my-rooms");
+  // The same list in English (player names aside).
+  await host.click('[data-language="en"]');
+  await host.waitForTimeout(400);
+  record.myRoomsEnglish = {
+    entry: await text(host, "#lobby-my-room-list .lobby-my-room"),
+    leftovers: (await cjkLeftovers(host)).filter((value) => !/^(房主甲|客人乙|观众丙)$/u.test(value)),
+  };
+  await host.click('[data-language="zh-CN"]');
+  await host.waitForTimeout(400);
   await host.click(`#lobby-my-room-list [data-lobby-room="${code}"]`);
   await host.waitForURL(new RegExp(`/online/${code}`, "u"), { timeout: 10_000 });
   await host.waitForFunction(() => /轮到你了|等待对方|对方落子|你执黑/u.test(document.querySelector("#room-hint")?.textContent ?? "") ||
@@ -249,6 +260,7 @@ const ok = !record.error &&
   /暂时离线/u.test(record.reconnect?.hostSeesOffline ?? "") && /在线/u.test(record.reconnect?.hostSeesBack ?? "") &&
   record.hostAway?.presence[0] === "offline" &&
   record.myRooms?.some((entry) => entry.includes(record.code) && /你执黑/u.test(entry)) &&
+  /You play Black/u.test(record.myRoomsEnglish?.entry ?? "") && record.myRoomsEnglish?.leftovers.length === 0 &&
   new RegExp(`/online/${record.code}`, "u").test(record.resumed?.url ?? "") &&
   record.copied?.clipboard === `${BASE}/online/${record.code}` &&
   record.unlisted?.publicCard === 0 && /不在公开列表/u.test(record.unlisted?.myRoom ?? "") &&

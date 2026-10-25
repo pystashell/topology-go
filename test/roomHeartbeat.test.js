@@ -114,13 +114,16 @@ async function connectedClient() {
     for (;;) {
       const next = timers.filter((timer) => !timer.cancelled && timer.at <= until).sort((a, b) => a.at - b.at)[0];
       if (!next) break;
-      clock = next.at;
+      // An overdue timer runs late, at the current time.
+      clock = Math.max(clock, next.at);
       next.cancelled = true;
       next.callback();
     }
     clock = until;
   };
-  return { client, network, errors, advance, socket: FakeSocket.instances[0] };
+  /** Move the clock without running timers (a throttled tab). */
+  const jump = (ms) => { clock += ms; };
+  return { client, network, errors, advance, jump, socket: FakeSocket.instances[0] };
 }
 
 test("a connected page pings every ten seconds and ignores the pong", async () => {
@@ -138,12 +141,14 @@ test("a connected page pings every ten seconds and ignores the pong", async () =
   client.destroy();
 });
 
-test("a socket silent past the timeout is replaced at once", async () => {
+test("a ping left unanswered for ten seconds replaces the socket at once", async () => {
   const { client, advance, socket } = await connectedClient();
-  // Pings go out but nothing comes back (the network died without a close).
-  advance(20_000);
+  // A ping goes out at 10 s and nothing comes back (the network died
+  // without a close): at 20 s the socket is given up.
+  advance(19_999);
+  assert.deepEqual(socket.sent, ["ping"]);
   assert.equal(client.connectionStatus, CONNECTION_STATUS.CONNECTED);
-  advance(10_000);
+  advance(1);
   assert.equal(client.connectionStatus, CONNECTION_STATUS.RECONNECTING);
   assert.deepEqual(socket.closed, { code: 4000, reason: "Heartbeat lost" });
   assert.equal(client.lastCloseCode, 4000);
@@ -155,6 +160,21 @@ test("a socket silent past the timeout is replaced at once", async () => {
   assert.equal(FakeSocket.instances.length, 2);
   FakeSocket.instances[1].open();
   assert.equal(client.connectionStatus, CONNECTION_STATUS.CONNECTED);
+  client.destroy();
+});
+
+test("a background tab whose timers run a minute late is not taken for dead", async () => {
+  const { client, jump, advance, socket } = await connectedClient();
+  for (let minute = 1; minute <= 10; minute += 1) {
+    // The throttled timer fires a minute late, sends its ping...
+    jump(60_000);
+    advance(0);
+    // ...and the pong comes straight back.
+    socket.receive("pong");
+  }
+  assert.equal(client.connectionStatus, CONNECTION_STATUS.CONNECTED);
+  assert.equal(socket.closed, null);
+  assert.equal(socket.sent.length, 10);
   client.destroy();
 });
 
@@ -225,8 +245,10 @@ function roomWith(sockets, { now }) {
 test("the room closes member sockets that stopped pinging, and only those", async () => {
   const now = 1_000_000;
   const sockets = [
-    { name: "silent", attachment: { identity: { playerId: "a" } }, lastPing: new Date(now - 46_000) },
+    { name: "silent", attachment: { identity: { playerId: "a" } }, lastPing: new Date(now - 91_000) },
     { name: "fresh", attachment: { identity: { playerId: "b" } }, lastPing: new Date(now - 5_000) },
+    // A throttled background tab pings about once a minute: still online.
+    { name: "throttled", attachment: { identity: { playerId: "d" } }, lastPing: new Date(now - 70_000) },
     { name: "never pinged (an older page)", attachment: { identity: { playerId: "c" } }, lastPing: null },
     { name: "no identity", attachment: { identity: null }, lastPing: new Date(now - 300_000) },
   ];

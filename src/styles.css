@@ -407,6 +407,10 @@ summary:focus-visible {
   font-size: 10px;
 }
 
+.lobby-my-room-status span + span::before {
+  content: " · ";
+}
+
 .lobby-my-room .room-card-actions {
   display: flex;
   gap: 7px;
