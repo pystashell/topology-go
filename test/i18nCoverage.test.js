@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { translateText } from "../src/i18n.js";
+import { APP_SOURCE_FILES } from "./helpers/appSource.js";
 
 // Guards the English UI against untranslated Chinese. Every Chinese string or
 // template literal in the client sources below must render without Chinese
@@ -13,7 +14,7 @@ import { translateText } from "../src/i18n.js";
 const CJK = /[\u3400-\u9fff\uff01-\uff60\u3000-\u303f]/u;
 
 const SOURCES = [
-  "src/main.js",
+  ...APP_SOURCE_FILES,
   "src/multiplayer/roomClient.js",
   "src/multiplayer/lobbyClient.js",
 ];

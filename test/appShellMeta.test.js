@@ -26,7 +26,7 @@ test("the page declares a favicon, touch icon and web app manifest that exist", 
 
   const manifestPath = headAttribute(/<link rel="manifest" href="([^"]+)" \/>/u);
   const manifest = JSON.parse(readFileSync(publicFile(manifestPath), "utf8"));
-  assert.equal(manifest.short_name, "3D Baduk");
+  assert.equal(manifest.short_name, "Topology Go");
   assert.equal(manifest.start_url, "/single");
   assert.equal(manifest.display, "standalone");
   for (const entry of manifest.icons) {

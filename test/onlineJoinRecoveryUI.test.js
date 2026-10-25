@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
+import { appSource } from "./helpers/appSource.js";
 
-const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+const main = appSource();
 const renderSource = main.slice(
   main.indexOf("function renderStoredIdentityPanels()"),
   main.indexOf("function savedPlayerName()"),

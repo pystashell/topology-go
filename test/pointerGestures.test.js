@@ -8,6 +8,9 @@ import {
   applyBoardTouchAction,
   boardTouchAction,
   invalidatePendingTapOnAdditionalPointer,
+  needsFreeBoardDrag,
+  registerBoardTouchTargets,
+  setBoardPageScrollLocked,
   pointerGestureRoles,
   preventBoardContextMenu,
 } from "../src/view/pointerGestures.js";
@@ -165,21 +168,52 @@ test("board context menus are suppressed without another side effect", () => {
 });
 
 test("only views with horizontal-only drags hand vertical swipes to the page", () => {
-  const policy = (view, topology) => boardTouchAction({ view, topology });
-  assert.equal(policy("arc", "cylinder"), "pan-y");
-  assert.equal(policy("3d", "cylinder"), "pan-y");
-  assert.equal(policy("flat", "cylinder"), "pan-y");
-  assert.equal(policy("flat", "mobius"), "pan-y");
-  // Torus panning and free 3D rotation need vertical drags.
-  assert.equal(policy("flat", "torus"), "none");
-  assert.equal(policy("3d", "torus"), "none");
-  assert.equal(policy("3d", "mobius"), "none");
+  const policy = (view, topology, pageScrollLocked) =>
+    boardTouchAction({ view, topology, pageScrollLocked });
+  // Vertical swipes scroll the page from every board by default.
+  for (const view of ["flat", "arc", "3d"]) {
+    for (const topology of ["cylinder", "torus", "mobius"]) {
+      assert.equal(policy(view, topology), "pan-y", `${view} ${topology}`);
+    }
+  }
+  // Fixing the page gives free-drag views (torus pan, 3D torus and Mobius
+  // rotation) every gesture; horizontal-only views keep scrolling.
+  assert.equal(policy("flat", "torus", true), "none");
+  assert.equal(policy("3d", "torus", true), "none");
+  assert.equal(policy("3d", "mobius", true), "none");
+  assert.equal(policy("flat", "cylinder", true), "pan-y");
+  assert.equal(policy("flat", "mobius", true), "pan-y");
+  assert.equal(policy("arc", "cylinder", true), "pan-y");
+  assert.equal(policy("3d", "cylinder", true), "pan-y");
   // pan-y never includes pinch-zoom, so pinches still reach the view.
   for (const view of ["flat", "arc", "3d"]) {
     for (const topology of ["cylinder", "torus", "mobius"]) {
-      assert.doesNotMatch(policy(view, topology), /pinch|auto|manipulation/);
+      for (const locked of [false, true]) {
+        assert.doesNotMatch(policy(view, topology, locked), /pinch|auto|manipulation/);
+      }
     }
   }
+});
+
+test("fixing the page re-applies every registered view's touch policy", () => {
+  const element = () => ({ style: {} });
+  const torus = [element(), element()];
+  const cylinder = [element(), element()];
+  registerBoardTouchTargets(torus, { view: "3d", topology: "torus" });
+  registerBoardTouchTargets(cylinder, { view: "3d", topology: "cylinder" });
+  assert.deepEqual(torus.map((node) => node.style.touchAction), ["pan-y", "pan-y"]);
+  setBoardPageScrollLocked(true);
+  assert.deepEqual(torus.map((node) => node.style.touchAction), ["none", "none"]);
+  assert.deepEqual(cylinder.map((node) => node.style.touchAction), ["pan-y", "pan-y"]);
+  // A rebuilt view in the same container replaces the old entry.
+  const rebuilt = [torus[0], element()];
+  registerBoardTouchTargets(rebuilt, { view: "flat", topology: "torus" });
+  assert.equal(rebuilt[1].style.touchAction, "none");
+  setBoardPageScrollLocked(false);
+  assert.equal(rebuilt[1].style.touchAction, "pan-y");
+  assert.equal(torus[1].style.touchAction, "none", "the replaced view is no longer updated");
+  assert.equal(needsFreeBoardDrag({ view: "flat", topology: "torus" }), true);
+  assert.equal(needsFreeBoardDrag({ view: "arc", topology: "cylinder" }), false);
 });
 
 test("touch policy overrides the inline style OrbitControls leaves", () => {

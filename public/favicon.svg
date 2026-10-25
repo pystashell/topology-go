@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <title>3D Baduk</title>
+  <title>Topology Go</title>
   <defs>
     <clipPath id="ring"><circle cx="32" cy="32" r="21"/></clipPath>
   </defs>

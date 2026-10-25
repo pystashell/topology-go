@@ -99,6 +99,7 @@ import {
   shouldRunAI,
 } from "./ai/matchMode.js";
 import { CylinderBoard } from "./view/CylinderBoard.js";
+import { needsFreeBoardDrag, setBoardPageScrollLocked } from "./view/pointerGestures.js";
 import { FlatBoard } from "./view/FlatBoard.js";
 import { ArcBoard } from "./view/ArcBoard.js";
 import { TorusBoard } from "./view/TorusBoard.js";
@@ -158,6 +159,44 @@ import {
   subscribeLocale,
   translateText,
 } from "./i18n.js";
+import {
+  cancelLobbyRequest,
+  loadLobbyOnce,
+  refreshLobby,
+  renderLobbyRooms,
+  resumeLobbyPolling,
+  wireLobbyFilters,
+} from "./app/lobbyScreen.js";
+import {
+  syncAbandonmentPanel,
+  syncRoomManagement,
+  wireRoomManagement,
+} from "./app/roomManagement.js";
+import {
+  exportCurrentSgf,
+  importSgfFile,
+} from "./app/recordFiles.js";
+import {
+  buildChatPickers,
+  chatChannelView,
+  chatPointPicking,
+  chatReferenceFocusViews,
+  chatReferencePoint,
+  chatStatusError,
+  clearChatReference,
+  closeChatPickers,
+  focusChatPoint,
+  forgetRenderedChat,
+  insertPickedChatPoint,
+  messageMatchesCurrentBoard,
+  resetChatSessionState,
+  sendChatPayload,
+  setChatPointPicking,
+  setChatStatus,
+  syncChatUI,
+  toggleChatPicker,
+  wireChatChannels,
+} from "./app/chatPanel.js";
 
 initializeI18n();
 
@@ -275,6 +314,17 @@ const elements = {
   onlineMatchAiLevel: $("#online-match-ai-level"),
   onlineMatchBlackAiLevelField: $("#online-match-black-ai-level-field"),
   onlineMatchBlackAiLevel: $("#online-match-black-ai-level"),
+  onlineMatchBlackAiModelNote: $("#online-match-black-ai-model-note"),
+  roomUnlisted: $("#room-unlisted"),
+  roomUnlistedBadge: $("#room-unlisted-badge"),
+  abandonmentPanel: $("#abandonment-panel"),
+  abandonmentTitle: $("#abandonment-title"),
+  abandonmentNote: $("#abandonment-note"),
+  claimAbandonment: $("#claim-abandonment"),
+  roomManagePanel: $("#room-manage-panel"),
+  roomListed: $("#room-listed"),
+  roomMemberList: $("#room-member-list"),
+  onlineMatchBlackAiLevelNote: $("#online-match-black-ai-level-note"),
   timeControlPreset: $("#time-control-preset"),
   customTimeFields: $("#custom-time-fields"),
   mainTimeMinutes: $("#main-time-minutes"),
@@ -284,6 +334,7 @@ const elements = {
   topologyButtons: [...document.querySelectorAll("[data-board-topology]")],
   resetView: $("#reset-view"),
   toggleRotation: $("#toggle-rotation"),
+  togglePageScroll: $("#toggle-page-scroll"),
   resetViewIcon: $("#reset-view-icon"),
   resetViewLabel: $("#reset-view-label"),
   gesturePrimary: $("#gesture-primary"),
@@ -456,20 +507,11 @@ const ONLINE_MODE_FRIEND = "friend";
 const ONLINE_MODE_HUMAN_AI = "human-ai";
 const ONLINE_MODE_AI_AI = "ai-ai";
 const ONLINE_MODE_LOCAL = "local";
+// Not a room mode: a human-AI round in which the guest plays White against
+// the AI the host's browser runs as Black (request_game aiOpponent: guest).
+const ONLINE_MODE_GUEST_AI = "guest-ai";
 let matchLifecycle = MATCH_LIFECYCLE_LOBBY;
 let lobbyPreviewFrame = null;
-let lobbyRefreshController = null;
-let lobbyRooms = [];
-const lobbyRoomCards = new Map();
-const lobbyVisiblePreviews = new Set();
-let lobbyPreviewObserver = null;
-let lobbyPreviewRenderer = null;
-let lobbyStatusFilter = "all";
-let lobbyLoading = false;
-let lobbyLoadError = null;
-let lobbyLastRefreshAt = 0;
-let lobbyPollTimer = null;
-let lobbyModulesPromise = null;
 let appRouteMode = "single";
 const autoRotateByView = { arc: false, "3d": false };
 let moveCount = 0;
@@ -494,16 +536,6 @@ let onlineAIPauseSending = false;
 let lastAnnouncedRoomRevision = null;
 let rematchSetupTransport = null;
 let rematchPreviewGame = null;
-let chatSending = false;
-let chatPointPicking = false;
-let chatReferencePoint = null;
-let chatReferenceFocusViews = false;
-let chatReferenceTimer = null;
-let lastRenderedChatKey = "";
-let chatStatusMessage = "";
-let chatStatusError = false;
-let chatChannelView = CHAT_CHANNEL_PLAYERS;
-let chatChannelIdentityId = null;
 let offlineGameState = null;
 let aiActive = false;
 let aiMatchMode = "human-ai";
@@ -566,7 +598,20 @@ const LOBBY_RATE_LIMIT_BACKOFF_MS = 60_000;
 const LOBBY_BOARD_SETTINGS_KEY = "3d-baduk-lobby-board-settings-v1";
 // The game (and Gomoku rule set) last chosen for a new board.
 const GAME_TYPE_KEY = "3d-baduk-game-type-v1";
+// Touch screens: whether free-drag boards keep vertical swipes from the page.
+const BOARD_SCROLL_LOCK_KEY = "topology-go-board-scroll-lock-v1";
 const roomClient = new RoomClient();
+
+function savedBoardPageScrollLocked() {
+  try {
+    return window.localStorage.getItem(BOARD_SCROLL_LOCK_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+let boardPageScrollLocked = savedBoardPageScrollLocked();
+setBoardPageScrollLocked(boardPageScrollLocked);
 
 function savedSoundEnabled() {
   try {
@@ -956,21 +1001,39 @@ function savedGameTypeChoice() {
     return {
       gameType: availableGameType(parsed?.gameType),
       ruleSet: normalizeRuleSet(parsed?.ruleSet),
+      sizesByGame: parsed?.sizesByGame ?? null,
     };
   } catch {
     return null;
   }
 }
 
+/** Remember the chosen game and the board size last used for each game. */
 function rememberGameTypeChoice() {
   if (!ENABLE_MULTI_GAME) return;
   try {
     window.localStorage.setItem(
       GAME_TYPE_KEY,
-      JSON.stringify({ gameType: pendingGameType, ruleSet: pendingRuleSet }),
+      JSON.stringify({
+        gameType: pendingGameType,
+        ruleSet: pendingRuleSet,
+        sizesByGame: Object.fromEntries(pendingDimensionsByGame),
+      }),
     );
   } catch {
     // The choice still applies to this tab when storage is unavailable.
+  }
+}
+
+/** Load saved board sizes per game, clamped to what each game offers. */
+function restoreSizesByGame(sizesByGame) {
+  if (!sizesByGame || typeof sizesByGame !== "object") return;
+  for (const [savedGame, size] of Object.entries(sizesByGame)) {
+    if (availableGameType(savedGame) !== savedGame) continue;
+    pendingDimensionsByGame.set(savedGame, {
+      width: clampBoardDimension(savedGame, size?.width),
+      height: clampBoardDimension(savedGame, size?.height),
+    });
   }
 }
 
@@ -1142,6 +1205,7 @@ function tickClock() {
     }
   }
   syncClockUI(now);
+  if (hasOnlineSession()) syncAbandonmentPanel(now);
 }
 
 function ensureLocalTimedMoveAllowed() {
@@ -1181,7 +1245,7 @@ function syncLanguageControls() {
 
 function refreshLanguageDependentUI() {
   syncLanguageControls();
-  lastRenderedChatKey = "";
+  forgetRenderedChat();
   syncAIDialogModelPresentation();
   syncAIMatchModePresentation();
   syncSoundControl();
@@ -1288,213 +1352,11 @@ function replayEventCount(source = replaySource()) {
     : 0;
 }
 
-function replayMetadataForExport() {
-  if (replaySession?.metadata) return cloneSerializable(replaySession.metadata);
-  // Player names are written into the file (PB/PW), so they use the language
-  // the record was exported in rather than the Chinese source copy.
-  if (hasOnlineSession()) {
-    return {
-      blackPlayer: roomSeat(BLACK)?.name ?? translateText("黑方"),
-      whitePlayer: roomSeat(WHITE)?.name ?? translateText("白方"),
-      result: onlineRoom?.game?.result ?? onlineRoom?.timeControl?.outcome ?? null,
-      scoreConfirmations: onlineRoom?.scoreConfirmations ?? [],
-    };
-  }
-  if (isAIMode()) {
-    const playerName = (color) => translateText(
-      aiControlsColor(color) ? currentAIName(color) : "人类玩家",
-    );
-    return {
-      blackPlayer: playerName(BLACK),
-      whitePlayer: playerName(WHITE),
-      result: game?.result ?? currentTimeoutOutcome() ?? null,
-    };
-  }
-  return {
-    blackPlayer: translateText("黑方"),
-    whitePlayer: translateText("白方"),
-    result: game?.result ?? currentTimeoutOutcome() ?? null,
-  };
-}
-
-function safeRecordFilenamePart(value) {
-  return String(value ?? "")
-    .normalize("NFKC")
-    .replace(/[^A-Za-z0-9_-]+/gu, "-")
-    .replace(/^-+|-+$/gu, "")
-    .slice(0, 40) || "game";
-}
-
-function sgfImportWarningSummary(warnings) {
-  const labels = {
-    IGNORED_GAMES: "只导入了棋谱集合中的第一局",
-    IGNORED_VARIATIONS: "只导入了主分支",
-    IGNORED_MIDGAME_SETUP: "忽略了中盘摆子",
-    IGNORED_MIDGAME_PLAYER: "忽略了中盘改行棋方",
-    NON_ALTERNATING_MOVE: "棋谱中存在非交替行棋",
-    SIMPLIFIED_TERRITORY_SCORING: "已按简化领地计分解释，双活中的眼仍计地",
-    UNKNOWN_RULE: "未知规则已按简化领地计分解释",
-    NON_FF4: "已按 FF[4] 兼容方式解析",
-    CHARSET_ASSUMED_UTF8: "文本已按 UTF-8 读取",
-    LEGACY_TT_PASS: "已兼容旧式 tt 停着",
-    INVALID_KOMI: "贴目无效，已按 0 目复盘",
-    MISSING_SIZE: "缺少尺寸，已按 19 × 19 解释",
-    MISSING_GM: "缺少棋类标记，已按围棋解释",
-    NORMALIZED_PROPERTY_ID: "属性名已规范化",
-    PARTIAL_BASE_MISSING: "旧版部分棋谱缺少提子与劫争历史，仅能近似复盘",
-  };
-  const relevant = (Array.isArray(warnings) ? warnings : [])
-    .filter((item) => item?.code !== "TOPOLOGY_ASSUMED");
-  if (relevant.length === 0) return "";
-  const details = [...new Set(relevant
-    .sort((a, b) => Number(b.code === "PARTIAL_BASE_MISSING") -
-      Number(a.code === "PARTIAL_BASE_MISSING"))
-    .map((item) => labels[item?.code]).filter(Boolean))];
-  const visible = details.slice(0, 2);
-  const hiddenCount = Math.max(0, relevant.length - visible.length);
-  const detailText = visible.length > 0 ? visible.join("；") : "存在格式兼容处理";
-  return ` 兼容提示：${detailText}${hiddenCount ? `（另有 ${hiddenCount} 项）` : ""}。`;
-}
-
-function exportCurrentSgf() {
-  const source = replaySource();
-  if (!source) {
-    setMessage("当前棋局没有可导出的棋谱。", true);
-    return;
-  }
-  if (!gameRulesOf(source.base).capabilities.sgf) {
-    setMessage("这个棋类暂不支持 AI 对手、AI 分析或 SGF 棋谱。", true);
-    return;
-  }
-  try {
-    const metadata = replayMetadataForExport();
-    const { sgf, warnings } = exportSgf({
-      replay: source,
-      metadata,
-      scoreConfirmations: metadata.scoreConfirmations,
-      extensionEvents: replaySession?.extensionEvents ?? [],
-    });
-    const base = source.base ?? game;
-    const stamp = new Date().toISOString().replace(/[-:]/gu, "").slice(0, 13);
-    const filename = [
-      "3d-baduk",
-      safeRecordFilenamePart(base.topology ?? "cylinder"),
-      `${boardWidth(base)}x${boardHeight(base)}`,
-      stamp,
-    ].join("-") + ".sgf";
-    const url = URL.createObjectURL(new Blob([sgf], { type: "application/x-go-sgf;charset=utf-8" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    link.hidden = true;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    const topologyNote = warnings.some((item) => item.code === "NONSTANDARD_TOPOLOGY")
-      ? "普通 SGF 阅读器可读取棋步；异形接缝保存在 X* 扩展属性中。"
-      : "";
-    const scoringNote = warnings.some((item) => item.code === "SIMPLIFIED_TERRITORY_SCORING")
-      ? "本局采用简化领地计分，双活中的眼仍计地。"
-      : "";
-    setMessage(`已导出 ${filename}。${topologyNote}${scoringNote}`);
-  } catch (error) {
-    console.error("Unable to export SGF", error);
-    setMessage(`导出 SGF 失败：${localizedErrorMessage(error, "棋谱格式无法生成")}`, true);
-  }
-}
-
-async function importSgfFile(file) {
-  if (!file) return;
-  if (isNextGameSetup()) {
-    elements.importSgfFile.value = "";
-    setMessage("请先开始下一局，或留在当前终局后再导入棋谱。", true);
-    return;
-  }
-  try {
-    if (file.size > 2 * 1024 * 1024) {
-      throw new SgfError("棋谱文件不能超过 2 MiB。", "SGF_TOO_LARGE");
-    }
-    const parsed = importSgf(await file.text(), { defaultTopology: pendingTopology });
-    if (isReplaying()) exitReplay({ announce: false });
-    enterReplay(parsed.replay, {
-      imported: true,
-      sourceName: file.name,
-      warnings: parsed.warnings,
-      metadata: parsed.metadata,
-      extensionEvents: parsed.extensionEvents,
-      extensions: parsed.extensions,
-    });
-    if (!isReplaying()) return;
-    replaySession.metadata = parsed.metadata;
-    replaySession.extensionEvents = parsed.extensionEvents;
-    const assumed = parsed.warnings.some((item) => item.code === "TOPOLOGY_ASSUMED");
-    const warningSummary = sgfImportWarningSummary(parsed.warnings);
-    setMessage(
-      assumed
-        ? `已导入 ${file.name}：原谱未写异形拓扑，按当前选择的${topologyName(parsed.metadata.topology)}复盘。${warningSummary}`
-        : `已导入 ${file.name}，共 ${replayEventCount(parsed.replay)} 手；可播放、切换视图或做 AI 分析。${warningSummary}`,
-    );
-  } catch (error) {
-    if (error instanceof SgfError && error.code === "UNSUPPORTED_GAME") {
-      // GM[2] Othello and GM[4] Gomoku records: say what the file is.
-      setMessage(sgfOtherGameNote(error), true);
-      maybeStartAITurn();
-      return;
-    }
-    console.error("Unable to import SGF", error);
-    const reason = error instanceof SgfError
-      ? localizedErrorMessage(error, "文件不是可识别的 SGF 棋谱")
-      : "文件不是可识别的 SGF 棋谱";
-    setMessage(`导入 SGF 失败：${reason}`, true);
-    maybeStartAITurn();
-  } finally {
-    elements.importSgfFile.value = "";
-  }
-}
-
 function formatReviewMove(move, height = boardHeight()) {
   if (move?.type === "pass") return "停一手";
   if (move?.type !== "play") return "—";
   const letter = COORDINATE_LETTERS[move.col] || String(move.col + 1);
   return `${letter}${height - move.row}`;
-}
-
-function syncChatChannelIdentity() {
-  const identity = currentIdentity();
-  const identityId = identity.playerId ?? identity.id ?? "";
-  const role = identity.role ?? "";
-  if (chatChannelIdentityId !== identityId) {
-    chatChannelIdentityId = identityId;
-    chatChannelView = role === "spectator"
-      ? CHAT_CHANNEL_SPECTATORS
-      : CHAT_CHANNEL_PLAYERS;
-    lastRenderedChatKey = "";
-  }
-  if (role !== "spectator" && chatChannelView !== CHAT_CHANNEL_PLAYERS) {
-    chatChannelView = CHAT_CHANNEL_PLAYERS;
-    lastRenderedChatKey = "";
-  }
-}
-
-function isViewingSpectatorChat() {
-  return chatChannelView === CHAT_CHANNEL_SPECTATORS;
-}
-
-function canSendCurrentChatChannel() {
-  if (!roomClient.isConnected || chatSending) return false;
-  const identity = currentIdentity();
-  if (identity.role === "player") return chatChannelView === CHAT_CHANNEL_PLAYERS;
-  return identity.role === "spectator" && chatChannelView === CHAT_CHANNEL_SPECTATORS;
-}
-
-function currentChatMessages() {
-  syncChatChannelIdentity();
-  return Array.isArray(onlineRoom?.chat?.messages)
-    ? onlineRoom.chat.messages.filter(
-        (message) => chatMessageChannel(message) === chatChannelView,
-      )
-    : [];
 }
 
 function activeBoardView() {
@@ -1511,341 +1373,10 @@ function syncReferenceFocusRotationState() {
   elements.toggleRotation.setAttribute("aria-pressed", "false");
 }
 
-function messageMatchesCurrentBoard(message) {
-  const displayedGame = liveDisplayedGame();
-  return (
-    Number(message?.boardWidth ?? message?.boardSize) === boardWidth(displayedGame) &&
-    Number(message?.boardHeight ?? message?.boardSize) === boardHeight(displayedGame) &&
-    message?.boardTopology === displayedGame?.topology
-  );
-}
-
-function setChatStatus(message = "", error = false) {
-  chatStatusMessage = message;
-  chatStatusError = error;
-  if (!elements.chatStatus) return;
-  elements.chatStatus.textContent = message;
-  elements.chatStatus.classList.toggle("error", error);
-}
-
-function defaultChatStatus() {
-  if (!roomClient.isConnected) return "连接恢复后可以继续发送；当前草稿会保留。";
-  if (currentIdentity().role === "spectator" && chatChannelView === CHAT_CHANNEL_PLAYERS) {
-    return "只读：旁观者可以阅读对局聊天，但不能在这里发言。";
-  }
-  if (currentIdentity().role === "spectator") {
-    return "旁观聊天只对旁观者可见，不会显示给黑白双方。";
-  }
-  if (!isOnlinePlayer()) return "旁观者可以阅读聊天，只有黑白双方可以发言。";
-  if (chatPointPicking) return "请在棋盘上点击要引用的位置；这次点击不会落子。";
-  return "文字不做内容审查；仅有技术性长度与频率限制。";
-}
-
-function focusChatPoint(
-  message,
-  point,
-  { announce = true, moveCamera = true } = {},
-) {
-  const displayedGame = liveDisplayedGame();
-  if (!messageMatchesCurrentBoard(message)) {
-    const messageWidth = message.boardWidth ?? message.boardSize;
-    const messageHeight = message.boardHeight ?? message.boardSize;
-    setChatStatus(
-      `📍 ${point.label} 来自上一块 ${messageWidth} × ${messageHeight} ${topologySurfaceName(message.boardTopology)}棋盘，当前不强行定位。`,
-      true,
-    );
-    return;
-  }
-  if (
-    !Number.isInteger(point.row) ||
-    !Number.isInteger(point.col) ||
-    point.row < 0 ||
-    point.row >= boardHeight(displayedGame) ||
-    point.col < 0 ||
-    point.col >= boardWidth(displayedGame)
-  ) {
-    setChatStatus("这条位置引用已经失效。", true);
-    return;
-  }
-
-  if (chatReferenceTimer !== null) window.clearTimeout(chatReferenceTimer);
-  chatReferencePoint = { row: point.row, col: point.col };
-  chatReferenceFocusViews = moveCamera;
-  updateUI();
-  if (moveCamera) {
-    syncReferenceFocusRotationState();
-    window.requestAnimationFrame(() => {
-      activeBoardView()?.focusPoint?.(chatReferencePoint);
-    });
-  }
-  if (announce) setChatStatus(`已在棋盘标出 📍 ${point.label}。`);
-  chatReferenceTimer = window.setTimeout(() => {
-    chatReferenceTimer = null;
-    chatReferencePoint = null;
-    chatReferenceFocusViews = false;
-    updateUI();
-  }, 8_000);
-}
-
-function renderChatMessage(message) {
-  const own = message.senderId === currentIdentity().playerId;
-  const article = document.createElement("article");
-  article.className = `chat-message${own ? " own" : ""}`;
-  article.dataset.chatId = message.id;
-
-  const meta = document.createElement("div");
-  meta.className = "chat-message-meta";
-  const name = document.createElement("span");
-  name.className = message.senderRole === "spectator"
-    ? "spectator-name"
-    : message.senderColor === BLACK ? "black-name" : "white-name";
-  name.dataset.i18nIgnore = "";
-  name.textContent = message.senderRole === "spectator"
-    ? `${message.senderName} · ${translateText("旁观者")}`
-    : `${message.senderName} · ${translateText(colorName(message.senderColor))}`;
-  const time = document.createElement("time");
-  time.dateTime = new Date(message.sentAt).toISOString();
-  time.textContent = new Intl.DateTimeFormat(getLocale(), {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(message.sentAt));
-  meta.append(name, time);
-
-  const bubble = document.createElement("div");
-  bubble.className = "chat-bubble";
-  if (message.kind === "sticker") {
-    bubble.classList.add("chat-sticker-bubble");
-    const sticker = chatSticker(message.stickerId);
-    const emoji = document.createElement("span");
-    emoji.className = "sticker-emoji";
-    emoji.textContent = sticker?.emoji ?? "❔";
-    const label = document.createElement("span");
-    label.className = "sticker-label";
-    label.textContent = translateText(sticker?.label ?? "表情包");
-    bubble.append(emoji, label);
-  } else {
-    // Deliberately use textContent: messages are uncensored text, never HTML.
-    bubble.dataset.i18nIgnore = "";
-    bubble.textContent = String(message.text ?? "");
-  }
-  article.append(meta, bubble);
-
-  if (Array.isArray(message.points) && message.points.length > 0) {
-    const pointList = document.createElement("div");
-    pointList.className = "chat-point-list";
-    const matchesBoard = messageMatchesCurrentBoard(message);
-    for (const point of message.points) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "chat-point-link";
-      button.textContent = translateText(matchesBoard
-        ? `📍 ${point.label} · 查看棋盘`
-        : `📍 ${point.label} · 上一块棋盘`);
-      button.disabled = !matchesBoard;
-      button.addEventListener("click", () => focusChatPoint(message, point));
-      pointList.append(button);
-    }
-    article.append(pointList);
-  }
-  return article;
-}
-
-function renderChatHistory() {
-  const messages = currentChatMessages();
-  const displayedGame = liveDisplayedGame();
-  const key = [
-    onlineRoom?.code ?? "",
-    chatChannelView,
-    boardWidth(displayedGame, ""),
-    boardHeight(displayedGame, ""),
-    displayedGame?.topology ?? "",
-    ...messages.map((message) => `${message.id}:${message.sequence}`),
-  ].join("|");
-  if (key === lastRenderedChatKey) return;
-  const hadRenderedHistory = lastRenderedChatKey !== "";
-  const previousScrollTop = elements.chatMessages.scrollTop;
-  const wasNearBottom =
-    elements.chatMessages.scrollHeight -
-      elements.chatMessages.scrollTop -
-      elements.chatMessages.clientHeight <
-    36;
-  lastRenderedChatKey = key;
-
-  elements.chatMessages.replaceChildren();
-  if (messages.length === 0) {
-    elements.chatMessages.append(elements.chatEmpty);
-    return;
-  }
-  const fragment = document.createDocumentFragment();
-  for (const message of messages) fragment.append(renderChatMessage(message));
-  elements.chatMessages.append(fragment);
-  elements.chatMessages.scrollTop = !hadRenderedHistory || wasNearBottom
-    ? elements.chatMessages.scrollHeight
-    : previousScrollTop;
-}
-
-function syncChatUI() {
-  const active = hasOnlineSession();
-  syncChatChannelIdentity();
-  const identity = currentIdentity();
-  const spectator = active && identity.role === "spectator";
-  elements.chatPanel.hidden = false;
-  elements.chatForm.hidden = !active;
-  elements.chatChannelTabs.hidden = !spectator;
-  elements.chatChannelTitle.textContent = isViewingSpectatorChat()
-    ? "旁观聊天"
-    : "对局聊天";
-  for (const button of elements.chatChannelButtons) {
-    const activeChannel = button.dataset.chatChannel === chatChannelView;
-    button.setAttribute("aria-pressed", String(activeChannel));
-    button.classList.toggle("active", activeChannel);
-  }
-  elements.chatEmpty.textContent = active
-    ? isViewingSpectatorChat()
-      ? "还没有旁观者消息。"
-      : "还没有对局聊天。"
-    : "聊天需要进入联机房间；本地棋局的分析、棋谱、设置和复盘仍然完整可用。";
-  if (!active) {
-    chatPointPicking = false;
-    elements.boardStage.classList.remove("chat-coordinate-picking");
-    elements.chatConnection.textContent = "需要联机";
-    elements.chatConnection.classList.remove("connected");
-    renderChatHistory();
-    return;
-  }
-
-  const connected = roomClient.isConnected;
-  const canSend = canSendCurrentChatChannel();
-  if (!canSend) {
-    chatPointPicking = false;
-    elements.boardStage.classList.remove("chat-coordinate-picking");
-    closeChatPickers();
-  }
-  elements.chatConnection.textContent = connected ? "实时连接" : "正在重连";
-  elements.chatConnection.classList.toggle("connected", connected);
-  elements.chatInput.disabled = !canSend;
-  elements.chatSend.disabled = !canSend || !elements.chatInput.value.trim();
-  elements.chatEmoji.disabled = !canSend;
-  elements.chatSticker.disabled = !canSend;
-  elements.chatPoint.disabled = !canSend;
-  elements.chatPoint.setAttribute("aria-pressed", String(chatPointPicking));
-  if (!chatStatusMessage) {
-    elements.chatStatus.textContent = defaultChatStatus();
-    elements.chatStatus.classList.remove("error");
-  } else {
-    elements.chatStatus.textContent = chatStatusMessage;
-    elements.chatStatus.classList.toggle("error", chatStatusError);
-  }
-  renderChatHistory();
-}
-
-function closeChatPickers() {
-  elements.chatPicker.hidden = true;
-  elements.stickerPicker.hidden = true;
-  elements.chatEmoji.setAttribute("aria-expanded", "false");
-  elements.chatSticker.setAttribute("aria-expanded", "false");
-}
-
-function toggleChatPicker(kind) {
-  const emoji = kind === "emoji";
-  const target = emoji ? elements.chatPicker : elements.stickerPicker;
-  const willOpen = target.hidden;
-  closeChatPickers();
-  target.hidden = !willOpen;
-  (emoji ? elements.chatEmoji : elements.chatSticker)
-    .setAttribute("aria-expanded", String(willOpen));
-}
-
-function insertChatText(text) {
-  const input = elements.chatInput;
-  const start = input.selectionStart ?? input.value.length;
-  const end = input.selectionEnd ?? input.value.length;
-  input.value = `${input.value.slice(0, start)}${text}${input.value.slice(end)}`;
-  const cursor = start + text.length;
-  input.setSelectionRange(cursor, cursor);
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  input.focus();
-}
-
-function setChatPointPicking(enabled) {
-  chatPointPicking = Boolean(enabled) && canSendCurrentChatChannel();
-  closeChatPickers();
-  elements.boardStage.classList.toggle(
-    "chat-coordinate-picking",
-    chatPointPicking,
-  );
-  elements.chatPoint.setAttribute("aria-pressed", String(chatPointPicking));
-  setChatStatus(chatPointPicking
-    ? "请在棋盘上点击要引用的位置；这次点击不会落子。"
-    : "");
-  syncChatUI();
-}
-
-function insertPickedChatPoint(row, col) {
-  const label = formatBoardCoordinate(row, col, boardHeight(), boardWidth());
-  if (!label) {
-    setChatStatus("没有识别到这个棋点。", true);
-    return;
-  }
-  const prefix = elements.chatInput.value && !/\s$/u.test(elements.chatInput.value)
-    ? " "
-    : "";
-  insertChatText(`${prefix}${label} `);
-  setChatPointPicking(false);
-  setChatStatus(`已引用 📍 ${label}；发送后当前频道可以点击定位。`);
-}
-
-async function sendChatPayload(payload, { clearText = false } = {}) {
-  if (!canSendCurrentChatChannel()) return;
-  chatSending = true;
-  setChatStatus("正在发送…");
-  syncChatUI();
-  try {
-    await roomClient.sendChat(payload);
-    if (clearText) elements.chatInput.value = "";
-    closeChatPickers();
-    setChatStatus("");
-  } catch (error) {
-    setChatStatus(localizedErrorMessage(error, "消息发送失败，请稍后重试。"), true);
-  } finally {
-    chatSending = false;
-    syncChatUI();
-  }
-}
-
-function buildChatPickers() {
-  elements.chatPicker.replaceChildren();
-  elements.stickerPicker.replaceChildren();
-  for (const emoji of CHAT_EMOJIS) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = emoji;
-    button.setAttribute("aria-label", translateText(`插入 ${emoji}`));
-    button.addEventListener("click", () => insertChatText(emoji));
-    elements.chatPicker.append(button);
-  }
-  for (const sticker of CHAT_STICKERS) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.setAttribute("aria-label", translateText("发送表情包：{label}", {
-      label: translateText(sticker.label),
-    }));
-    const emoji = document.createElement("span");
-    emoji.textContent = sticker.emoji;
-    const label = document.createElement("span");
-    label.textContent = translateText(sticker.label);
-    button.append(emoji, label);
-    button.addEventListener("click", () => {
-      void sendChatPayload({ kind: "sticker", stickerId: sticker.id });
-    });
-    elements.stickerPicker.append(button);
-  }
-}
-
 function applyOnlineChat({ message, chat }) {
   if (!onlineRoom || !message) return;
   onlineRoom = { ...onlineRoom, chat };
-  lastRenderedChatKey = "";
+  forgetRenderedChat();
   syncChatUI();
   if (chatMessageChannel(message) !== chatChannelView) return;
   if (
@@ -1862,22 +1393,6 @@ function applyOnlineChat({ message, chat }) {
       `${message.senderName} 提到了 📍 ${message.points[0].label}，已标记；点击坐标可转到该处。`,
     );
   }
-}
-
-function resetChatSessionState({ clearDraft = true } = {}) {
-  chatSending = false;
-  chatPointPicking = false;
-  chatReferencePoint = null;
-  chatReferenceFocusViews = false;
-  chatChannelIdentityId = null;
-  chatChannelView = CHAT_CHANNEL_PLAYERS;
-  lastRenderedChatKey = "";
-  setChatStatus("");
-  if (chatReferenceTimer !== null) window.clearTimeout(chatReferenceTimer);
-  chatReferenceTimer = null;
-  elements.boardStage.classList.remove("chat-coordinate-picking");
-  closeChatPickers();
-  if (clearDraft) elements.chatInput.value = "";
 }
 
 function livePositionKey(state = game?.getState?.()) {
@@ -3481,353 +2996,10 @@ function navigateAppPath(path) {
   window.location.assign(new URL(path, window.location.origin));
 }
 
-function loadLobbyModules() {
-  if (!lobbyModulesPromise) {
-    lobbyModulesPromise = Promise.all([
-      import("./multiplayer/lobby.js"),
-      import("./multiplayer/lobbyClient.js"),
-      import("./multiplayer/lobbyPreview.js"),
-    ]).then(([lobby, client, preview]) => ({ ...lobby, ...client, ...preview }));
-  }
-  return lobbyModulesPromise;
-}
-
-function lobbyTopologyLabel(topology) {
-  return topology === TOPOLOGY_TORUS
-    ? "甜甜圈"
-    : topology === TOPOLOGY_MOBIUS
-      ? "莫比乌斯"
-      : "竹筒";
-}
-
-function lobbyStatusLabel(status) {
-  return {
-    setup: "等待设置",
-    invited: "等待接受",
-    playing: "正在进行",
-    finished: "已经结束",
-  }[status] ?? "房间";
-}
-
-function lobbyModeLabel(mode) {
-  return {
-    friend: "好友对战",
-    "human-ai": "人机对战",
-    "ai-ai": "AI 自对弈",
-    local: "同机双人",
-  }[mode] ?? "在线对局";
-}
-
-function lobbyUpdatedLabel(updatedAt) {
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - updatedAt) / 1_000));
-  if (elapsedSeconds < 60) return "刚刚更新";
-  if (elapsedSeconds < 3_600) return `${Math.floor(elapsedSeconds / 60)} 分钟前`;
-  return `${Math.floor(elapsedSeconds / 3_600)} 小时前`;
-}
-
 function appendLobbyMetadata(container, text) {
   const item = document.createElement("span");
   item.textContent = text;
   container.append(item);
-}
-
-function drawLobbyRoomPreview(canvas) {
-  const room = canvas?.__lobbyRoomSummary;
-  if (!canvas || !room || typeof lobbyPreviewRenderer !== "function") return;
-  const fallback = canvas.__lobbyPreviewFallback;
-  try {
-    // The CSS presentation remains 18:11. A modest backing buffer keeps the
-    // thumbnail sharp while avoiding hundreds of full-size canvases in a busy
-    // lobby. Off-screen canvases stay at 1x1 until they become visible.
-    if (canvas.width !== 240) canvas.width = 240;
-    if (canvas.height !== 147) canvas.height = 147;
-    const description = lobbyPreviewRenderer(canvas, room, {
-      width: canvas.width,
-      height: canvas.height,
-      locale: getLocale(),
-    });
-    canvas.title = description;
-    canvas.hidden = false;
-    if (fallback) fallback.hidden = true;
-  } catch {
-    canvas.hidden = true;
-    if (fallback) {
-      fallback.hidden = false;
-      fallback.textContent = `${room.width} × ${room.height} 棋盘预览暂不可用`;
-    }
-  }
-}
-
-function ensureLobbyPreviewObserver() {
-  if (lobbyPreviewObserver || typeof window.IntersectionObserver !== "function") return;
-  lobbyPreviewObserver = new window.IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      if (entry.isIntersecting) {
-        lobbyVisiblePreviews.add(entry.target);
-        drawLobbyRoomPreview(entry.target);
-      } else {
-        lobbyVisiblePreviews.delete(entry.target);
-      }
-    }
-  }, { rootMargin: "180px 0px" });
-}
-
-function createLobbyRoomCard() {
-  const card = document.createElement("article");
-  card.className = "lobby-room-card";
-
-  const header = document.createElement("div");
-  header.className = "lobby-room-card-header";
-  const title = document.createElement("strong");
-  const status = document.createElement("span");
-  status.className = "lobby-room-status-badge";
-  const badges = document.createElement("span");
-  badges.className = "lobby-room-card-badges";
-  const gameBadge = document.createElement("span");
-  gameBadge.className = "lobby-room-game-badge";
-  badges.append(gameBadge, status);
-  header.append(title, badges);
-
-  const metadata = document.createElement("div");
-  metadata.className = "lobby-room-meta";
-
-  const players = document.createElement("div");
-  players.className = "lobby-room-players";
-  const blackName = document.createElement("span");
-  const versus = document.createElement("span");
-  versus.className = "versus";
-  versus.textContent = "VS";
-  const whiteName = document.createElement("span");
-  players.append(blackName, versus, whiteName);
-
-  const preview = document.createElement("figure");
-  preview.className = "lobby-room-preview";
-  const canvas = document.createElement("canvas");
-  canvas.width = 1;
-  canvas.height = 1;
-  const fallback = document.createElement("span");
-  fallback.className = "lobby-room-preview-fallback";
-  fallback.hidden = true;
-  canvas.__lobbyPreviewFallback = fallback;
-  preview.append(canvas, fallback);
-
-  const details = document.createElement("div");
-  details.className = "lobby-room-card-details";
-  details.append(metadata, players);
-  const body = document.createElement("div");
-  body.className = "lobby-room-card-body";
-  body.append(preview, details);
-
-  const footer = document.createElement("div");
-  footer.className = "lobby-room-card-footer";
-  const activity = document.createElement("small");
-  const actions = document.createElement("div");
-  actions.className = "room-card-actions";
-
-  footer.append(activity, actions);
-  card.append(header, body, footer);
-  card.__lobbyElements = {
-    title,
-    status,
-    gameBadge,
-    metadata,
-    blackName,
-    whiteName,
-    canvas,
-    activity,
-    actions,
-  };
-  return card;
-}
-
-function updateLobbyRoomCard(card, room) {
-  const view = card.__lobbyElements;
-  card.dataset.roomCode = room.code;
-  view.title.textContent = `房间 ${room.code}`;
-  view.status.className = `lobby-room-status-badge ${room.status}`;
-  view.status.textContent = lobbyStatusLabel(room.status);
-  // Which game the room plays (absent in Go rooms' summaries).
-  const gameLabels = lobbyGameLabels(room);
-  view.gameBadge.className = `lobby-room-game-badge ${gameLabels.gameType}`;
-  view.gameBadge.textContent = gameLabels.badge;
-  view.gameBadge.hidden = !ENABLE_MULTI_GAME;
-  card.dataset.gameType = gameLabels.gameType;
-
-  view.metadata.replaceChildren();
-  appendLobbyMetadata(view.metadata, `${room.width} × ${room.height}`);
-  if (gameLabels.rule) appendLobbyMetadata(view.metadata, gameLabels.rule);
-  appendLobbyMetadata(view.metadata, lobbyTopologyLabel(room.topology));
-  appendLobbyMetadata(view.metadata, lobbyModeLabel(room.mode));
-  if (room.timed) appendLobbyMetadata(view.metadata, "计时");
-  if (room.roundNumber > 0) appendLobbyMetadata(view.metadata, `第 ${room.roundNumber} 局`);
-  appendLobbyMetadata(view.metadata, room.moveCount > 0 ? `${room.moveCount} 手` : "空盘");
-
-  view.blackName.textContent = room.players?.find((player) => player.color === BLACK)?.name || "等待黑方";
-  view.whiteName.textContent = room.players?.find((player) => player.color === WHITE)?.name || "等待白方";
-  view.activity.textContent = `${room.spectatorCount || 0} 人观战 · ${lobbyUpdatedLabel(room.updatedAt)}`;
-
-  view.actions.replaceChildren();
-  const resumable = roomClient.hasStoredSession(room.code);
-  if (resumable || room.joinable) {
-    const join = document.createElement("button");
-    join.type = "button";
-    join.className = resumable ? "primary-button" : "secondary-button";
-    join.dataset.lobbyRoom = room.code;
-    join.dataset.lobbyRole = resumable ? "resume" : "player";
-    join.textContent = resumable ? "返回房间" : "加入对局";
-    view.actions.append(join);
-  }
-  if (room.watchable) {
-    const watch = document.createElement("button");
-    watch.type = "button";
-    watch.className = "secondary-button";
-    watch.dataset.lobbyRoom = room.code;
-    watch.dataset.lobbyRole = "spectator";
-    watch.textContent = "观战";
-    view.actions.append(watch);
-  }
-
-  view.canvas.__lobbyRoomSummary = room;
-  if (lobbyVisiblePreviews.has(view.canvas)) drawLobbyRoomPreview(view.canvas);
-  else if (lobbyPreviewObserver) lobbyPreviewObserver.observe(view.canvas);
-  else {
-    lobbyVisiblePreviews.add(view.canvas);
-    drawLobbyRoomPreview(view.canvas);
-  }
-}
-
-async function renderLobbyRooms() {
-  if (appRouteMode !== "lobby") return;
-  const { filterLobbyRooms, renderLobbyBoardPreview } = await loadLobbyModules();
-  lobbyPreviewRenderer = renderLobbyBoardPreview;
-  ensureLobbyPreviewObserver();
-  const filtered = filterLobbyRooms(lobbyRooms, {
-    status: lobbyStatusFilter,
-    game: ENABLE_MULTI_GAME ? elements.lobbyGameFilter.value : "all",
-    topology: elements.lobbyTopologyFilter.value,
-    size: elements.lobbySizeFilter.value,
-    mode: elements.lobbyModeFilter.value,
-  });
-  const visibleCodes = new Set(filtered.map((room) => room.code));
-  for (const [code, card] of lobbyRoomCards) {
-    if (visibleCodes.has(code)) continue;
-    const canvas = card.__lobbyElements?.canvas;
-    if (canvas) {
-      lobbyPreviewObserver?.unobserve(canvas);
-      lobbyVisiblePreviews.delete(canvas);
-    }
-    card.remove();
-    lobbyRoomCards.delete(code);
-  }
-
-  let cursor = elements.lobbyRoomList.firstElementChild;
-  for (const room of filtered) {
-    let card = lobbyRoomCards.get(room.code);
-    if (!card) {
-      card = createLobbyRoomCard();
-      lobbyRoomCards.set(room.code, card);
-    }
-    updateLobbyRoomCard(card, room);
-    if (card !== cursor) elements.lobbyRoomList.insertBefore(card, cursor);
-    cursor = card.nextElementSibling;
-  }
-  elements.lobbyEmpty.hidden = filtered.length > 0;
-  if (!lobbyLoading) syncLobbyStatus(filtered.length);
-}
-
-function lobbyCountText(shown, total) {
-  return shown === total
-    ? `共 ${total} 个公开房间`
-    : `显示 ${shown} / 共 ${total} 个公开房间`;
-}
-
-/** The status line counts the rooms the filters leave visible. */
-function syncLobbyStatus(shown) {
-  // The error is kept as an object so a language switch re-renders it.
-  const text = lobbyLoadError
-    ? localizedErrorMessage(lobbyLoadError, "暂时无法读取在线大厅。")
-    : lobbyCountText(shown, lobbyRooms.length);
-  // An unchanged count must not re-announce in this live region every poll;
-  // compare with the rendered (possibly translated) text.
-  if (elements.lobbyStatus.textContent !== translateText(text)) {
-    elements.lobbyStatus.textContent = text;
-  }
-  elements.lobbyStatus.classList.toggle("error", Boolean(lobbyLoadError));
-}
-
-function clearLobbyPoll() {
-  if (lobbyPollTimer !== null) window.clearTimeout(lobbyPollTimer);
-  lobbyPollTimer = null;
-}
-
-function lobbyPollingActive() {
-  return appRouteMode === "lobby" && document.visibilityState !== "hidden";
-}
-
-function scheduleLobbyPoll(delayMs = LOBBY_POLL_INTERVAL_MS) {
-  clearLobbyPoll();
-  if (!lobbyPollingActive()) return;
-  lobbyPollTimer = window.setTimeout(() => {
-    lobbyPollTimer = null;
-    void refreshLobby();
-  }, delayMs);
-}
-
-async function refreshLobby({ announce = false } = {}) {
-  if (appRouteMode !== "lobby" || lobbyLoading) return;
-  clearLobbyPoll();
-  lobbyLoading = true;
-  lobbyRefreshController?.abort();
-  const request = new AbortController();
-  lobbyRefreshController = request;
-  elements.lobbyRefresh.disabled = true;
-  if (announce || lobbyLastRefreshAt === 0) {
-    elements.lobbyStatus.classList.remove("error");
-    elements.lobbyStatus.textContent = "正在读取公开房间…";
-  }
-  let nextPollMs = LOBBY_POLL_INTERVAL_MS;
-  try {
-    const { fetchLobbyRooms } = await loadLobbyModules();
-    lobbyRooms = await fetchLobbyRooms({ signal: request.signal });
-    lobbyLoadError = null;
-  } catch (error) {
-    if (error?.cause?.name === "AbortError" || request.signal.aborted) return;
-    lobbyLoadError = error ?? new Error("");
-    if (error?.code === "RATE_LIMITED" || error?.status === 429) {
-      nextPollMs = Math.max(
-        LOBBY_RATE_LIMIT_BACKOFF_MS,
-        (Number(error?.retryAfterSeconds) || 0) * 1_000,
-      );
-    }
-  } finally {
-    if (lobbyRefreshController === request) lobbyLoading = false;
-    elements.lobbyRefresh.disabled = false;
-  }
-  lobbyLastRefreshAt = Date.now();
-  await renderLobbyRooms();
-  scheduleLobbyPoll(nextPollMs);
-}
-
-function cancelLobbyRequest() {
-  clearLobbyPoll();
-  lobbyRefreshController?.abort();
-  lobbyRefreshController = null;
-  lobbyLoading = false;
-}
-
-function resumeLobbyPolling() {
-  if (appRouteMode !== "lobby") return;
-  if (document.visibilityState === "hidden") {
-    clearLobbyPoll();
-    return;
-  }
-  const elapsed = Date.now() - lobbyLastRefreshAt;
-  if (elapsed >= LOBBY_POLL_INTERVAL_MS) void refreshLobby();
-  else scheduleLobbyPoll(LOBBY_POLL_INTERVAL_MS - elapsed);
-}
-
-function loadLobbyOnce() {
-  void refreshLobby({ announce: true });
 }
 
 function showAppScreen(mode) {
@@ -3970,13 +3142,7 @@ function restoreLobbyBoardSettings() {
   };
   // Settings saved before multiple games have no gameType: they are Go.
   const gameType = availableGameType(saved.gameType ?? GAME_GO);
-  for (const [savedGame, size] of Object.entries(saved.sizesByGame ?? {})) {
-    if (availableGameType(savedGame) !== savedGame) continue;
-    pendingDimensionsByGame.set(savedGame, {
-      width: clampBoardDimension(savedGame, size?.width),
-      height: clampBoardDimension(savedGame, size?.height),
-    });
-  }
+  restoreSizesByGame(saved.sizesByGame);
   const options = {
     gameType,
     ...(gameType === GAME_GOMOKU ? { ruleSet: normalizeRuleSet(saved.ruleSet) } : {}),
@@ -4159,10 +3325,24 @@ function roomSeat(color) {
   return onlineRoom?.players?.find((player) => player.color === color) ?? null;
 }
 
-function onlineModeLabel(mode = onlineRoom?.match?.mode) {
+/** The online-mode option of a round or invitation (guest-AI included). */
+function onlineModeOption(match) {
+  const black = match?.controllers?.[BLACK];
+  const white = match?.controllers?.[WHITE];
+  if (match?.mode === ONLINE_MODE_HUMAN_AI &&
+      black?.kind === MATCH_CONTROLLER_AI &&
+      white?.kind === MATCH_CONTROLLER_HUMAN &&
+      white.operatorId && white.operatorId !== black.operatorId) {
+    return ONLINE_MODE_GUEST_AI;
+  }
+  return match?.mode ?? ONLINE_MODE_FRIEND;
+}
+
+function onlineModeLabel(mode = onlineModeOption(onlineRoom?.match)) {
   return {
     [ONLINE_MODE_FRIEND]: "好友对局",
     [ONLINE_MODE_HUMAN_AI]: "在线人机",
+    [ONLINE_MODE_GUEST_AI]: "访客对 AI",
     [ONLINE_MODE_AI_AI]: "在线 AI 对弈",
     [ONLINE_MODE_LOCAL]: "在线同机双人",
   }[mode] ?? "在线房间";
@@ -4200,7 +3380,11 @@ function onlineWhiteSeatIsOpen() {
 
 function onlineInvitationSummary(request = onlineRoom?.match?.request) {
   if (!request?.settings) return "等待被邀请方回应。";
-  return boardSettingsSummary(request.settings);
+  const summary = boardSettingsSummary(request.settings);
+  if (onlineModeOption(request) !== ONLINE_MODE_GUEST_AI) return summary;
+  const modelId = request.controllers[BLACK].modelId ??
+    defaultAIModelIdForGame(gameTypeOf(request.settings));
+  return `访客执白，AI 执黑（${aiSeatName(modelId)}）· ${summary}`;
 }
 
 function updateRoomUI() {
@@ -4461,6 +3645,8 @@ function updateRoomUI() {
       elements.roomHint.textContent += ` · ${spectatorCount} 人观战`;
     }
   }
+  syncRoomManagement(onlineControlsAvailable);
+  syncAbandonmentPanel();
 
   const gameRequest = active ? onlineRoom?.match?.request ?? null : null;
   const identityId = identity.playerId ?? identity.id;
@@ -4474,10 +3660,11 @@ function updateRoomUI() {
     active && roomMatchStatus === ONLINE_MATCH_INVITED && gameRequest
   );
   if (gameRequest) {
+    const guestAIRequest = onlineModeOption(gameRequest) === ONLINE_MODE_GUEST_AI;
     elements.gameInvitationTitle.textContent = ownsGameRequest
       ? "邀请已发出"
       : mayAnswerGameRequest
-        ? "房主邀请你开始对局"
+        ? guestAIRequest ? "房主邀请你执白对战 AI" : "房主邀请你开始对局"
         : "等待受邀玩家回应";
     elements.gameInvitationSummary.textContent = onlineInvitationSummary(gameRequest);
   }
@@ -4590,22 +3777,30 @@ function updateRoomUI() {
   // Games without an AI offer only friend and same-browser rounds.
   const pendingMatchModes = gameRulesOf({ gameType: pendingGameType }).matchModes;
   for (const option of elements.onlineMatchMode.options) {
-    option.disabled = Boolean(
-      occupiedWhiteMember && option.value !== ONLINE_MODE_FRIEND,
-    ) || !pendingMatchModes.includes(option.value);
-    option.hidden = !pendingMatchModes.includes(option.value);
+    const guestAI = option.value === ONLINE_MODE_GUEST_AI;
+    const offered = pendingMatchModes.includes(guestAI ? ONLINE_MODE_HUMAN_AI : option.value);
+    // Friend and guest-AI rounds need the guest in the White seat; the
+    // others need that seat free.
+    option.disabled = !offered || (guestAI
+      ? !invitedHumanWhite
+      : Boolean(occupiedWhiteMember && option.value !== ONLINE_MODE_FRIEND));
+    option.hidden = !offered;
   }
-  if (
-    (occupiedWhiteMember && elements.onlineMatchMode.value !== ONLINE_MODE_FRIEND) ||
-    !pendingMatchModes.includes(elements.onlineMatchMode.value)
-  ) {
+  if (elements.onlineMatchMode.selectedOptions[0]?.disabled) {
     elements.onlineMatchMode.value = ONLINE_MODE_FRIEND;
   }
   const selectedOnlineMode = elements.onlineMatchMode.value;
   const onlineModeUsesAI = [ONLINE_MODE_HUMAN_AI, ONLINE_MODE_AI_AI].includes(
     selectedOnlineMode,
   );
-  const onlineModeUsesBlackAI = selectedOnlineMode === ONLINE_MODE_AI_AI;
+  const onlineModeUsesBlackAI = [ONLINE_MODE_AI_AI, ONLINE_MODE_GUEST_AI].includes(selectedOnlineMode);
+  const guestAINote = "访客执白；AI 执黑，在你的浏览器中运行";
+  elements.onlineMatchBlackAiModelNote.textContent = selectedOnlineMode === ONLINE_MODE_GUEST_AI
+    ? guestAINote
+    : "AI 对 AI 时黑白双方可分别选择模型";
+  elements.onlineMatchBlackAiLevelNote.textContent = selectedOnlineMode === ONLINE_MODE_GUEST_AI
+    ? guestAINote
+    : "AI 对 AI 时黑白双方可分别选择难度";
   // Go picks a KataGo model; Gomoku and Othello show their engine and a
   // difficulty that only the host's browser uses.
   const onlineGameEngine = usesGameAiProtocol(pendingGameType);
@@ -4623,7 +3818,8 @@ function updateRoomUI() {
   elements.onlineMatchAiLevelField.hidden = !onlineGameEngine || !onlineModeUsesAI;
   elements.onlineMatchBlackAiLevel.disabled = !canChangeNextGameSettings || !onlineModeUsesBlackAI;
   elements.onlineMatchAiLevel.disabled = !canChangeNextGameSettings || !onlineModeUsesAI;
-  const showFriendInvitationDetails = active && selectedOnlineMode === ONLINE_MODE_FRIEND;
+  const showFriendInvitationDetails = active &&
+    [ONLINE_MODE_FRIEND, ONLINE_MODE_GUEST_AI].includes(selectedOnlineMode);
   elements.friendRoomCodeRow.hidden = !showFriendInvitationDetails;
   elements.copyRoomLink.hidden = !showFriendInvitationDetails;
   elements.friendSeatList.hidden = !showFriendInvitationDetails;
@@ -4976,7 +4172,7 @@ function applyOnlineRoom(room) {
     onlineAIPauseIntent = null;
   }
   if (!isOnlineNextGameSetup()) {
-    elements.onlineMatchMode.value = room.match?.mode ?? ONLINE_MODE_FRIEND;
+    elements.onlineMatchMode.value = onlineModeOption(room.match);
     reflectOnlineAIModelControls(room.match?.controllers);
   }
   const {
@@ -5049,7 +4245,7 @@ function applyOnlineRoom(room) {
     reflectGameOptions(options);
     rematchSetupTransport = MATCH_TRANSPORT_ONLINE;
     rematchPreviewGame = createGameFromOptions(options);
-    elements.onlineMatchMode.value = room.match?.request?.mode ?? room.match?.mode ?? ONLINE_MODE_FRIEND;
+    elements.onlineMatchMode.value = onlineModeOption(room.match?.request ?? room.match);
     reflectOnlineAIModelControls(room.match?.request?.controllers ?? room.match?.controllers);
     rebuildViews(options.width, options.height, options.topology);
     setViewMode(activeViewMode);
@@ -5087,10 +4283,7 @@ function applyOnlineRoom(room) {
   if (!isOnlineNextGameSetup() && (
     !sameBoardDimensions(previousDimensions, game) || previousTopology !== game.topology
   )) {
-    if (chatReferenceTimer !== null) window.clearTimeout(chatReferenceTimer);
-    chatReferenceTimer = null;
-    chatReferencePoint = null;
-    chatReferenceFocusViews = false;
+    clearChatReference();
     rebuildViews(boardWidth(), boardHeight(), game.topology);
   }
   if (!isOnlineNextGameSetup()) {
@@ -5589,6 +4782,7 @@ function selectedOnlineMatchMode() {
   return [
     ONLINE_MODE_FRIEND,
     ONLINE_MODE_HUMAN_AI,
+    ONLINE_MODE_GUEST_AI,
     ONLINE_MODE_AI_AI,
     ONLINE_MODE_LOCAL,
   ].includes(mode) ? mode : ONLINE_MODE_FRIEND;
@@ -5630,9 +4824,11 @@ function reflectOnlineAIModelControls(controllers = null) {
 
 function onlineGameRequestPayload(options) {
   const aiModelIds = selectedOnlineAIModelIds();
+  const mode = selectedOnlineMatchMode();
   return {
     ...options,
-    mode: selectedOnlineMatchMode(),
+    mode: mode === ONLINE_MODE_GUEST_AI ? ONLINE_MODE_HUMAN_AI : mode,
+    ...(mode === ONLINE_MODE_GUEST_AI ? { aiOpponent: "guest" } : {}),
     aiModelId: aiModelIds[WHITE],
     aiModelIds,
   };
@@ -5666,18 +4862,19 @@ async function requestOnlineGame(options) {
   const aiModelIds = selectedOnlineAIModelIds();
   const selectedModelIds = mode === ONLINE_MODE_AI_AI
     ? [aiModelIds[BLACK], aiModelIds[WHITE]]
-    : [aiModelIds[WHITE]];
+    : mode === ONLINE_MODE_GUEST_AI ? [aiModelIds[BLACK]] : [aiModelIds[WHITE]];
+  const invites = [ONLINE_MODE_FRIEND, ONLINE_MODE_GUEST_AI].includes(mode);
   if (
-    [ONLINE_MODE_HUMAN_AI, ONLINE_MODE_AI_AI].includes(mode) &&
+    [ONLINE_MODE_HUMAN_AI, ONLINE_MODE_GUEST_AI, ONLINE_MODE_AI_AI].includes(mode) &&
     !usesGameAiProtocol(pendingGameType) &&
     selectedModelIds.some((modelId) => getAIModel(modelId).heavy) &&
     !window.confirm(translateText(
       "b18 首次需要下载约 93.4 MB，并会占用数百 MB 内存与显存、增加耗电和发热。仅建议桌面端 WebGPU。确定使用吗？",
     ))
   ) return false;
-  setMessage(mode === ONLINE_MODE_FRIEND ? "正在发送对局邀请…" : "正在开始在线对局…");
+  setMessage(invites ? "正在发送对局邀请…" : "正在开始在线对局…");
   const sent = await sendOnlineCommand("request_game", onlineGameRequestPayload(options));
-  if (sent && mode === ONLINE_MODE_FRIEND) {
+  if (sent && invites) {
     setMessage("对局邀请已发出，等待对方接受。所有设置会保留在当前房间。", false);
   }
   return sent;
@@ -5851,10 +5048,7 @@ function enterNextGameSetup() {
   }
   cancelAIThinking();
   cancelReplayAIReview({ terminate: true });
-  if (chatReferenceTimer !== null) window.clearTimeout(chatReferenceTimer);
-  chatReferenceTimer = null;
-  chatReferencePoint = null;
-  chatReferenceFocusViews = false;
+  clearChatReference();
   setChatPointPicking(false);
   const options = reflectPreviousGameOptions();
   rematchSetupTransport = hasOnlineSession()
@@ -5862,7 +5056,7 @@ function enterNextGameSetup() {
     : MATCH_TRANSPORT_LOCAL;
   rematchPreviewGame = createGameFromOptions(options);
   if (hasOnlineSession()) {
-    elements.onlineMatchMode.value = onlineRoom?.match?.mode ?? ONLINE_MODE_FRIEND;
+    elements.onlineMatchMode.value = onlineModeOption(onlineRoom?.match);
     reflectOnlineAIModelControls(onlineRoom?.match?.controllers);
   }
   setSidebarTab("settings", { focus: true });
@@ -7098,6 +6292,7 @@ for (const button of elements.sizeButtons) {
     const size = Number(button.dataset.boardSize);
     if (!isBoardSetupMode()) return;
     setPendingDimensions(size, size);
+    rememberGameTypeChoice();
     resetLobbyPreview();
   });
 }
@@ -7144,6 +6339,7 @@ function commitPendingDimensionInputs() {
   elements.boardLimitNote.hidden = !note;
   elements.customWidth.setAttribute("aria-invalid", "false");
   elements.customHeight.setAttribute("aria-invalid", "false");
+  rememberGameTypeChoice();
   resetLobbyPreview();
   setMessage(isNextGameSetup()
     ? `下一局预览已更新为 ${pendingWidth} × ${pendingHeight}；确认后会使用这套设置。`
@@ -7163,6 +6359,7 @@ function scheduleLobbyDimensionPreview() {
   if (lobbyPreviewFrame !== null) window.cancelAnimationFrame(lobbyPreviewFrame);
   lobbyPreviewFrame = null;
   setPendingDimensions(width, height);
+  rememberGameTypeChoice();
   resetLobbyPreview();
 }
 
@@ -7299,6 +6496,17 @@ function setViewMode(mode) {
                 : "观察单面扭转与唯一边界 · 双指缩放"
               : finePointer ? "滚轮缩放" : "双指缩放",
         };
+  // On touch screens a free-drag board lets swipes that start vertically
+  // scroll the page, unless the page is fixed from the toolbar.
+  const freeDrag = needsFreeBoardDrag({
+    view: flatActive ? "flat" : arcActive ? "arc" : "3d",
+    topology: torus ? "torus" : mobius ? "mobius" : "cylinder",
+  });
+  elements.togglePageScroll.hidden = finePointer || !freeDrag;
+  elements.togglePageScroll.setAttribute("aria-pressed", String(boardPageScrollLocked));
+  if (!finePointer && freeDrag && !boardPageScrollLocked) {
+    viewCopy.primaryGesture = "横向起手可任意拖动 · 竖滑滚动页面";
+  }
 
   elements.toggleRotation.hidden = flatActive;
   elements.toggleRotation.setAttribute(
@@ -7325,6 +6533,20 @@ function setViewMode(mode) {
 for (const button of elements.viewButtons) {
   button.addEventListener("click", () => setViewMode(button.dataset.viewMode));
 }
+
+elements.togglePageScroll.addEventListener("click", () => {
+  boardPageScrollLocked = !boardPageScrollLocked;
+  try {
+    window.localStorage.setItem(BOARD_SCROLL_LOCK_KEY, String(boardPageScrollLocked));
+  } catch {
+    // The choice still applies to this page.
+  }
+  setBoardPageScrollLocked(boardPageScrollLocked);
+  setViewMode(activeViewMode);
+  setMessage(boardPageScrollLocked
+    ? "已固定页面：在棋盘上任意方向拖动都只转动棋盘，可从棋盘外滚动页面。"
+    : "竖向滑动会滚动页面；横向起手的拖动仍可转向任意方向。");
+});
 
 elements.resetView.addEventListener("click", () => {
   activeBoardView()?.resetView();
@@ -7365,7 +6587,13 @@ async function createOnlineRoom({ pendingPlayerId = "" } = {}) {
   try {
     const result = pendingPlayerId
       ? await roomClient.retryPendingCreate(pendingRequest.roomCode, pendingPlayerId, { signal })
-      : await roomClient.createRoom({ name, ...getNewGameOptions(), signal });
+      : await roomClient.createRoom({
+        name,
+        ...getNewGameOptions(),
+        // Unlisted rooms are joined by code or invitation link only.
+        listed: !elements.roomUnlisted.checked,
+        signal,
+      });
     if (signal.aborted) return;
     if (matchLifecycle === MATCH_LIFECYCLE_LOBBY) {
       matchLifecycle = MATCH_LIFECYCLE_WAITING;
@@ -7728,25 +6956,7 @@ elements.lobbyJoinRoom.addEventListener("click", () => {
 });
 elements.lobbyRefresh.addEventListener("click", () => void refreshLobby({ announce: true }));
 document.addEventListener("visibilitychange", resumeLobbyPolling);
-for (const button of elements.lobbyStatusButtons) {
-  button.addEventListener("click", () => {
-    lobbyStatusFilter = button.dataset.lobbyStatus || "all";
-    for (const candidate of elements.lobbyStatusButtons) {
-      const active = candidate === button;
-      candidate.classList.toggle("active", active);
-      candidate.setAttribute("aria-pressed", String(active));
-    }
-    void renderLobbyRooms();
-  });
-}
-for (const filter of [
-  elements.lobbyGameFilter,
-  elements.lobbyTopologyFilter,
-  elements.lobbySizeFilter,
-  elements.lobbyModeFilter,
-]) {
-  filter.addEventListener("change", () => void renderLobbyRooms());
-}
+wireLobbyFilters();
 elements.lobbyRoomList.addEventListener("click", (event) => {
   const target = event.target.closest("[data-lobby-room]");
   if (!target) return;
@@ -7764,6 +6974,7 @@ elements.copyRoomLink.addEventListener("click", () => void copyInvitationLink())
 elements.leaveRoom.addEventListener("click", () => void leaveOnlineRoom());
 elements.attachRoomAi.addEventListener("click", showAIDialog);
 elements.detachRoomAi.addEventListener("click", () => void detachOnlineAI());
+wireRoomManagement();
 elements.opponentSeatAction.addEventListener("click", async () => {
   const action = elements.opponentSeatAction.dataset.action;
   if (action === "release_seat") {
@@ -7810,19 +7021,7 @@ elements.chatSticker.addEventListener("click", () => toggleChatPicker("sticker")
 elements.chatPoint.addEventListener("click", () => {
   setChatPointPicking(!chatPointPicking);
 });
-for (const button of elements.chatChannelButtons) {
-  button.addEventListener("click", () => {
-    if (currentIdentity().role !== "spectator") return;
-    const channel = button.dataset.chatChannel;
-    if (![CHAT_CHANNEL_PLAYERS, CHAT_CHANNEL_SPECTATORS].includes(channel)) return;
-    if (chatChannelView === channel) return;
-    chatChannelView = channel;
-    lastRenderedChatKey = "";
-    setChatStatus("");
-    setChatPointPicking(false);
-    syncChatUI();
-  });
-}
+wireChatChannels();
 elements.toggleSound.addEventListener("click", () => {
   soundEnabled = !soundEnabled;
   gameSounds.setEnabled(soundEnabled);
@@ -7920,12 +7119,16 @@ elements.onlineMatchAiModel.value = preferredAIModelId;
 syncAIDialogModelPresentation();
 syncAIMatchModePresentation();
 const savedGameChoice = savedGameTypeChoice();
-if (savedGameChoice && savedGameChoice.gameType !== GAME_GO) {
+if (savedGameChoice) {
+  // Each game reopens on the board size this browser last used for it.
+  restoreSizesByGame(savedGameChoice.sizesByGame);
   setPendingGameType(savedGameChoice.gameType, { ruleSet: savedGameChoice.ruleSet });
   const limits = BOARD_LIMITS[pendingGameType];
-  setPendingDimensions(limits.defaultWidth, limits.defaultHeight);
-} else if (savedGameChoice) {
-  setPendingGameType(GAME_GO, { ruleSet: savedGameChoice.ruleSet });
+  const remembered = pendingDimensionsByGame.get(pendingGameType);
+  setPendingDimensions(
+    remembered?.width ?? limits.defaultWidth,
+    remembered?.height ?? limits.defaultHeight,
+  );
 } else {
   syncGameTypeControls();
 }
@@ -8027,3 +7230,53 @@ window.addEventListener(
   },
   { once: true },
 );
+
+// Page state and helpers the src/app modules read (live bindings).
+export {
+  CHAT_EMOJIS,
+  LOBBY_POLL_INTERVAL_MS,
+  LOBBY_RATE_LIMIT_BACKOFF_MS,
+  ONLINE_MATCH_PLAYING,
+  activeBoardView,
+  aiControlsColor,
+  appRouteMode,
+  appendLobbyMetadata,
+  boardHeight,
+  boardWidth,
+  cloneSerializable,
+  colorName,
+  currentAIName,
+  currentIdentity,
+  currentTimeoutOutcome,
+  elements,
+  enterReplay,
+  exitReplay,
+  game,
+  gameRulesOf,
+  hasOnlineSession,
+  isAIMode,
+  isNextGameSetup,
+  isOnlineHost,
+  isOnlinePlayer,
+  isReplaying,
+  liveDisplayedGame,
+  maybeStartAITurn,
+  onlineBusy,
+  onlineCommandPending,
+  onlineController,
+  onlineMatchStatus,
+  onlineRoom,
+  onlineStateSynchronized,
+  pendingTopology,
+  replayEventCount,
+  replaySession,
+  replaySource,
+  roomClient,
+  roomSeat,
+  sendOnlineCommand,
+  setMessage,
+  syncReferenceFocusRotationState,
+  topologyName,
+  topologySurfaceName,
+  updateUI,
+};

@@ -116,6 +116,15 @@ export class BadukLobby {
       if (staleAgainst(summary, current) || staleAgainst(summary, watermark)) {
         return jsonResponse({ ok: true, ignored: "stale" });
       }
+      if (room.listed === false) {
+        // An unlisted room is a versioned removal: its watermark keeps an
+        // older listed snapshot that arrives late from bringing it back.
+        if (!current && !watermark) return jsonResponse({ ok: true, ignored: "unlisted" });
+        this.rooms.delete(summary.code);
+        this.remember(summary);
+        await this.persist();
+        return jsonResponse({ ok: true, removed: "unlisted" });
+      }
       if (!current && !watermark &&
           this.rooms.size + this.watermarks.size >= MAX_TRACKED_CODES) {
         return jsonResponse({ error: "Room directory is at capacity." }, 503);

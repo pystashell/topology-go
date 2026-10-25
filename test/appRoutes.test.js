@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { appSource } from "./helpers/appSource.js";
 
 const htmlSource = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-const mainSource = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+const mainSource = appSource();
 
 test("single and online lobby remain separate, with an explicit navigation entry", () => {
   assert.doesNotMatch(htmlSource, /id="header-lobby-link"/u);
@@ -15,11 +16,12 @@ test("single and online lobby remain separate, with an explicit navigation entry
 });
 
 test("lobby networking loads on entry and its modules stay lazy", () => {
-  assert.match(mainSource, /import\("\.\/multiplayer\/lobby\.js"\)/u);
-  assert.match(mainSource, /import\("\.\/multiplayer\/lobbyClient\.js"\)/u);
+  // The lobby screen (src/app/lobbyScreen.js) imports them on demand.
+  assert.match(mainSource, /import\("\.\.\/multiplayer\/lobby\.js"\)/u);
+  assert.match(mainSource, /import\("\.\.\/multiplayer\/lobbyClient\.js"\)/u);
   assert.doesNotMatch(
     mainSource,
-    /^import .*from "\.\/multiplayer\/lobby(?:Client)?\.js";/mu,
+    /^import .*from "\.\.?\/multiplayer\/lobby(?:Client)?\.js";/mu,
   );
   assert.match(
     mainSource,

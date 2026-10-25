@@ -1,4 +1,4 @@
-# 3D Baduk 发布与回滚
+# Topology Go 发布与回滚
 
 本项目把一次发布绑定为四个可核对的标识：
 
@@ -25,15 +25,15 @@ GitHub Release 正文会记录 commit、来源分支和两个 Cloudflare ID。�
 
 ## 本轮候选版本
 
-仓库已经准备好以下候选版本清单；正式发布后，tag、Worker Version、Deployment 与 GitHub prerelease 会共同组成可审计记录：
+`public/version.json` 是候选版本清单（版本号随发布分支更新）；正式发布后，tag、Worker Version、Deployment 与 GitHub prerelease 会共同组成可审计记录。已发布：`0.3.0-rc.1`（2026-10-24，多棋种首次上线）。
 
-```json
-{
-  "version": "0.2.0-rc.9",
-  "tag": "v0.2.0-rc.9",
-  "channel": "prerelease"
-}
-```
+### 0.3.0-rc.2 的兼容边界
+
+- **大房间分块存储**：房间快照不超过 1.5 MiB 时仍是 `room` 下的一个值，与旧版本逐字节一致。更大的房间（30×30 上一千多手的长局）在 `room` 存清单、在 `room:chunk:N` 存分段 JSON，一次原子写入（`worker/roomStorage.js`）。回滚到没有分块存储的版本时，这类房间按未知状态处理：停止服务（`ROOM_RESTORE_FAILED`）并保留存储，重新部署后原样恢复；其他房间不受影响。
+- **不公开房间**：只有不公开的房间存 `listed: false`，公开房间不写新字段。旧版本会忽略这个字段，回滚后这些房间会重新出现在大厅里。
+- **访客执白对 AI**：邀请以 `mode: "human-ai"` 存储，黑方是由房主操作的 AI，白方是访客。旧版本只接受好友邀请，因此回滚时仍在等待回应的这类邀请会让房间恢复失败（`ROOM_RESTORE_FAILED`，存储保留）；已经开始的对局能正常读取。
+- **新的房间动作**：`set_listed`、`remove_member`、`claim_abandonment` 只由新页面发送。旧服务器会以 `INVALID_COMMAND` 拒绝，房间状态不变。
+- **判对方弃局**：离线时间不写存储，而是记在其他仍然连着的 WebSocket attachment 上，休眠后照样能恢复；对象彻底重启后从重启时刻重新计时（只会更晚，不会更早允许判弃局）。被移出的成员收到 `REMOVED_FROM_ROOM`，连接以 4401 关闭，所有版本的页面都会停止重连。
 
 ### 0.2.0-rc.9 的联机兼容边界
 

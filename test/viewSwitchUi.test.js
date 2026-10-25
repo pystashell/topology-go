@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { appSource } from "./helpers/appSource.js";
 
-const htmlSource = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-const mainSource = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+// Windows checkouts may use CRLF; the multi-line patterns below expect LF.
+const readSource = (path) => readFileSync(new URL(path, import.meta.url), "utf8").replace(/\r\n/gu, "\n");
+const htmlSource = readSource("../index.html");
+const mainSource = appSource();
 
 test("view mode controls are scoped to the view switch, not the board stage", () => {
   // The stage keeps data-view-mode for CSS, so an unscoped attribute query
@@ -23,7 +26,7 @@ test("view mode controls are scoped to the view switch, not the board stage", ()
   assert.equal(everywhere.length, insideSwitch.length + 1, "only the stage may carry it outside the switch");
 });
 
-const styleSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+const styleSource = readSource("../src/styles.css");
 
 test("the gesture hint wraps within the stage instead of overflowing a phone", () => {
   const rule = /\n\.gesture-hint \{([^}]*)\}/u.exec(styleSource)?.[1];
