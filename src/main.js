@@ -163,7 +163,9 @@ import {
   translateText,
 } from "./i18n.js";
 import {
+  announceLobby,
   cancelLobbyRequest,
+  chooseQuickJoinRoom,
   loadLobbyOnce,
   refreshLobby,
   renderLobbyRooms,
@@ -210,9 +212,17 @@ const elements = {
   gameScreen: $("#game-screen"),
   headerTopologySwitch: $(".topology-switch"),
   lobbyCreateRoom: $("#lobby-create-room"),
+  lobbyQuickJoin: $("#lobby-quick-join"),
   lobbyJoinRoom: $("#lobby-join-room"),
   lobbyRefresh: $("#lobby-refresh"),
   lobbyStatusButtons: [...document.querySelectorAll("[data-lobby-status]")],
+  lobbyCounts: [...document.querySelectorAll("[data-lobby-count]")],
+  lobbyStats: $("#lobby-stats"),
+  lobbySearch: $("#lobby-search"),
+  lobbySort: $("#lobby-sort"),
+  lobbyMyRooms: $("#lobby-my-rooms"),
+  lobbyMyRoomList: $("#lobby-my-room-list"),
+  lobbyEmptyCreate: $("#lobby-empty-create"),
   lobbyGameFilter: $("#lobby-game-filter"),
   lobbyTopologyFilter: $("#lobby-topology-filter"),
   lobbySizeFilter: $("#lobby-size-filter"),
@@ -3825,6 +3835,11 @@ function updateRoomUI() {
       } else if (roomClient.connectionStatus === CONNECTION_STATUS.DISCONNECTED) {
         elements.roomHint.textContent =
           "多次重连仍未成功；网络恢复或回到本页时会自动重试，也可以忘记这个房间。";
+      } else if (roomClient.connectionStatus === CONNECTION_STATUS.RECONNECTING) {
+        // A dropped connection says so; the browser knows when it is offline.
+        elements.roomHint.textContent = globalThis.navigator?.onLine === false
+          ? "网络已断开；恢复后会自动重新连接。"
+          : "连接中断，正在重新连接…";
       } else {
         elements.roomHint.textContent = connecting
           ? "正在连接房间，稍等一下…"
@@ -7229,6 +7244,29 @@ elements.joinRoom.addEventListener("click", () => void joinOnlineRoom());
 elements.watchRoom.addEventListener("click", () => void joinOnlineRoom("spectator"));
 elements.lobbyCreateRoom.addEventListener("click", () => {
   showOnlineDialog("", { intent: "create" });
+});
+elements.lobbyEmptyCreate.addEventListener("click", () => {
+  showOnlineDialog("", { intent: "create" });
+});
+elements.lobbyQuickJoin.addEventListener("click", async () => {
+  const code = await chooseQuickJoinRoom();
+  if (code) {
+    navigateAppPath(onlineRoomPath(code, "player"));
+    return;
+  }
+  // Nothing open under these filters: offer a room of the filtered game.
+  announceLobby("现在没有符合筛选、正在等对手的房间；已为你打开建房窗口。");
+  showOnlineDialog("", { intent: "create" });
+  const game = elements.lobbyGameFilter.value;
+  if (game && game !== "all") {
+    elements.onlineDialog.querySelector(`[data-game-type="${game}"]`)?.click();
+  }
+});
+elements.lobbyMyRoomList.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-lobby-room]");
+  if (!target) return;
+  const code = sanitizeRoomCode(target.dataset.lobbyRoom);
+  if (code) navigateAppPath(onlineRoomPath(code, ""));
 });
 elements.lobbyJoinRoom.addEventListener("click", () => {
   showOnlineDialog("", { intent: "join" });

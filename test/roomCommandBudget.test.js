@@ -301,15 +301,29 @@ test("host presence that opens or closes the lobby seat is written and published
   assert.equal(storage.writes, writes + 2, "a quick return reopens it despite the write interval");
   assert.equal(await joinable(), true);
 
-  // Once the white seat is taken, presence no longer changes the listing.
+  // Once the white seat is taken the room is no longer joinable, but the
+  // lobby still shows each player online or offline: every change writes
+  // once and is published, and nothing else does.
   room.engine.join({
     name: "Friend", role: "player", playerId: "friend", tokenHash: await hashRoomToken(tokens.friend),
   });
   await room.persist();
   assert.equal(await joinable(), false);
   await openSocket(room, tokens.friend);
+  const presence = async () => {
+    await settle();
+    return lobby.rooms.get("BUD234").players.map(({ name, online }) => `${name}:${online}`);
+  };
+  assert.deepEqual(await presence(), ["Host:true", "Friend:true"]);
   const settled = storage.writes;
   await close("friend");
+  assert.equal(storage.writes, settled + 1, "the friend going offline is written");
+  assert.deepEqual(await presence(), ["Host:true", "Friend:false"]);
   await close("host");
-  assert.equal(storage.writes, settled);
+  assert.equal(storage.writes, settled + 2);
+  assert.deepEqual(await presence(), ["Host:false", "Friend:false"]);
+  // A second close of an already closed seat changes nothing.
+  await close("host");
+  assert.equal(storage.writes, settled + 2);
+  assert.equal(await joinable(), false);
 });

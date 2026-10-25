@@ -1191,6 +1191,7 @@ test("RoomClient reconnects with capped exponential delay and resends pending co
     WebSocketImpl: MockWebSocket,
     commandAckTimeoutMs: 0,
     snapshotTimeoutMs: 0,
+    heartbeatIntervalMs: 0,
     idFactory: () => "pass-1",
     reconnect: {
       initialDelayMs: 100,
@@ -1249,6 +1250,7 @@ test("a replaced session stops instead of reconnecting forever", async () => {
     storage: createMemoryStorage(),
     WebSocketImpl: MockWebSocket,
     snapshotTimeoutMs: 0,
+    heartbeatIntervalMs: 0,
     reconnect: { jitter: 0 },
     setTimeoutImpl(callback, delay) {
       scheduled.push({ callback, delay });
@@ -1284,6 +1286,7 @@ test("a socket that never sends its welcome snapshot times out and reconnects", 
     storage: createMemoryStorage(),
     WebSocketImpl: MockWebSocket,
     snapshotTimeoutMs: 25,
+    heartbeatIntervalMs: 0,
     reconnect: { initialDelayMs: 100, jitter: 0 },
     setTimeoutImpl(callback, delay) {
       const timer = { callback, delay, cancelled: false };
@@ -1608,7 +1611,7 @@ test("forgetting a room removes its exact fallback and reports a failed local de
   assert.ok(identityRecord(storage, "session", "AB23CD"));
 });
 
-function reconnectHarness({ maxAttempts = 2 } = {}) {
+function reconnectHarness({ maxAttempts = 2, heartbeatIntervalMs = 0, now } = {}) {
   MockWebSocket.instances = [];
   const scheduled = [];
   const network = new EventTarget();
@@ -1619,6 +1622,8 @@ function reconnectHarness({ maxAttempts = 2 } = {}) {
     storage: createMemoryStorage(),
     WebSocketImpl: MockWebSocket,
     snapshotTimeoutMs: 0,
+    heartbeatIntervalMs,
+    ...(now ? { now } : {}),
     networkTarget: network,
     visibilityTarget: visibility,
     reconnect: { initialDelayMs: 100, jitter: 0, maxAttempts },

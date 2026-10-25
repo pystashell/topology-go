@@ -299,6 +299,8 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "连接成功，正在同步最新棋局…": "Connected. Syncing the latest position…",
   "正在连接房间，稍等一下…": "Connecting to the room…",
   "连接已断开，正在等待恢复…": "Disconnected. Waiting to reconnect…",
+  "网络已断开；恢复后会自动重新连接。": "The network is down; the room reconnects as soon as it is back.",
+  "连接中断，正在重新连接…": "Connection lost. Reconnecting…",
   "正在连接房间…": "Connecting to the room…",
   "连接中": "Connecting",
   "正在重连": "Reconnecting",
@@ -415,6 +417,25 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "还没有轮到你。": "It is not your turn yet.",
   "轮到 AI，正在准备思考…": "AI's turn. Preparing to think…",
   "AI 正在思考": "AI is thinking",
+  // The lobby's own rooms, quick join, presence and links (src/app/lobbyScreen.js).
+  "现在没有符合筛选、正在等对手的房间；已为你打开建房窗口。":
+    "No room matching these filters is waiting for an opponent, so the create-room window is open for you.",
+  "AI 席位": "AI seat",
+  "在线": "Online",
+  "离线": "Offline",
+  "房主暂时离线，回来后才能开局": "The host is offline; the game can start once they are back",
+  "复制链接": "Copy link",
+  "复制这个房间的分享链接（打开后默认观战）": "Copy this room's share link (it opens as a spectator)",
+  "你在观战": "You are watching",
+  "你执白": "You play White",
+  "你执黑": "You play Black",
+  "你的席位": "Your seat",
+  "不在公开列表（不公开或已过期）": "Not in the public list (unlisted or expired)",
+  "确认移除": "Confirm remove",
+  "移除": "Remove",
+  "只删除这台设备上的记录；房间和其他人的席位不受影响，之后不能再用这个身份返回":
+    "Removes only this device's record; the room and other players' seats are unaffected, but you can no longer return with this identity",
+  "已复制": "Copied",
   // Move hints in games against AI.
   "提示": "Hint",
   "提示中…": "Hinting…",
@@ -885,6 +906,27 @@ export const ENGLISH_PATTERNS = Object.freeze([
     pattern: /^AI · (黑方|白方) · (.+)$/u,
     // A KataGo model ("b10") or a Gomoku/Othello difficulty ("普通").
     replace: (_, color, model) => `AI · ${capturedPhrase(color)} · ${capturedPhrase(model)}`,
+  },
+  {
+    pattern: /^可加入 (\d+) · 正在进行 (\d+) · 等待开局 (\d+) · (\d+) 人观战 · (\d+) 位棋手在线$/u,
+    replace: (_, joinable, playing, waiting, spectators, online) =>
+      `${joinable} joinable · ${playing} in progress · ${waiting} waiting · ${spectators} watching · ${online} ${online === "1" ? "player" : "players"} online`,
+  },
+  {
+    pattern: /^已从这台设备移除房间 ([A-Z0-9]+) 的记录。$/u,
+    replace: (_, code) => `Removed room ${code} from this device.`,
+  },
+  {
+    pattern: /^无法移除房间 ([A-Z0-9]+) 的记录，请检查浏览器存储设置。$/u,
+    replace: (_, code) => `Room ${code} could not be removed from this device. Check the browser's storage settings.`,
+  },
+  {
+    pattern: /^已复制房间 ([A-Z0-9]+) 的链接。$/u,
+    replace: (_, code) => `Copied the link to room ${code}.`,
+  },
+  {
+    pattern: /^房间链接：(.+)$/u,
+    replace: (_, link) => `Room link: ${link}`,
   },
   {
     pattern: /^提示：AI 建议下在 (.+)（棋盘上已标出）。$/u,

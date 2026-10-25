@@ -1,6 +1,7 @@
 /**
- * The online lobby screen (/lobby): the public room list with its filters,
- * live board previews of visible cards, and polling.
+ * The online lobby screen (/lobby): this browser's own rooms, the public
+ * room list with its search, filters, sort and counts, live board previews
+ * of visible cards, quick join, and polling.
  *
  * main.js owns the page state; this module reads it through live bindings
  * (see the export list at the end of main.js) and keeps the lobby's own
@@ -46,6 +47,10 @@ let lobbyLoadError = null;
 let lobbyLastRefreshAt = 0;
 let lobbyPollTimer = null;
 let lobbyModulesPromise = null;
+let lobbySearch = "";
+let lobbySort = "recommended";
+// "My rooms" entry whose Remove button asks for confirmation (a room code).
+let lobbyForgetArmed = null;
 
 function loadLobbyModules() {
   if (!lobbyModulesPromise) {
@@ -82,6 +87,26 @@ function lobbyModeLabel(mode) {
     "ai-ai": "AI 自对弈",
     local: "同机双人",
   }[mode] ?? "在线对局";
+}
+
+/** The player name with an online/offline dot and an AI tag. */
+function fillLobbyPlayer(node, player, fallback) {
+  node.replaceChildren();
+  const dot = document.createElement("i");
+  dot.className = `lobby-presence ${player ? player.online ? "online" : "offline" : "empty"}`;
+  dot.setAttribute("aria-hidden", "true");
+  const name = document.createElement("span");
+  name.textContent = player?.name || fallback;
+  node.append(dot, name);
+  if (player?.controller === "ai") {
+    const tag = document.createElement("small");
+    tag.className = "lobby-player-tag";
+    tag.textContent = "AI";
+    node.append(tag);
+  }
+  node.title = player
+    ? translateText(player.controller === "ai" ? "AI 席位" : player.online ? "在线" : "离线")
+    : "";
 }
 
 function lobbyUpdatedLabel(updatedAt) {
@@ -183,6 +208,10 @@ function createLobbyRoomCard() {
   const activity = document.createElement("small");
   const actions = document.createElement("div");
   actions.className = "room-card-actions";
+  const note = document.createElement("small");
+  note.className = "lobby-room-note";
+  note.hidden = true;
+  details.append(note);
 
   footer.append(activity, actions);
   card.append(header, body, footer);
@@ -196,6 +225,7 @@ function createLobbyRoomCard() {
     canvas,
     activity,
     actions,
+    note,
   };
   return card;
 }
@@ -222,9 +252,16 @@ function updateLobbyRoomCard(card, room) {
   if (room.roundNumber > 0) appendLobbyMetadata(view.metadata, `第 ${room.roundNumber} 局`);
   appendLobbyMetadata(view.metadata, room.moveCount > 0 ? `${room.moveCount} 手` : "空盘");
 
-  view.blackName.textContent = room.players?.find((player) => player.color === BLACK)?.name || "等待黑方";
-  view.whiteName.textContent = room.players?.find((player) => player.color === WHITE)?.name || "等待白方";
+  const black = room.players?.find((player) => player.color === BLACK) ?? null;
+  const white = room.players?.find((player) => player.color === WHITE) ?? null;
+  fillLobbyPlayer(view.blackName, black, "等待黑方");
+  fillLobbyPlayer(view.whiteName, white, "等待白方");
   view.activity.textContent = `${room.spectatorCount || 0} 人观战 · ${lobbyUpdatedLabel(room.updatedAt)}`;
+  // A waiting room whose host has gone offline cannot start a game yet.
+  const hostAway = black && black.controller !== "ai" && !black.online &&
+    room.status !== "playing" && room.status !== "finished";
+  view.note.hidden = !hostAway;
+  view.note.textContent = hostAway ? "房主暂时离线，回来后才能开局" : "";
 
   view.actions.replaceChildren();
   const resumable = roomClient.hasStoredSession(room.code);
@@ -246,6 +283,13 @@ function updateLobbyRoomCard(card, room) {
     watch.textContent = "观战";
     view.actions.append(watch);
   }
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "secondary-button lobby-copy-link";
+  copy.dataset.lobbyCopy = room.code;
+  copy.textContent = "复制链接";
+  copy.title = translateText("复制这个房间的分享链接（打开后默认观战）");
+  view.actions.append(copy);
 
   view.canvas.__lobbyRoomSummary = room;
   if (lobbyVisiblePreviews.has(view.canvas)) drawLobbyRoomPreview(view.canvas);
@@ -256,18 +300,87 @@ function updateLobbyRoomCard(card, room) {
   }
 }
 
-async function renderLobbyRooms() {
-  if (appRouteMode !== "lobby") return;
-  const { filterLobbyRooms, renderLobbyBoardPreview } = await loadLobbyModules();
-  lobbyPreviewRenderer = renderLobbyBoardPreview;
-  ensureLobbyPreviewObserver();
-  const filtered = filterLobbyRooms(lobbyRooms, {
+/** The filters the controls describe (status, game, shape, size, mode, search, order). */
+function lobbyFilters() {
+  return {
     status: lobbyStatusFilter,
     game: ENABLE_MULTI_GAME ? elements.lobbyGameFilter.value : "all",
     topology: elements.lobbyTopologyFilter.value,
     size: elements.lobbySizeFilter.value,
     mode: elements.lobbyModeFilter.value,
+    query: lobbySearch,
+    order: lobbySort,
+  };
+}
+
+/** "My rooms": every room this browser holds a seat or a watch in. */
+function renderMyLobbyRooms(myLobbyRooms) {
+  const entries = myLobbyRooms(roomClient.listAllStoredSessions(), lobbyRooms);
+  elements.lobbyMyRooms.hidden = entries.length === 0;
+  const items = entries.map((entry) => {
+    const item = document.createElement("article");
+    item.className = "lobby-my-room";
+    item.dataset.roomCode = entry.code;
+    const title = document.createElement("strong");
+    title.textContent = `房间 ${entry.code}`;
+    const role = document.createElement("span");
+    role.className = "lobby-my-room-role";
+    role.textContent = entry.role === "spectator"
+      ? "你在观战"
+      : entry.color === WHITE ? "你执白" : entry.color === BLACK ? "你执黑" : "你的席位";
+    const status = document.createElement("small");
+    if (entry.summary) {
+      const labels = lobbyGameLabels(entry.summary);
+      status.textContent = `${labels.badge} · ${entry.summary.width} × ${entry.summary.height} · ${lobbyStatusLabel(entry.summary.status)}`;
+    } else {
+      status.textContent = "不在公开列表（不公开或已过期）";
+    }
+    const actions = document.createElement("div");
+    actions.className = "room-card-actions";
+    const resume = document.createElement("button");
+    resume.type = "button";
+    resume.className = "primary-button";
+    resume.dataset.lobbyRoom = entry.code;
+    resume.dataset.lobbyRole = "resume";
+    resume.textContent = "返回房间";
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "secondary-button lobby-forget";
+    forget.dataset.lobbyForget = entry.code;
+    const armed = lobbyForgetArmed === entry.code;
+    forget.classList.toggle("danger-button", armed);
+    forget.textContent = armed ? "确认移除" : "移除";
+    forget.title = translateText("只删除这台设备上的记录；房间和其他人的席位不受影响，之后不能再用这个身份返回");
+    actions.append(resume, forget);
+    item.append(title, role, status, actions);
+    return item;
   });
+  elements.lobbyMyRoomList.replaceChildren(...items);
+}
+
+/** Counts on the status buttons and the summary line. */
+function renderLobbyCounts(lobbyStats) {
+  const stats = lobbyStats(lobbyRooms);
+  const counts = { all: stats.total, joinable: stats.joinable, playing: stats.playing, finished: stats.finished };
+  for (const node of elements.lobbyCounts) {
+    const value = counts[node.dataset.lobbyCount];
+    node.textContent = Number.isFinite(value) && value > 0 ? ` ${value}` : "";
+  }
+  elements.lobbyStats.textContent = stats.total === 0
+    ? ""
+    : `可加入 ${stats.joinable} · 正在进行 ${stats.playing} · 等待开局 ${stats.waiting} · ${stats.spectators} 人观战 · ${stats.playersOnline} 位棋手在线`;
+}
+
+async function renderLobbyRooms() {
+  if (appRouteMode !== "lobby") return;
+  const {
+    filterLobbyRooms, lobbyStats, myLobbyRooms, renderLobbyBoardPreview,
+  } = await loadLobbyModules();
+  lobbyPreviewRenderer = renderLobbyBoardPreview;
+  ensureLobbyPreviewObserver();
+  renderMyLobbyRooms(myLobbyRooms);
+  renderLobbyCounts(lobbyStats);
+  const filtered = filterLobbyRooms(lobbyRooms, lobbyFilters());
   const visibleCodes = new Set(filtered.map((room) => room.code));
   for (const [code, card] of lobbyRoomCards) {
     if (visibleCodes.has(code)) continue;
@@ -386,6 +499,55 @@ function resumeLobbyPolling() {
   else scheduleLobbyPoll(LOBBY_POLL_INTERVAL_MS - elapsed);
 }
 
+/**
+ * The room "Quick join" should take under the current filters (rooms this
+ * browser already sits in are skipped), or null.
+ */
+async function chooseQuickJoinRoom() {
+  const { pickQuickJoinRoom } = await loadLobbyModules();
+  const own = roomClient.listAllStoredSessions().map(({ code }) => code);
+  return pickQuickJoinRoom(lobbyRooms, lobbyFilters(), { exclude: own })?.code ?? null;
+}
+
+/** Say in the lobby status line why quick join found nothing. */
+function announceLobby(text) {
+  elements.lobbyStatus.classList.remove("error");
+  elements.lobbyStatus.textContent = text;
+}
+
+/** Remove (after a second click) this browser's record of a room. */
+async function forgetLobbyRoom(code) {
+  if (lobbyForgetArmed !== code) {
+    lobbyForgetArmed = code;
+    await renderLobbyRooms();
+    return;
+  }
+  lobbyForgetArmed = null;
+  const forgotten = roomClient.forgetStoredSessions(code);
+  await renderLobbyRooms();
+  // After the list redraw, which rewrites the status line.
+  announceLobby(forgotten
+    ? `已从这台设备移除房间 ${code} 的记录。`
+    : `无法移除房间 ${code} 的记录，请检查浏览器存储设置。`);
+}
+
+/** Copy a room's share link (it opens as a spectator, like the room's own link). */
+async function copyLobbyRoomLink(code, button) {
+  const link = new URL(`/online/${encodeURIComponent(code)}`, window.location.origin).href;
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(link);
+    copied = true;
+  } catch {
+    copied = false;
+  }
+  announceLobby(copied ? `已复制房间 ${code} 的链接。` : `房间链接：${link}`);
+  if (button && copied) {
+    button.textContent = "已复制";
+    window.setTimeout(() => { button.textContent = "复制链接"; }, 1_600);
+  }
+}
+
 /** The lobby's status buttons and filters re-render the room list. */
 function wireLobbyFilters() {
   for (const button of elements.lobbyStatusButtons) {
@@ -407,6 +569,22 @@ function wireLobbyFilters() {
   ]) {
     filter.addEventListener("change", () => void renderLobbyRooms());
   }
+  elements.lobbySort.addEventListener("change", () => {
+    lobbySort = elements.lobbySort.value;
+    void renderLobbyRooms();
+  });
+  elements.lobbySearch.addEventListener("input", () => {
+    lobbySearch = elements.lobbySearch.value;
+    void renderLobbyRooms();
+  });
+  elements.lobbyMyRoomList.addEventListener("click", (event) => {
+    const forget = event.target.closest("[data-lobby-forget]");
+    if (forget) void forgetLobbyRoom(forget.dataset.lobbyForget);
+  });
+  elements.lobbyRoomList.addEventListener("click", (event) => {
+    const copy = event.target.closest("[data-lobby-copy]");
+    if (copy) void copyLobbyRoomLink(copy.dataset.lobbyCopy, copy);
+  });
 }
 
 function loadLobbyOnce() {
@@ -414,7 +592,9 @@ function loadLobbyOnce() {
 }
 
 export {
+  announceLobby,
   cancelLobbyRequest,
+  chooseQuickJoinRoom,
   loadLobbyOnce,
   refreshLobby,
   renderLobbyRooms,
