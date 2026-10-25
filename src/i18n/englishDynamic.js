@@ -643,8 +643,8 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "访客对 AI": "Guest vs AI",
   "点目时间已到，正在按当前死子标记自动确认…": "Time is up for the count; confirming the current dead-stone marks…",
   "横向起手可任意拖动 · 竖滑滚动页面": "Start sideways to drag any way · swipe up or down to scroll",
-  "已固定页面：在棋盘上任意方向拖动都只转动棋盘，可从棋盘外滚动页面。":
-    "Page fixed: every drag on the board turns the board; scroll from outside the board.",
+  "棋盘接管所有方向的拖动；可从棋盘外滚动页面。":
+    "The board takes drags in every direction; scroll the page from outside the board.",
   "竖向滑动会滚动页面；横向起手的拖动仍可转向任意方向。":
     "Swipes that start up or down scroll the page; a drag that starts sideways can still turn any way.",
   "移出": "Remove",

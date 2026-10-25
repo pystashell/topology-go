@@ -99,7 +99,7 @@ import {
   shouldRunAI,
 } from "./ai/matchMode.js";
 import { CylinderBoard } from "./view/CylinderBoard.js";
-import { needsFreeBoardDrag, setBoardPageScrollLocked } from "./view/pointerGestures.js";
+import { needsFreeBoardDrag, setBoardSwipeScrollsPage } from "./view/pointerGestures.js";
 import { FlatBoard } from "./view/FlatBoard.js";
 import { ArcBoard } from "./view/ArcBoard.js";
 import { TorusBoard } from "./view/TorusBoard.js";
@@ -600,20 +600,21 @@ const LOBBY_RATE_LIMIT_BACKOFF_MS = 60_000;
 const LOBBY_BOARD_SETTINGS_KEY = "3d-baduk-lobby-board-settings-v1";
 // The game (and Gomoku rule set) last chosen for a new board.
 const GAME_TYPE_KEY = "3d-baduk-game-type-v1";
-// Touch screens: whether free-drag boards keep vertical swipes from the page.
-const BOARD_SCROLL_LOCK_KEY = "topology-go-board-scroll-lock-v1";
+// Touch screens: whether vertical swipes on free-drag boards scroll the page
+// (off by default: up/down drags move the board).
+const BOARD_SWIPE_SCROLLS_KEY = "topology-go-board-swipe-scrolls-page-v1";
 const roomClient = new RoomClient();
 
-function savedBoardPageScrollLocked() {
+function savedBoardSwipeScrollsPage() {
   try {
-    return window.localStorage.getItem(BOARD_SCROLL_LOCK_KEY) === "true";
+    return window.localStorage.getItem(BOARD_SWIPE_SCROLLS_KEY) === "true";
   } catch {
     return false;
   }
 }
 
-let boardPageScrollLocked = savedBoardPageScrollLocked();
-setBoardPageScrollLocked(boardPageScrollLocked);
+let boardSwipeScrollsPage = savedBoardSwipeScrollsPage();
+setBoardSwipeScrollsPage(boardSwipeScrollsPage);
 
 function savedSoundEnabled() {
   try {
@@ -6505,15 +6506,15 @@ function setViewMode(mode) {
                 : "观察单面扭转与唯一边界 · 双指缩放"
               : finePointer ? "滚轮缩放" : "双指缩放",
         };
-  // On touch screens a free-drag board lets swipes that start vertically
-  // scroll the page, unless the page is fixed from the toolbar.
+  // On touch screens a free-drag board takes up/down drags; the toolbar can
+  // hand swipes that start vertically to the page instead.
   const freeDrag = needsFreeBoardDrag({
     view: flatActive ? "flat" : arcActive ? "arc" : "3d",
     topology: torus ? "torus" : mobius ? "mobius" : "cylinder",
   });
   elements.togglePageScroll.hidden = finePointer || !freeDrag;
-  elements.togglePageScroll.setAttribute("aria-pressed", String(boardPageScrollLocked));
-  if (!finePointer && freeDrag && !boardPageScrollLocked) {
+  elements.togglePageScroll.setAttribute("aria-pressed", String(boardSwipeScrollsPage));
+  if (!finePointer && freeDrag && boardSwipeScrollsPage) {
     viewCopy.primaryGesture = "横向起手可任意拖动 · 竖滑滚动页面";
   }
 
@@ -6544,17 +6545,17 @@ for (const button of elements.viewButtons) {
 }
 
 elements.togglePageScroll.addEventListener("click", () => {
-  boardPageScrollLocked = !boardPageScrollLocked;
+  boardSwipeScrollsPage = !boardSwipeScrollsPage;
   try {
-    window.localStorage.setItem(BOARD_SCROLL_LOCK_KEY, String(boardPageScrollLocked));
+    window.localStorage.setItem(BOARD_SWIPE_SCROLLS_KEY, String(boardSwipeScrollsPage));
   } catch {
     // The choice still applies to this page.
   }
-  setBoardPageScrollLocked(boardPageScrollLocked);
+  setBoardSwipeScrollsPage(boardSwipeScrollsPage);
   setViewMode(activeViewMode);
-  setMessage(boardPageScrollLocked
-    ? "已固定页面：在棋盘上任意方向拖动都只转动棋盘，可从棋盘外滚动页面。"
-    : "竖向滑动会滚动页面；横向起手的拖动仍可转向任意方向。");
+  setMessage(boardSwipeScrollsPage
+    ? "竖向滑动会滚动页面；横向起手的拖动仍可转向任意方向。"
+    : "棋盘接管所有方向的拖动；可从棋盘外滚动页面。");
 });
 
 elements.resetView.addEventListener("click", () => {
