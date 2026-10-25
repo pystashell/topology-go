@@ -58,7 +58,7 @@ src/game/sgf.js          SGF：围棋 GM[1]，五子棋 GM[4]（RU[Freestyle|Ren
 src/multiplayer/roomEngine.js  房间状态机：schema 2（全围棋）/3（含其他棋）双写；不公开房间、移出成员、判弃局、访客对 AI
 src/multiplayer/lobby*.js 大厅摘要/筛选/预览
 worker/                  Cloudflare Worker + Durable Objects（BadukRoom, BadukLobby）；roomStorage.js 负责大房间分块存储
-src/view/                5 种视图；pointerGestures.js 管触摸策略（手机竖滑滚动页面、“固定页面”）
+src/view/                5 种视图；pointerGestures.js 管触摸策略（能上下动的棋盘接管竖向拖动，“竖滑滚动页面”可选）
 src/ui/gameUi.js         各棋种的文案、结果、控件可见性（纯函数，有测试）
 src/main.js              页面主文件（约 7300 行），拥有页面状态
 src/app/                 从 main.js 拆出的页面部分：lobbyScreen（大厅）、chatPanel（聊天）、recordFiles（SGF 文件）、
@@ -117,7 +117,7 @@ npm audit --audit-level=moderate
 | 5 | Rapfi 网络尺寸覆盖 | **改不了**，见下 |
 | 6 | 五子棋/黑白棋 SGF、邀请副标题、尺寸记忆 | SGF 已完成（GM[4]/GM[2]）。三种棋都有 AI 了，副标题“选择 AI、好友……”已经准确，不用改。尺寸记忆改成存 localStorage |
 | 7 | 不公开房间、踢人、点目超时与弃局、超长对局存储 | 全部完成，见 §4 |
-| 8 | 手机竖滑 | 默认竖向起手滚动页面，横向起手仍能任意转动；工具栏“固定页面”可恢复全拖动（每台设备记住） |
+| 8 | 手机竖滑 | rc.2 曾让竖滑默认滚动页面，负责人反馈上下拖棋盘不便、常滑不动，rc.4 改回：能上下动的棋盘（平面甜甜圈、所有立体视图，立体竹筒可以俯仰）默认接管所有方向的拖动，页面从棋盘外滚动；只能左右动的视图（弧面、平面竹筒和莫比乌斯）竖滑仍滚动页面。工具栏“竖滑滚动页面”可选（每台设备记住）。`scripts/browser-checks/touch.mjs` 用真实触摸输入验证 |
 | 9 | iOS/Safari | 用 iPhone 13 配置的 WebKit 跑过：加载、点按落子、Rapfi wasm（SIMD）、黑白棋 AI、WebGL、触摸策略都正常。**真机仍未测** |
 | 10 | 拆分 main.js | 第一阶段完成：拆出 4 个模块（约 1300 行），main.js 从 8274 行降到约 7300 行。后续见下 |
 
