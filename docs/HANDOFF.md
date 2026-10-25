@@ -8,7 +8,7 @@
 | --- | --- |
 | `main` | 围棋、五子棋（自由/连珠）、黑白棋，三种拓扑（圆柱/环面/莫比乌斯），本地对弈、联机、大厅、复盘、三种棋的 AI 和 SGF 棋谱；房间可以不公开、移出成员、判对方弃局、访客执白对 AI；对 AI 时有提示，AI 至少停 1 秒，黑白棋按距离逐圈翻子；大厅有我的房间、快速加入、搜索、排序、在线状态 |
 | 测试 | `npm test` 全过（约 990 项，含真实 workerd/SQLite 运行时测试和规则跑量快速档）；`npm run test:soak` 全量档约 6,000 盘随机对局；`npm run test:coverage` 规则代码覆盖率门槛；PR 检查（`.github/workflows/ci.yml`）全绿 |
-| 线上 | <https://topology-go.pystashell.workers.dev/>，`/version.json` 给出当前版本。`0.3.0-rc.1` 于 2026-10-24 上线（多棋种首次上线），`0.3.0-rc.2`（PR #5）于 2026-10-25 上线；点目超时自动确认在 `0.3.0-rc.3` |
+| 线上 | <https://topology-go.pystashell.workers.dev/>，`/version.json` 给出当前版本。`0.3.0-rc.1` 于 2026-10-24 上线（多棋种首次上线），`0.3.0-rc.2`（PR #5）于 2026-10-25 上线；点目超时自动确认在 `0.3.0-rc.3`；提示、AI 停顿、翻子动画、规则跑量测试、大厅补全和连接心跳在 `0.3.0-rc.4`（PR #7、#8、#9，2026-10-25）|
 | 发布方式 | GitHub `production` 环境仍缺 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`，所以在负责人的电脑上执行发布脚本。那台机器的 Wrangler 已登录负责人的 Cloudflare 账户，见 §3 |
 
 已合并的 PR（说明和验证记录都在 PR 正文里）：
@@ -17,7 +17,9 @@
 - #2 `feat/multi-game`：通用拓扑模块、规则注册表、五子棋（含连珠禁手）、黑白棋，联机/大厅/视图/UI 全部多棋种化
 - #3 `feat/game-ai`：五子棋 AI 用 Rapfi，黑白棋 AI 是自研引擎
 - #4 `docs/handoff`：上一版交接文档、设计笔记、浏览器检查脚本
-- #5 `feat/handoff-backlog`：本轮，处理上一版交接文档的全部待办，见 §6
+- #5 `feat/handoff-backlog`：处理上一版交接文档的全部待办，见 §6
+- #6 点目超时自动确认；#7 手机上下拖动棋盘、五子棋 11×11；#8 黑白棋规则参考测试
+- #9 `feat/hints-pacing-flip-wave`：对 AI 的提示、AI 至少停 1 秒、黑白棋逐圈翻子；三种棋的规则跑量测试和覆盖率门槛；大厅补全（我的房间、快速加入、搜索、排序、在线状态）和连接心跳
 
 ## 2. 负责人（owner）已做的决定
 
