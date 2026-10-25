@@ -30,6 +30,7 @@ Then, from `scripts/browser-checks`:
 | `node scoring.mjs` | A Go count nobody confirms: both players pass, both pages (one in English) show the two-minute countdown, and the room then confirms the current marks on its own. About 2.5 minutes. |
 | `node rooms.mjs` | Room management against `wrangler dev`: an unlisted room kept out of the lobby (then listed and unlisted again), the host removing a spectator, the guest playing White against the host's AI with undo, and the host claiming the game after the guest has been offline for two minutes. Ends with an English pass. About 3 minutes. |
 | `node webkit.mjs` | An iPhone 13 profile in WebKit (closest to iOS Safari without a device; `npx playwright install webkit` once): load, tap to play Go, Gomoku and Othello AI replies, WebGL and wasm SIMD, and the phone page-scroll policy with the Fix page button. WebKit reports the internal styles of `<select>` elements and of its own screenshots against the CSP; the script ignores exactly those. |
+| `node othello.mjs` | Othello's automatic skip in the page: a local 6x6 cylinder game clicked through a real game until Black cannot outflank anything; the page says Black is skipped, keeps White to move and accepts White's next move. |
 | `node go.mjs` | Go regression: the AI dialog still offers KataGo b10/b18, and KataGo plays a real reply. |
 
 ## Environment variables
