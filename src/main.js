@@ -170,6 +170,7 @@ import {
 import {
   syncAbandonmentPanel,
   syncRoomManagement,
+  syncScoringCountdown,
   wireRoomManagement,
 } from "./app/roomManagement.js";
 import {
@@ -324,6 +325,7 @@ const elements = {
   roomManagePanel: $("#room-manage-panel"),
   roomListed: $("#room-listed"),
   roomMemberList: $("#room-member-list"),
+  scoringCountdown: $("#scoring-countdown"),
   onlineMatchBlackAiLevelNote: $("#online-match-black-ai-level-note"),
   timeControlPreset: $("#time-control-preset"),
   customTimeFields: $("#custom-time-fields"),
@@ -1205,7 +1207,10 @@ function tickClock() {
     }
   }
   syncClockUI(now);
-  if (hasOnlineSession()) syncAbandonmentPanel(now);
+  if (hasOnlineSession()) {
+    syncAbandonmentPanel(now);
+    syncScoringCountdown(now);
+  }
 }
 
 function ensureLocalTimedMoveAllowed() {
@@ -3647,6 +3652,7 @@ function updateRoomUI() {
   }
   syncRoomManagement(onlineControlsAvailable);
   syncAbandonmentPanel();
+  syncScoringCountdown();
 
   const gameRequest = active ? onlineRoom?.match?.request ?? null : null;
   const identityId = identity.playerId ?? identity.id;
@@ -4097,7 +4103,10 @@ function announceRoomState(room, previousRoom) {
       ? "悔棋已同意，已撤回申请方的上一手。"
       : "悔棋申请已结束，棋局继续。");
   } else if (previousPhase === PHASE_SCORING && room.game.phase === PHASE_FINISHED) {
-    setMessage(`点目完成：${formatResult(room.game.result)}。`);
+    // Without both confirmations the room ended the count on its timer.
+    setMessage((room.scoreConfirmations ?? []).length < 2
+      ? `点目时间到，已按当前死子标记自动确认：${formatResult(room.game.result)}。`
+      : `点目完成：${formatResult(room.game.result)}。`);
   } else if (previousPhase === PHASE_SCORING && room.game.phase === PHASE_PLAY) {
     setMessage("已恢复对局，可以继续处理有争议的死活。");
   } else if (previousPhase === PHASE_SCORING && room.game.phase === PHASE_SCORING) {
@@ -7262,6 +7271,7 @@ export {
   liveDisplayedGame,
   maybeStartAITurn,
   onlineBusy,
+  onlineClockReceivedAt,
   onlineCommandPending,
   onlineController,
   onlineMatchStatus,
