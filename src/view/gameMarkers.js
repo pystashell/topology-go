@@ -1,11 +1,13 @@
 import * as THREE from "three";
+import { FlipWave } from "./flipWave.js";
 
 /**
  * Gomoku / Othello position markers shared by every renderer:
  * - winLine: the winning run, highlighted on its stones (ordered along the line);
  * - forbidden: Renju points Black may not play (empty points);
  * - legal: Othello moves for the side to move (empty points);
- * - flipped: discs turned by the last move (briefly pulsed, then outlined).
+ * - flipped: discs turned by the last move, outlined; each ring grows in as
+ *   its disc turns over in the flip wave (see flipWave.js).
  *
  * The pure helpers normalise marker sets and pair line cells on screen; the
  * 3D part is an instanced, non-interactive layer modelled on
@@ -18,9 +20,6 @@ export const GAME_MARKER_KINDS = Object.freeze([
   "legal",
   "flipped",
 ]);
-
-/** Duration of the one-off pulse on freshly flipped discs. */
-export const FLIP_PULSE_MS = 700;
 
 export const EMPTY_GAME_MARKERS = Object.freeze({
   winLine: Object.freeze([]),
@@ -50,9 +49,7 @@ export const GAME_MARKER_STYLES = Object.freeze({
   }),
   flipped: Object.freeze({
     stroke: "rgba(120, 214, 255, 0.95)",
-    pulse: "rgba(170, 236, 255, 1)",
     color: 0x78d6ff,
-    pulseColor: 0xb4f0ff,
   }),
 });
 
@@ -65,7 +62,7 @@ export function gameMarkerKey(point) {
   return `${point.row},${point.col}`;
 }
 
-function normalizePoints(values, { width, height, board, occupied, sort }) {
+function normalizePoints(values, { width, height, board, occupied, sort, keepDistance = false }) {
   if (!Array.isArray(values)) return [];
   const seen = new Set();
   const points = [];
@@ -87,7 +84,11 @@ function normalizePoints(values, { width, height, board, occupied, sort }) {
     const key = `${row},${col}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    points.push({ row, col });
+    points.push(
+      keepDistance && Number.isInteger(point.distance) && point.distance > 0
+        ? { row, col, distance: point.distance }
+        : { row, col },
+    );
   }
   if (sort) points.sort((left, right) => left.row - right.row || left.col - right.col);
   return points;
@@ -99,6 +100,9 @@ function normalizePoints(values, { width, height, board, occupied, sort }) {
  * a board, stone markers (winLine, flipped) need a stone and point markers
  * (forbidden, legal) need an empty point. winLine keeps its order along the
  * line; the other lists are sorted row-major so signatures are stable.
+ * Flipped discs keep their distance from the new disc; `flipOrigin` (the new
+ * disc) and `animateFlips` (the page just played the move) drive the flip
+ * wave.
  */
 export function normalizeGameMarkers(gameMarkers = null, { width, height, board } = {}) {
   if (!gameMarkers || typeof gameMarkers !== "object") return EMPTY_GAME_MARKERS;
@@ -107,9 +111,17 @@ export function normalizeGameMarkers(gameMarkers = null, { width, height, board 
     winLine: normalizePoints(gameMarkers.winLine, { ...options, occupied: true, sort: false }),
     forbidden: normalizePoints(gameMarkers.forbidden, { ...options, occupied: false, sort: true }),
     legal: normalizePoints(gameMarkers.legal, { ...options, occupied: false, sort: true }),
-    flipped: normalizePoints(gameMarkers.flipped, { ...options, occupied: true, sort: true }),
+    flipped: normalizePoints(gameMarkers.flipped, { ...options, occupied: true, sort: true, keepDistance: true }),
   };
-  return hasGameMarkers(markers) ? markers : EMPTY_GAME_MARKERS;
+  if (!hasGameMarkers(markers)) return EMPTY_GAME_MARKERS;
+  if (markers.flipped.length > 0) {
+    const origin = gameMarkers.flipOrigin;
+    if (Number.isInteger(origin?.row) && Number.isInteger(origin?.col)) {
+      markers.flipOrigin = { row: origin.row, col: origin.col };
+    }
+    markers.animateFlips = gameMarkers.animateFlips === true;
+  }
+  return markers;
 }
 
 export function hasGameMarkers(markers) {
@@ -181,21 +193,6 @@ export function lineSegmentsOnScreen(
     }
   });
   return segments;
-}
-
-/** Progress of the flip pulse in [0, 1], or null once it is over. */
-export function flipPulseProgress(startedAt, now, duration = FLIP_PULSE_MS) {
-  if (!Number.isFinite(startedAt) || !Number.isFinite(now)) return null;
-  const progress = duration > 0 ? (now - startedAt) / duration : 1;
-  if (progress >= 1) return null;
-  return Math.max(0, progress);
-}
-
-/** Expanding, fading ring for a flip pulse at a given progress. */
-export function flipPulseLook(progress) {
-  const clamped = Math.min(1, Math.max(0, progress));
-  const eased = 1 - Math.pow(1 - clamped, 3);
-  return { scale: 1 + 0.8 * eased, opacity: 0.9 * (1 - clamped) };
 }
 
 export function prefersReducedMotion() {
@@ -309,7 +306,7 @@ function createInstancedMarker(entries, geometry, material, {
   offset,
   scale,
   renderOrder = 1,
-  pulse = false,
+  flipRing = false,
 }) {
   const mesh = new THREE.InstancedMesh(geometry, material, entries.length);
   mesh.name = name;
@@ -320,7 +317,7 @@ function createInstancedMarker(entries, geometry, material, {
   mesh.userData.gameMarkerEntries = entries;
   mesh.userData.markerOffset = offset;
   mesh.userData.markerScale = scale;
-  mesh.userData.flipPulse = pulse;
+  mesh.userData.flipRing = flipRing;
   return mesh;
 }
 
@@ -329,8 +326,8 @@ function createInstancedMarker(entries, geometry, material, {
  * Options: frameAt(row, col) -> {position, normal, up?} at the surface;
  * stoneRadius scales every marker; surfaceOffset lifts rings and dots off the
  * surface and raisedOffset lifts crosses clear of star points; paired adds a
- * mirrored instance for two-sided (Mobius) surfaces; pulse adds the one-off
- * flip pulse ring.
+ * mirrored instance for two-sided (Mobius) surfaces; flipWave (a running
+ * FlipWave) grows each flip ring in as its disc turns.
  */
 export function createGameMarkerLayer(markers, {
   frameAt,
@@ -339,7 +336,7 @@ export function createGameMarkerLayer(markers, {
   raisedOffset = surfaceOffset,
   paired = false,
   currentPlayer = "black",
-  pulse = false,
+  flipWave = null,
 } = {}) {
   if (!hasGameMarkers(markers)) return null;
   if (typeof frameAt !== "function") throw new TypeError("frameAt must be a function");
@@ -370,16 +367,8 @@ export function createGameMarkerLayer(markers, {
     name: "flip-ring",
     offset: surfaceOffset + 0.001,
     scale: stoneRadius,
+    flipRing: true,
   });
-  if (pulse) {
-    layer(markers.flipped, ring(1.0, 1.12), markerMaterial(flipped.pulseColor, 0.9), {
-      name: "flip-pulse",
-      offset: surfaceOffset + 0.003,
-      scale: stoneRadius,
-      renderOrder: 2,
-      pulse: true,
-    });
-  }
 
   const legal = GAME_MARKER_STYLES.legal[currentPlayer === "white" ? "white" : "black"];
   layer(
@@ -395,31 +384,22 @@ export function createGameMarkerLayer(markers, {
     { name: "forbidden-cross", offset: raisedOffset, scale: stoneRadius },
   );
 
-  updateGameMarkerLayer(group, { frameAt });
+  updateGameMarkerLayer(group, { frameAt, flipWave });
   return group;
 }
 
-function updateMarkerMesh(mesh, frameAt, pulseProgress) {
-  let scaleFactor = 1;
-  if (mesh.userData.flipPulse) {
-    if (pulseProgress === null) {
-      if (mesh.userData.pulseDone) {
-        mesh.visible = false;
-        return;
-      }
-    } else {
-      const look = flipPulseLook(pulseProgress);
-      scaleFactor = look.scale;
-      mesh.material.opacity = look.opacity;
-    }
-  }
+function updateMarkerMesh(mesh, frameAt, flipWave, now) {
+  const waving = mesh.userData.flipRing && flipWave?.startedAt != null;
   const entries = mesh.userData.gameMarkerEntries ?? [];
   for (let index = 0; index < entries.length; index += 1) {
     const { row, col, sign = 1 } = entries[index];
+    // A ring is hidden until its disc starts to turn, then grows in.
+    const look = waving ? flipWave.look(row, col, now) : null;
+    const growth = look ? Math.max(1e-4, look.ring) : 1;
     composeMarkerMatrix(frameAt(row, col), {
       sign,
       offset: mesh.userData.markerOffset ?? 0,
-      scale: (mesh.userData.markerScale ?? 1) * scaleFactor,
+      scale: (mesh.userData.markerScale ?? 1) * growth,
     }, INSTANCE_MATRIX);
     mesh.setMatrixAt(index, INSTANCE_MATRIX);
   }
@@ -427,12 +407,12 @@ function updateMarkerMesh(mesh, frameAt, pulseProgress) {
 }
 
 /**
- * Reposition the layer (the arc view slides its columns) and, with
- * pulseProgress, animate the flip pulse ring.
+ * Reposition the layer (the arc view slides its columns) and, with a running
+ * flipWave, size each flip ring for its disc's turn.
  */
-export function updateGameMarkerLayer(group, { frameAt, pulseProgress = null } = {}) {
+export function updateGameMarkerLayer(group, { frameAt, flipWave = null, now = currentTime() } = {}) {
   if (!group || typeof frameAt !== "function") return;
-  for (const mesh of group.children) updateMarkerMesh(mesh, frameAt, pulseProgress);
+  for (const mesh of group.children) updateMarkerMesh(mesh, frameAt, flipWave, now);
 }
 
 /** Dispose a replaced layer without double-disposing shared resources. */
@@ -453,9 +433,10 @@ export function disposeGameMarkerLayer(group) {
 /**
  * Owns one view's marker layer and forbidden-point hover cross. Views call
  * sync() from setPosition, reposition() when their layout slides, animate()
- * from their render callback (true while the short flip pulse still needs
- * frames), and show/hideForbiddenHover() from their hover refresh. Nothing is
- * added to the scene while there are no markers.
+ * from their render callback (true while the flip wave still needs frames),
+ * and show/hideForbiddenHover() from their hover refresh. Nothing is added to
+ * the scene while there are no markers. The overlay owns the view's
+ * FlipWave; views pose their turning stones from it (poseFlippingStones).
  */
 export class GameMarkerOverlay {
   constructor({
@@ -480,7 +461,7 @@ export class GameMarkerOverlay {
     this.forbiddenKeys = new Set();
     this.group = null;
     this.hoverMarker = null;
-    this.pulseStartedAt = null;
+    this.flipWave = new FlipWave({ reducedMotion });
   }
 
   /** Replace the markers; returns true when the scene changed. */
@@ -490,19 +471,17 @@ export class GameMarkerOverlay {
     const signature = hasGameMarkers(next)
       ? `${gameMarkersSignature(next)}#${next.legal.length > 0 ? player : ""}`
       : "";
+    this.flipWave.sync(next.flipped, {
+      origin: next.flipOrigin ?? null,
+      animate: next.animateFlips === true,
+      now,
+    });
     if (signature === this.signature) return false;
 
-    const flipsChanged =
-      gameMarkerPointsSignature(next.flipped) !==
-      gameMarkerPointsSignature(this.markers.flipped);
-    const pulse = !this.reducedMotion && next.flipped.length > 0 &&
-      (flipsChanged || this.pulseStartedAt !== null);
     disposeGameMarkerLayer(this.group);
     this.markers = next;
     this.signature = signature;
     this.forbiddenKeys = new Set(next.forbidden.map(gameMarkerKey));
-    if (pulse && flipsChanged) this.pulseStartedAt = now;
-    if (!pulse) this.pulseStartedAt = null;
     this.group = createGameMarkerLayer(next, {
       frameAt: this.frameAt,
       stoneRadius: this.stoneRadius,
@@ -510,42 +489,29 @@ export class GameMarkerOverlay {
       raisedOffset: this.raisedOffset,
       paired: this.paired,
       currentPlayer: player,
-      pulse,
+      flipWave: this.flipWave,
     });
-    if (this.group) {
-      this.parent?.add(this.group);
-      if (pulse) this.animate(now);
-    }
+    if (this.group) this.parent?.add(this.group);
     if (this.forbiddenKeys.size === 0) this.hideForbiddenHover();
     return true;
   }
 
   reposition() {
-    updateGameMarkerLayer(this.group, {
-      frameAt: this.frameAt,
-      pulseProgress: flipPulseProgress(this.pulseStartedAt, currentTime()),
-    });
+    updateGameMarkerLayer(this.group, { frameAt: this.frameAt, flipWave: this.flipWave });
   }
 
   get animating() {
-    return this.pulseStartedAt !== null;
+    return this.flipWave.startedAt !== null;
   }
 
-  /** Advance the flip pulse; returns true while it needs another frame. */
+  /** Advance the flip wave's rings; returns true while it needs another frame. */
   animate(now = currentTime()) {
-    if (this.pulseStartedAt === null || !this.group) return false;
-    const progress = flipPulseProgress(this.pulseStartedAt, now);
-    const pulseMesh = this.group.getObjectByName("flip-pulse");
-    if (progress === null) {
-      this.pulseStartedAt = null;
-      if (pulseMesh) {
-        pulseMesh.userData.pulseDone = true;
-        pulseMesh.visible = false;
-      }
-      return false;
-    }
-    if (pulseMesh) updateMarkerMesh(pulseMesh, this.frameAt, progress);
-    return true;
+    if (this.flipWave.startedAt === null) return false;
+    const running = this.flipWave.running(now);
+    const ringMesh = this.group?.getObjectByName("flip-ring");
+    // After the last frame the rings settle at full size.
+    if (ringMesh) updateMarkerMesh(ringMesh, this.frameAt, this.flipWave, now);
+    return running;
   }
 
   isForbidden(point) {
@@ -602,6 +568,6 @@ export class GameMarkerOverlay {
     this.markers = EMPTY_GAME_MARKERS;
     this.signature = "";
     this.forbiddenKeys = new Set();
-    this.pulseStartedAt = null;
+    this.flipWave.cancel();
   }
 }

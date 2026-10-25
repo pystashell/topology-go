@@ -8,6 +8,7 @@ import {
   readonlySet,
 } from "../gameTypes.js";
 import { OthelloEngine } from "../othelloEngine.js";
+import { othelloFlipDistances } from "../othelloFlipOrder.js";
 import { TOPOLOGY_KINDS } from "../../topology/index.js";
 import { NON_GO_ROOM_ACTIONS } from "./shared.js";
 
@@ -153,20 +154,30 @@ function positionFingerprint(engine, _roomState) {
 /**
  * Board markers: `legal` lists the points the side to move may play (empty
  * when hints are off or the game is over) and `flipped` the discs the last
- * move turned over.
+ * move turned over, each with its distance from the new disc (the page turns
+ * them over ring by ring) and `flipOrigin` the new disc.
  *
  * @param {OthelloEngine} engine
  * @param {{hints?: boolean}} [options]
  * @returns {{legal: Array<{row: number, col: number}>,
- *   flipped: Array<{row: number, col: number}>}}
+ *   flipped: Array<{row: number, col: number, distance: number}>,
+ *   flipOrigin: {row: number, col: number}|null}}
  */
 function viewMarkers(engine, { hints = true } = {}) {
+  const move = engine.lastMove?.type === "play" ? engine.lastMove : null;
   return {
     legal: hints ? engine.legalMoves() : [],
-    flipped:
-      engine.lastMove?.type === "play"
-        ? engine.lastMove.flipped.map(({ row, col }) => ({ row, col }))
-        : [],
+    flipped: move
+      ? othelloFlipDistances({
+          width: engine.width,
+          height: engine.height,
+          topology: engine.topology,
+          board: engine.board,
+          move,
+          flipped: move.flipped,
+        })
+      : [],
+    flipOrigin: move ? { row: move.row, col: move.col } : null,
   };
 }
 

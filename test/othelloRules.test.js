@@ -211,12 +211,14 @@ test("viewMarkers shows legal hints for the side to move and the last flips", ()
   assert.deepEqual(othelloRules.viewMarkers(game, { hints: true }), {
     legal: game.legalMoves(),
     flipped: [],
+    flipOrigin: null,
   });
   assert.equal(othelloRules.viewMarkers(game).legal.length, 4);
   game.play(2, 3);
   assert.deepEqual(othelloRules.viewMarkers(game, { hints: false }), {
     legal: [],
-    flipped: [{ row: 3, col: 3 }],
+    flipped: [{ row: 3, col: 3, distance: 1 }],
+    flipOrigin: { row: 2, col: 3 },
   });
   assert.deepEqual(othelloRules.viewMarkers(game).legal, game.legalMoves());
   const markers = othelloRules.viewMarkers(game);
@@ -224,8 +226,9 @@ test("viewMarkers shows legal hints for the side to move and the last flips", ()
   assert.equal(game.lastMove.flipped[0].row, 3);
 
   const finished = playAll(othelloRules.create({ width: 6, height: 6, topology: "mobius" }), WIPEOUT_GAME);
-  assert.deepEqual(othelloRules.viewMarkers(finished), {
-    legal: [],
-    flipped: finished.lastMove.flipped,
-  });
+  const final = othelloRules.viewMarkers(finished);
+  assert.deepEqual(final.legal, []);
+  assert.deepEqual(final.flipped.map(({ row, col }) => ({ row, col })), finished.lastMove.flipped);
+  assert.ok(final.flipped.every(({ distance }) => Number.isInteger(distance) && distance >= 1));
+  assert.deepEqual(final.flipOrigin, { row: finished.lastMove.row, col: finished.lastMove.col });
 });

@@ -7,6 +7,7 @@ import { getTopology } from "../src/topology/index.js";
 import { ArcBoard } from "../src/view/ArcBoard.js";
 import { CylinderBoard } from "../src/view/CylinderBoard.js";
 import { FlatBoard } from "../src/view/FlatBoard.js";
+import { FlipWave } from "../src/view/flipWave.js";
 import {
   EMPTY_GAME_MARKERS,
   normalizeGameMarkers,
@@ -40,7 +41,10 @@ test("every renderer accepts game markers and a board style", () => {
   assert.equal(MobiusBoard.prototype.refreshHover, TorusBoard.prototype.refreshHover);
   for (const Board of [ArcBoard, CylinderBoard, TorusBoard]) {
     assert.match(Board.prototype.refreshHover.toString(), /isForbidden\(point\)/);
-    assert.match(Board.prototype.renderFrame.toString(), /gameMarkerOverlay\?\.animate\(\)/);
+    // The flip wave turns the stones and grows the rings while it runs.
+    assert.match(Board.prototype.renderFrame.toString(), /poseFlipWave\((now|waveNow)\)/);
+    assert.match(Board.prototype.renderFrame.toString(), /gameMarkerOverlay\?\.animate\((now|waveNow)\)/);
+    assert.match(Board.prototype.setPosition.toString(), /collectFlippingStones\(\)/);
   }
   assert.match(ArcBoard.prototype.updateContentLayout.toString(), /gameMarkerOverlay\?\.reposition\(\)/);
   assert.match(FlatBoard.prototype.drawHover.toString(), /isForbiddenPoint\(point\)/);
@@ -128,7 +132,7 @@ function flatHarness({ topology, width = 15, height = 15, markers, board }) {
     offsetRows: 0,
     currentPlayer: "black",
     phase: "play",
-    flipPulseStartedAt: null,
+    flipWave: new FlipWave(),
   });
   flat.gameMarkers = normalizeGameMarkers(markers, { width, height, board });
   return flat;

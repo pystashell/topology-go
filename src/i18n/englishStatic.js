@@ -201,6 +201,8 @@ export const ENGLISH_STATIC = Object.freeze({
   "快棋 · 5 分钟 + 3×20 秒": "Blitz · 5 minutes + 3×20 seconds",
   "快速分析整局": "Quick-analyze full game",
   "悔棋": "Undo",
+  "提示": "Hint",
+  "让 AI 为你推荐这一手": "Ask the AI to suggest your move",
   "悬停临时查看，点击候选可固定；再次点击取消。":
     "Hover to preview; click a candidate to pin it, then click again to unpin.",
   "或者加入朋友的房间": "Or join a friend's room",

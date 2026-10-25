@@ -415,6 +415,12 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "还没有轮到你。": "It is not your turn yet.",
   "轮到 AI，正在准备思考…": "AI's turn. Preparing to think…",
   "AI 正在思考": "AI is thinking",
+  // Move hints in games against AI.
+  "提示": "Hint",
+  "提示中…": "Hinting…",
+  "正在为你计算提示…": "Working out a hint for you…",
+  "暂时无法计算提示，请稍后再试。": "A hint cannot be worked out right now. Please try again later.",
+  "提示：AI 建议这一手停一手。": "Hint: the AI suggests passing this turn.",
   "AI 准备落子": "AI is ready",
   "AI 自对弈已暂停；可以悔一步、复盘或切换视图。": "AI self-play is paused. You can undo, replay, or change views.",
   "AI 自对弈已暂停；可以复盘、切换视图或悔一步。": "AI self-play is paused. You can replay, change views, or undo one move.",
@@ -879,6 +885,10 @@ export const ENGLISH_PATTERNS = Object.freeze([
     pattern: /^AI · (黑方|白方) · (.+)$/u,
     // A KataGo model ("b10") or a Gomoku/Othello difficulty ("普通").
     replace: (_, color, model) => `AI · ${capturedPhrase(color)} · ${capturedPhrase(model)}`,
+  },
+  {
+    pattern: /^提示：AI 建议下在 (.+)（棋盘上已标出）。$/u,
+    replace: (_, point) => `Hint: the AI suggests ${point} (marked on the board).`,
   },
   {
     pattern: /^(.+) 正在思考。你仍可旋转或切换视图。$/u,
