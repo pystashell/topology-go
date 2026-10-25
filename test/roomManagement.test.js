@@ -12,6 +12,7 @@ import {
   MATCH_STATUS_PLAYING,
   MATCH_STATUS_SETUP,
   RoomEngine,
+  SCORING_CONFIRM_TIMEOUT_MS,
 } from "../src/multiplayer/roomEngine.js";
 import { ROOM_ACTIONS } from "../src/multiplayer/protocol.js";
 
@@ -211,16 +212,35 @@ test("after a restart an offline opponent counts as offline from the restart", (
     .room.game.result.winner, "black");
 });
 
-test("a Go count the opponent walked away from can be claimed", () => {
-  const room = friendRoundInProgress();
+function enterCount(room, now) {
   for (const playerId of ["host", "guest"]) {
-    const snapshot = room.snapshot(1_600);
+    const snapshot = room.snapshot(now);
     act(room, playerId, "pass", {
       expectedMoveCount: snapshot.moveCount, expectedPositionToken: snapshot.positionToken,
-    }, 1_600);
+    }, now);
   }
   assert.equal(room.game.phase, "scoring");
+}
+
+test("a Go count the opponent walked away from ends by score when it times out", () => {
+  const room = friendRoundInProgress();
+  enterCount(room, 1_600);
   room.disconnect({ connectionId: "guest-socket", now: 2_000 });
+  // The count's own two minutes run out before the abandonment grace.
+  const advanced = room.advance(1_600 + SCORING_CONFIRM_TIMEOUT_MS);
+  assert.equal(advanced.scoringAutoConfirmed, true);
+  assert.notEqual(advanced.room.game.result.reason, "resign");
+  assert.throws(() => act(room, "host", "claim_abandonment", {}, 2_000 + ABANDONMENT_GRACE_MS), {
+    code: "GAME_NOT_STARTED",
+  });
+});
+
+test("a count whose marks keep changing can still be claimed once the opponent is gone", () => {
+  const room = friendRoundInProgress();
+  enterCount(room, 1_600);
+  room.disconnect({ connectionId: "guest-socket", now: 2_000 });
+  // A change restarts the count's two minutes, so it is still open at the claim.
+  act(room, "host", "toggle_dead", { row: 8, col: 8 }, 100_000);
   const claimed = act(room, "host", "claim_abandonment", {}, 2_000 + ABANDONMENT_GRACE_MS);
   assert.equal(claimed.room.game.result.winner, "black");
   assert.equal(claimed.room.game.result.reason, "resign");

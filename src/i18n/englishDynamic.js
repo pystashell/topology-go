@@ -641,6 +641,7 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "缺少尺寸，已按该棋默认尺寸解释": "The missing board size was interpreted as the game's default",
   "未知五子棋规则已按自由规则解释": "The unknown Gomoku rules were interpreted as freestyle",
   "访客对 AI": "Guest vs AI",
+  "点目时间已到，正在按当前死子标记自动确认…": "Time is up for the count; confirming the current dead-stone marks…",
   "横向起手可任意拖动 · 竖滑滚动页面": "Start sideways to drag any way · swipe up or down to scroll",
   "已固定页面：在棋盘上任意方向拖动都只转动棋盘，可从棋盘外滚动页面。":
     "Page fixed: every drag on the board turns the board; scroll from outside the board.",
@@ -806,6 +807,14 @@ function analysisPrefixCopy(prefix) {
 }
 
 export const ENGLISH_PATTERNS = Object.freeze([
+  {
+    pattern: /^(.+) 后按当前死子标记自动确认；修改标记会重新计时，点目最长 10 分钟。$/u,
+    replace: "The count is confirmed with the current dead-stone marks in $1; changing a mark restarts the timer, and a count lasts at most 10 minutes.",
+  },
+  {
+    pattern: /^点目时间到，已按当前死子标记自动确认：(.+)。$/u,
+    replace: (_, result) => `Time ran out for the count, so the current dead-stone marks were confirmed: ${capturedPhrase(result)}.`,
+  },
   {
     pattern: /^(黑方|白方)已离线$/u,
     replace: (_, color) => `${color === "黑方" ? "Black" : "White"} is offline`,

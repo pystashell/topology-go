@@ -10,6 +10,7 @@
 import {
   BLACK,
   PHASE_FINISHED,
+  PHASE_SCORING,
   WHITE,
   oppositeColor,
 } from "../game/goEngine.js";
@@ -28,6 +29,7 @@ import {
   isOnlineHost,
   isReplaying,
   onlineBusy,
+  onlineClockReceivedAt,
   onlineCommandPending,
   onlineController,
   onlineMatchStatus,
@@ -140,6 +142,24 @@ function syncRoomManagement(controlsAvailable) {
   applyDocumentTranslations(elements.roomMemberList);
 }
 
+/**
+ * The room ends a Go count nobody confirms (see SCORING_CONFIRM_TIMEOUT_MS
+ * in roomEngine.js); show how long the current marks have left. The room
+ * sends the time left, counted here from when that snapshot arrived.
+ */
+function syncScoringCountdown(now = Date.now()) {
+  const left = onlineRoom?.scoringDeadlineInMs;
+  const shown = hasOnlineSession() && game?.phase === PHASE_SCORING &&
+    Number.isFinite(left) && !isReplaying();
+  elements.scoringCountdown.hidden = !shown;
+  if (!shown) return;
+  const remaining = Math.max(0, left - (now - onlineClockReceivedAt));
+  const text = remaining > 0
+    ? `${formatCountdown(remaining)} 后按当前死子标记自动确认；修改标记会重新计时，点目最长 10 分钟。`
+    : "点目时间已到，正在按当前死子标记自动确认…";
+  if (elements.scoringCountdown.textContent !== text) elements.scoringCountdown.textContent = text;
+}
+
 /** The host's listing switch and member list, and the abandonment claim. */
 function wireRoomManagement() {
   elements.roomListed.addEventListener("change", async () => {
@@ -179,5 +199,6 @@ function wireRoomManagement() {
 export {
   syncAbandonmentPanel,
   syncRoomManagement,
+  syncScoringCountdown,
   wireRoomManagement,
 };

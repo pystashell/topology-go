@@ -62,6 +62,12 @@ export const PLAYER_RESERVATION_TTL_MS = 60 * 1_000;
 // How long the other side of a round must be offline before a player may
 // claim the game as abandoned (it ends as that side's resignation).
 export const ABANDONMENT_GRACE_MS = 2 * 60 * 1_000;
+// A Go count that is not confirmed by both sides within this time ends with
+// the current dead-stone marks. Every change to the marks restarts it, so
+// nobody is held to marks they had no time to check, but a count never runs
+// longer than SCORING_MAX_DURATION_MS: re-marking cannot stall it.
+export const SCORING_CONFIRM_TIMEOUT_MS = 2 * 60 * 1_000;
+export const SCORING_MAX_DURATION_MS = 10 * 60 * 1_000;
 export const SPECTATOR_RESERVATION_TTL_MS = 60 * 1_000;
 export const SPECTATOR_RECONNECT_GRACE_MS = 5 * 60 * 1_000;
 export const SPECTATOR_COMMAND_MEMBER_BURST = 3;
@@ -1155,6 +1161,14 @@ function validateSerializedState(state) {
     !Array.isArray(state.receipts) ||
     // Only an unlisted room stores the flag.
     (state.listed !== undefined && state.listed !== false) ||
+    // Only a count in progress has a deadline.
+    (state.scoringDeadline !== undefined && (
+      !state.scoringDeadline ||
+      typeof state.scoringDeadline !== "object" ||
+      !Number.isSafeInteger(state.scoringDeadline.scoringRevision) ||
+      !Number.isFinite(state.scoringDeadline.at) ||
+      !Number.isFinite(state.scoringDeadline.startedAt)
+    )) ||
     !state.game
   ) {
     throw new RoomEngineError(
@@ -1767,6 +1781,9 @@ export class RoomEngine {
         typeof this.game.canUndo === "function" &&
         this.game.canUndo(),
       scoreConfirmations: clone(this.state.scoreConfirmations),
+      scoringDeadlineInMs: this.state.scoringDeadline
+        ? Math.max(0, this.state.scoringDeadline.at - now)
+        : null,
       undoRequest: clone(this.state.undoRequest),
       timeControl,
       chat: {
@@ -3406,6 +3423,31 @@ export class RoomEngine {
         nextDueAt: this.nextDueAt(),
       };
     }
+    const scoringDeadlineSet = this.syncScoringDeadline(now);
+    if (this.state.scoringDeadline && now >= this.state.scoringDeadline.at &&
+        this.autoConfirmScoring(now)) {
+      return {
+        changed: true,
+        expired: false,
+        scoringAutoConfirmed: true,
+        revision: this.state.revision,
+        room: room(),
+        nextDueAt: this.nextDueAt(),
+      };
+    }
+    // A count restored without a deadline (an older release saved it) gets
+    // one now; like membership maintenance it does not prolong the TTL.
+    if (scoringDeadlineSet && !(evictedSpectators > 0 || evictedPlayers > 0)) {
+      this.incrementRevision();
+      this.state.updatedAt = now;
+      return {
+        changed: true,
+        expired: false,
+        revision: this.state.revision,
+        room: room(),
+        nextDueAt: this.nextDueAt(),
+      };
+    }
     if (evictedSpectators > 0 || evictedPlayers > 0) {
       // Membership maintenance gets a revision so clients can order the new
       // presence snapshot, but it is not user activity and must not prolong
@@ -3431,6 +3473,51 @@ export class RoomEngine {
     };
   }
 
+  /** A Go count is under way in the current round. */
+  scoringInProgress() {
+    return this.state.match?.status === MATCH_STATUS_PLAYING &&
+      this.game.phase === PHASE_SCORING &&
+      !this.currentRoundResult();
+  }
+
+  /**
+   * Keep the count's deadline in step with the marks: a new one for every
+   * scoring revision (entering the count, each dead-stone change), capped
+   * at SCORING_MAX_DURATION_MS after the count began; none outside a count.
+   * Returns whether it changed.
+   */
+  syncScoringDeadline(now) {
+    const current = this.state.scoringDeadline;
+    if (!this.scoringInProgress()) {
+      if (current === undefined) return false;
+      delete this.state.scoringDeadline;
+      return true;
+    }
+    if (current?.scoringRevision === this.state.scoringRevision) return false;
+    const startedAt = current?.startedAt ?? now;
+    this.state.scoringDeadline = {
+      scoringRevision: this.state.scoringRevision,
+      startedAt,
+      at: Math.min(now + SCORING_CONFIRM_TIMEOUT_MS, startedAt + SCORING_MAX_DURATION_MS),
+    };
+    return true;
+  }
+
+  /** The count timed out: finish it with the current marks. */
+  autoConfirmScoring(now) {
+    const finished = this.game.finishScoring();
+    if (!finished?.ok) {
+      delete this.state.scoringDeadline;
+      return false;
+    }
+    this.state.undoRequest = null;
+    this.bumpPositionEpoch();
+    this.markRoundFinished(now);
+    this.syncTimeControlRunning(now);
+    this.commit(now);
+    return true;
+  }
+
   timeControlDueAt() {
     return nextTimeControlDueAt(this.state.timeControl);
   }
@@ -3443,6 +3530,7 @@ export class RoomEngine {
     return Math.min(
       this.state.expiresAt,
       clockDueAt ?? Number.POSITIVE_INFINITY,
+      this.state.scoringDeadline?.at ?? Number.POSITIVE_INFINITY,
       spectatorDueAt ?? Number.POSITIVE_INFINITY,
       playerReservationDueAt ?? Number.POSITIVE_INFINITY,
     );
@@ -4298,6 +4386,7 @@ export class RoomEngine {
   }
 
   commit(now) {
+    this.syncScoringDeadline(now);
     this.incrementRevision();
     this.state.updatedAt = now;
     this.state.expiresAt = now + ROOM_TTL_MS;

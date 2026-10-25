@@ -27,6 +27,10 @@ GitHub Release 正文会记录 commit、来源分支和两个 Cloudflare ID。�
 
 `public/version.json` 是候选版本清单（版本号随发布分支更新）；正式发布后，tag、Worker Version、Deployment 与 GitHub prerelease 会共同组成可审计记录。已发布：`0.3.0-rc.1`（2026-10-24，多棋种首次上线）。
 
+### 0.3.0-rc.3 的兼容边界
+
+- **点目超时自动确认**：围棋进入点目后，房间存 `scoringDeadline`（`scoringRevision`、`startedAt`、`at`）。每次修改死子标记都重新计 2 分钟，但从进入点目起最多 10 分钟；到时仍未双方确认，就按当前标记结束本局，结束事件写入复盘。不在点目的房间不写这个字段。旧版本会忽略它，所以回滚后点目不会再自动结束，但房间照常可以读取。
+
 ### 0.3.0-rc.2 的兼容边界
 
 - **大房间分块存储**：房间快照不超过 1.5 MiB 时仍是 `room` 下的一个值，与旧版本逐字节一致。更大的房间（30×30 上一千多手的长局）在 `room` 存清单、在 `room:chunk:N` 存分段 JSON，一次原子写入（`worker/roomStorage.js`）。回滚到没有分块存储的版本时，这类房间按未知状态处理：停止服务（`ROOM_RESTORE_FAILED`）并保留存储，重新部署后原样恢复；其他房间不受影响。
