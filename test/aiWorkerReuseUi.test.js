@@ -25,6 +25,8 @@ function harness() {
     aiWorkerIdleTimer: null,
     aiThinking: false,
     aiWorkerContext: null,
+    AI_CONTEXT_HINT: "hint",
+    GAME_AI_ERRORS: { CANCELLED: "AI_SEARCH_CANCELLED" },
     aiGameActive: false,
     gameAICancels: [],
     // Recorded as plain JSON: objects made inside the vm context are not

@@ -572,6 +572,15 @@ export class RoomClient {
     };
     this.commandAckTimeoutMs = options.commandAckTimeoutMs ?? 12_000;
     this.snapshotTimeoutMs = options.snapshotTimeoutMs ?? 10_000;
+    // While connected the page pings the room (the server answers "pong"
+    // without waking up). A ping left without any message for the timeout
+    // means the connection silently died (a network switch, a dropped
+    // Wi-Fi), and it is replaced. A late timer (a background tab throttled
+    // to one wake-up a minute) is not silence: only an unanswered ping is.
+    // 0 turns heartbeats off.
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 10_000;
+    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 10_000;
+    this.now = options.now ?? (() => Date.now());
     this.sendAuthMessage = options.sendAuthMessage ?? false;
 
     this.roomCode = "";
@@ -591,6 +600,9 @@ export class RoomClient {
     this._reconnectAttempt = 0;
     this._reconnectTimer = null;
     this._snapshotTimer = null;
+    this._heartbeatTimer = null;
+    // When the oldest ping still waiting for any message was sent, or null.
+    this._pingPendingSince = null;
     this._pendingCommands = new Map();
     this._nextSequence = 1;
     this._awaitingSnapshot = false;
@@ -601,10 +613,15 @@ export class RoomClient {
     this._networkTarget = options.networkTarget ?? browserGlobal("window");
     this._visibilityTarget = options.visibilityTarget ?? browserGlobal("document");
     this._handleOnline = () => this.reconnectNow();
+    // The browser knows the network is gone before the socket does.
+    this._handleOffline = () => {
+      if (this._socket) this._dropSocket(this._socket, this._socketGeneration, "Browser offline");
+    };
     this._handleVisibility = () => {
       if (this._visibilityTarget?.visibilityState === "visible") this.reconnectNow();
     };
     this._networkTarget?.addEventListener?.("online", this._handleOnline);
+    this._networkTarget?.addEventListener?.("offline", this._handleOffline);
     this._visibilityTarget?.addEventListener?.("visibilitychange", this._handleVisibility);
   }
 
@@ -681,6 +698,46 @@ export class RoomClient {
     return [...byId.values()].map(({ playerId, playerName, role, color }) => ({
       code, playerId, playerName, role, color,
     }));
+  }
+
+  /**
+   * Every room this browser holds a confirmed seat or spectator session in,
+   * oldest storage format included, for the lobby's "My rooms":
+   * [{code, playerId, playerName, role, color}].
+   */
+  listAllStoredSessions() {
+    const codes = new Set();
+    for (const store of [this.tokenStore, this.pendingJoinStore, this.pendingCreateStore]) {
+      for (const { code } of store.entries?.() ?? []) codes.add(normalizeRoomCode(code));
+    }
+    for (const store of [this.sessionStore, this.pendingJoinIdentityStore, this.pendingCreateIdentityStore]) {
+      for (const { code } of store.entries()) codes.add(code);
+    }
+    return [...codes].filter(Boolean).sort().flatMap((code) => this.listStoredSessions(code));
+  }
+
+  /**
+   * Forget this browser's sessions in a room it is not connected to (the
+   * lobby's "Remove"). The seats stay in the room; this browser just can no
+   * longer return to them. Returns whether nothing is left stored.
+   */
+  forgetStoredSessions(roomCode) {
+    const code = normalizeRoomCode(roomCode);
+    if (!code) return false;
+    if (code === this.roomCode && this.session &&
+        ![CONNECTION_STATUS.CLOSED, CONNECTION_STATUS.DISCONNECTED].includes(this.connectionStatus)) {
+      return false;
+    }
+    this._migrateLegacy(code);
+    for (const { playerId } of this.sessionStore.entries(code)) this.sessionStore.remove(code, playerId);
+    for (const { playerId, value } of this.pendingJoinIdentityStore.entries(code)) {
+      if (value?.confirmedSession) this.pendingJoinIdentityStore.remove(code, playerId);
+    }
+    for (const { value } of this.pendingCreateIdentityStore.entries(code)) {
+      if (value?.confirmedSession) this._clearPendingCreate(value);
+    }
+    this.activeSessionStore.remove(code);
+    return !this.hasStoredSession(code);
   }
 
   listPendingJoins(roomCode) {
@@ -1203,6 +1260,8 @@ export class RoomClient {
       if (generation !== this._socketGeneration) return;
       this.lastCloseCode = null;
       this.lastCloseReason = "";
+      this._pingPendingSince = null;
+      this._scheduleHeartbeat(socket, generation);
       this._setStatus(CONNECTION_STATUS.CONNECTED, {
         protocol: socket.protocol || this.protocolName,
       });
@@ -1233,6 +1292,7 @@ export class RoomClient {
 
     attachSocketListener(socket, "message", (event) => {
       if (generation !== this._socketGeneration) return;
+      this._pingPendingSince = null;
       this._handleMessage(event.data);
     });
 
@@ -1250,6 +1310,7 @@ export class RoomClient {
     attachSocketListener(socket, "close", (event) => {
       if (generation !== this._socketGeneration) return;
       this._clearSnapshotTimer();
+      this._clearHeartbeat();
       this._socket = null;
       this.lastCloseCode = event.code;
       this.lastCloseReason = event.reason ?? "";
@@ -1293,6 +1354,58 @@ export class RoomClient {
       this._scheduleReconnect({ code: event.code, reason: event.reason });
     });
     return socket;
+  }
+
+  /** Ping while the socket is open; drop it once it has gone silent. */
+  _scheduleHeartbeat(socket, generation) {
+    this._clearHeartbeat();
+    if (!(this.heartbeatIntervalMs > 0)) return;
+    this._heartbeatTimer = this.setTimeoutImpl(() => {
+      this._heartbeatTimer = null;
+      if (generation !== this._socketGeneration || socket.readyState !== 1) return;
+      const now = this.now();
+      if (this._pingPendingSince !== null && now - this._pingPendingSince >= this.heartbeatTimeoutMs) {
+        this._dropSocket(socket, generation, "Heartbeat lost");
+        return;
+      }
+      try {
+        socket.send("ping");
+      } catch {
+        this._dropSocket(socket, generation, "Heartbeat failed");
+        return;
+      }
+      this._pingPendingSince ??= now;
+      this._scheduleHeartbeat(socket, generation);
+    }, this.heartbeatIntervalMs);
+  }
+
+  _clearHeartbeat() {
+    if (this._heartbeatTimer !== null) {
+      this.clearTimeoutImpl(this._heartbeatTimer);
+      this._heartbeatTimer = null;
+    }
+  }
+
+  /**
+   * Give up on a socket that cannot reach the room without waiting for its
+   * close handshake (which a dead network never completes): forget it at
+   * once and reconnect with the usual backoff.
+   */
+  _dropSocket(socket, generation, reason) {
+    if (generation !== this._socketGeneration || this._socket !== socket) return;
+    ++this._socketGeneration;
+    this._clearSnapshotTimer();
+    this._clearHeartbeat();
+    this._socket = null;
+    try {
+      if (socket.readyState < 2) socket.close(4000, reason);
+    } catch {
+      // Already closing.
+    }
+    this.lastCloseCode = 4000;
+    this.lastCloseReason = reason;
+    if (this._manualClose || !this.session) return;
+    this._scheduleReconnect({ code: 4000, reason });
   }
 
   _scheduleReconnect(closeDetails = {}) {
@@ -1362,6 +1475,8 @@ export class RoomClient {
   }
 
   _handleMessage(rawData) {
+    // The answer to a heartbeat.
+    if (rawData === "pong") return;
     let message;
     try {
       message =
@@ -1747,6 +1862,7 @@ export class RoomClient {
     this._awaitingSnapshot = false;
     this._clearReconnectTimer();
     this._clearSnapshotTimer();
+    this._clearHeartbeat();
     ++this._socketGeneration;
     const socket = this._socket;
     this._socket = null;
@@ -1772,6 +1888,7 @@ export class RoomClient {
   destroy() {
     this.disconnect({ preserveSession: true });
     this._networkTarget?.removeEventListener?.("online", this._handleOnline);
+    this._networkTarget?.removeEventListener?.("offline", this._handleOffline);
     this._visibilityTarget?.removeEventListener?.("visibilitychange", this._handleVisibility);
     this._listeners.clear();
   }

@@ -13,6 +13,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test",
+    "test:soak": "node scripts/soak.mjs",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include=\"src/game/**\" --test-coverage-include=\"src/topology/**\" --test-coverage-include=\"src/ai/aiPacing.js\" --test-coverage-include=\"src/view/flipWave.js\" --test-coverage-include=\"src/view/gameMarkers.js\" --test-coverage-lines=95 --test-coverage-branches=90 --test-coverage-functions=95",
     "test:release": "node --test scripts/release.test.mjs",
     "test:live": "node scripts/live-room-smoke.mjs",
     "deploy": "npm run build && wrangler deploy",

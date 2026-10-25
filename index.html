@@ -67,9 +67,21 @@
           </div>
           <div class="lobby-primary-actions">
             <button id="lobby-create-room" class="primary-button" type="button">创建房间</button>
+            <button id="lobby-quick-join" class="secondary-button" type="button" title="按当前筛选加入一个正在等对手的房间">快速加入</button>
             <button id="lobby-join-room" class="secondary-button" type="button">输入房间号</button>
             <a class="secondary-button" href="/single">返回单人模式</a>
           </div>
+        </section>
+
+        <section id="lobby-my-rooms" class="lobby-my-rooms" aria-labelledby="lobby-my-rooms-title" hidden>
+          <div class="lobby-browser-heading">
+            <div>
+              <span class="eyebrow">我的房间</span>
+              <h2 id="lobby-my-rooms-title">回到你的对局</h2>
+            </div>
+          </div>
+          <p class="lobby-my-rooms-note">这台设备上保存了这些房间的席位或观战身份，包括不公开的房间。</p>
+          <div id="lobby-my-room-list" class="lobby-my-room-list"></div>
         </section>
 
         <section class="lobby-browser" aria-labelledby="lobby-browser-title">
@@ -81,14 +93,29 @@
             <button id="lobby-refresh" class="secondary-button" type="button">刷新</button>
           </div>
 
+          <p id="lobby-stats" class="lobby-stats" aria-live="off"></p>
+
           <div class="lobby-status-tabs" role="group" aria-label="房间状态">
-            <button type="button" data-lobby-status="all" class="active" aria-pressed="true">全部</button>
-            <button type="button" data-lobby-status="joinable" aria-pressed="false">可加入</button>
-            <button type="button" data-lobby-status="playing" aria-pressed="false">正在进行</button>
-            <button type="button" data-lobby-status="finished" aria-pressed="false">已结束</button>
+            <button type="button" data-lobby-status="all" class="active" aria-pressed="true">全部<span class="lobby-count" data-lobby-count="all"></span></button>
+            <button type="button" data-lobby-status="joinable" aria-pressed="false">可加入<span class="lobby-count" data-lobby-count="joinable"></span></button>
+            <button type="button" data-lobby-status="playing" aria-pressed="false">正在进行<span class="lobby-count" data-lobby-count="playing"></span></button>
+            <button type="button" data-lobby-status="finished" aria-pressed="false">已结束<span class="lobby-count" data-lobby-count="finished"></span></button>
           </div>
 
           <div class="lobby-filters">
+            <label class="lobby-search">
+              <span>搜索</span>
+              <input id="lobby-search" type="search" placeholder="房间号或棋手名" autocomplete="off" maxlength="20" />
+            </label>
+            <label>
+              <span>排序</span>
+              <select id="lobby-sort">
+                <option value="recommended">推荐</option>
+                <option value="newest">最新创建</option>
+                <option value="watchers">观战最多</option>
+                <option value="moves">手数最多</option>
+              </select>
+            </label>
             <label>
               <span>棋类</span>
               <select id="lobby-game-filter">
@@ -137,6 +164,7 @@
           <div id="lobby-empty" class="lobby-empty" hidden>
             <strong>暂时没有符合条件的房间</strong>
             <span>可以创建一盘新的异形棋局，第一位对手或观众很快就能加入。</span>
+            <button id="lobby-empty-create" class="primary-button" type="button">创建房间</button>
           </div>
         </section>
       </main>
@@ -523,6 +551,7 @@
 
           <section id="play-controls" class="primary-actions play-actions" aria-label="对局操作" hidden>
             <button id="pass-button" class="primary-button" type="button">停一手</button>
+            <button id="hint-button" class="secondary-button" type="button" title="让 AI 为你推荐这一手" hidden>提示</button>
             <button id="undo-button" class="secondary-button" type="button">悔棋</button>
             <button id="resign-button" class="secondary-button danger-button" type="button">认输</button>
             <button id="new-game-button" class="secondary-button" type="button">新棋盘</button>

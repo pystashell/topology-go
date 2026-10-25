@@ -14,18 +14,16 @@ import {
 } from "../src/view/boardStyle.js";
 import {
   EMPTY_GAME_MARKERS,
-  FLIP_PULSE_MS,
   GameMarkerOverlay,
   createGameMarkerLayer,
   disposeGameMarkerLayer,
-  flipPulseLook,
-  flipPulseProgress,
   gameMarkersSignature,
   hasGameMarkers,
   lineSegmentsOnScreen,
   normalizeGameMarkers,
   updateGameMarkerLayer,
 } from "../src/view/gameMarkers.js";
+import { FLIP_TURN_MS, FLIP_WAVE_DELAY_MS, FlipWave, flipWaveDurationMs } from "../src/view/flipWave.js";
 
 function emptyBoard(width, height) {
   return Array.from({ length: height }, () => Array(width).fill(null));
@@ -89,6 +87,7 @@ test("game marker sets are validated, de-duplicated and keyed to occupancy", () 
     forbidden: [{ row: 0, col: 1 }, { row: 3, col: 4 }],
     legal: [{ row: 0, col: 4 }, { row: 2, col: 4 }],
     flipped: [{ row: 2, col: 0 }],
+    animateFlips: false,
   });
   assert.equal(
     gameMarkersSignature(markers),
@@ -249,17 +248,28 @@ test("line segments pair mirrored images across the Mobius flip", () => {
   ]);
 });
 
-test("flip pulse progress ends after its duration and fades out", () => {
-  assert.equal(flipPulseProgress(null, 10), null);
-  assert.equal(flipPulseProgress(100, 100), 0);
-  assert.equal(flipPulseProgress(100, 100 + FLIP_PULSE_MS / 2), 0.5);
-  assert.equal(flipPulseProgress(100, 100 + FLIP_PULSE_MS), null);
-  assert.equal(flipPulseProgress(100, 50), 0);
-  const start = flipPulseLook(0);
-  const end = flipPulseLook(1);
-  assert.deepEqual(start, { scale: 1, opacity: 0.9 });
-  assert.ok(end.scale > 1.5 && end.opacity === 0);
-  assert.ok(flipPulseLook(0.5).opacity < start.opacity);
+test("flipped markers keep each disc's distance and the wave's origin", () => {
+  const board = emptyBoard(6, 6);
+  board[1][1] = "black";
+  board[1][2] = "black";
+  const markers = normalizeGameMarkers({
+    flipped: [{ row: 1, col: 2, distance: 2 }, { row: 1, col: 1, distance: 1 }, { row: 1, col: 1 }],
+    flipOrigin: { row: 1, col: 0 },
+    animateFlips: true,
+  }, { width: 6, height: 6, board });
+  assert.deepEqual(markers.flipped, [{ row: 1, col: 1, distance: 1 }, { row: 1, col: 2, distance: 2 }]);
+  assert.deepEqual(markers.flipOrigin, { row: 1, col: 0 });
+  assert.equal(markers.animateFlips, true);
+  // Distances never change the signature: a redraw is not a new wave.
+  assert.equal(
+    gameMarkersSignature(markers),
+    gameMarkersSignature(normalizeGameMarkers({ flipped: [[1, 1], [1, 2]] }, { width: 6, height: 6, board })),
+  );
+  // A bad distance is dropped; animateFlips is only ever true when asked.
+  const plain = normalizeGameMarkers({ flipped: [{ row: 1, col: 1, distance: 0 }], animateFlips: "yes" });
+  assert.deepEqual(plain.flipped, [{ row: 1, col: 1 }]);
+  assert.equal(plain.animateFlips, false);
+  assert.equal(plain.flipOrigin, undefined);
 });
 
 function planarFrameAt(row, col) {
@@ -284,7 +294,6 @@ test("3D game marker layers are instanced, inert, paired and disposable", () => 
     surfaceOffset: 0.05,
     raisedOffset: 0.12,
     paired: true,
-    pulse: true,
   });
   assert.equal(layer.name, "game-markers");
   assert.deepEqual(
@@ -293,7 +302,6 @@ test("3D game marker layers are instanced, inert, paired and disposable", () => 
       ["win-halo", 4],
       ["win-ring", 4],
       ["flip-ring", 2],
-      ["flip-pulse", 2],
       ["legal-dot", 6],
       ["forbidden-cross", 2],
     ],
@@ -314,16 +322,21 @@ test("3D game marker layers are instanced, inert, paired and disposable", () => 
   });
   assert.deepEqual(zs.map((z) => Math.round(z * 1000) / 1000), [-0.12, 0.12]);
 
-  // The pulse ring grows while it animates.
-  const pulse = layer.getObjectByName("flip-pulse");
+  // A flip ring is hidden until its disc starts to turn, then grows in.
+  const ring = layer.getObjectByName("flip-ring");
   const scaleAt = () => {
-    pulse.getMatrixAt(1, matrix);
+    ring.getMatrixAt(1, matrix);
     return new THREE.Vector3().setFromMatrixScale(matrix).x;
   };
-  const before = scaleAt();
-  updateGameMarkerLayer(layer, { frameAt: planarFrameAt, pulseProgress: 0.5 });
-  assert.ok(scaleAt() > before);
-  assert.ok(pulse.material.opacity < 0.9);
+  const full = scaleAt();
+  const wave = new FlipWave();
+  wave.sync([{ row: 1, col: 1, distance: 1 }], { animate: true, now: 0 });
+  updateGameMarkerLayer(layer, { frameAt: planarFrameAt, flipWave: wave, now: 0 });
+  assert.ok(scaleAt() < full * 0.01, "not turning yet");
+  updateGameMarkerLayer(layer, { frameAt: planarFrameAt, flipWave: wave, now: FLIP_WAVE_DELAY_MS + FLIP_TURN_MS / 2 });
+  assert.ok(scaleAt() > full * 0.3 && scaleAt() < full);
+  updateGameMarkerLayer(layer, { frameAt: planarFrameAt, flipWave: wave, now: 10_000 });
+  assert.ok(Math.abs(scaleAt() - full) < 1e-9, "done: full size");
 
   const parent = new THREE.Group();
   parent.add(layer);
@@ -333,7 +346,7 @@ test("3D game marker layers are instanced, inert, paired and disposable", () => 
   }
   disposeGameMarkerLayer(layer);
   assert.equal(parent.children.length, 0);
-  assert.equal(disposals, 6);
+  assert.equal(disposals, 5);
 });
 
 test("the marker overlay only touches the scene when markers change", () => {
@@ -349,28 +362,38 @@ test("the marker overlay only touches the scene when markers change", () => {
   const flips = {
     ...EMPTY_GAME_MARKERS,
     legal: [{ row: 0, col: 2 }],
-    flipped: [{ row: 1, col: 1 }],
+    flipped: [{ row: 1, col: 1, distance: 1 }],
+    flipOrigin: { row: 1, col: 0 },
+    animateFlips: true,
   };
   assert.equal(overlay.sync(flips, { currentPlayer: "white", now: 1000 }), true);
   assert.equal(parent.children.length, 1);
-  assert.ok(overlay.group.getObjectByName("flip-pulse"));
-  // Same markers again: nothing is rebuilt and the pulse is not restarted.
+  assert.ok(overlay.group.getObjectByName("flip-ring"));
+  assert.equal(overlay.animating, true, "a move just played starts the wave");
+  // Same markers again (a redraw, no longer asking for animation): nothing
+  // is rebuilt and the wave keeps running.
   const group = overlay.group;
-  assert.equal(overlay.sync({ ...flips }, { currentPlayer: "white", now: 1300 }), false);
+  assert.equal(overlay.sync({ ...flips, animateFlips: false }, { currentPlayer: "white", now: 1300 }), false);
   assert.equal(overlay.group, group);
+  assert.equal(overlay.animating, true);
   // The legal-dot colour follows the side to move.
   assert.equal(overlay.sync(flips, { currentPlayer: "black", now: 1350 }), true);
 
   assert.equal(overlay.animate(1400), true);
-  assert.equal(overlay.animate(1000 + FLIP_PULSE_MS + 1), false);
-  assert.equal(overlay.group.getObjectByName("flip-pulse").visible, false);
+  const duration = flipWaveDurationMs(flips.flipped);
+  assert.equal(overlay.animate(1000 + duration + 1), false);
   assert.equal(overlay.animate(5000), false);
   assert.equal(overlay.animating, false);
 
-  // Reduced motion never pulses.
+  // New flips without animation (an undo, a jump) show at once.
+  const jumped = { ...flips, flipped: [{ row: 2, col: 2, distance: 1 }], flipOrigin: { row: 2, col: 1 }, animateFlips: false };
+  overlay.sync(jumped, { now: 6000 });
+  assert.equal(overlay.animating, false);
+
+  // Reduced motion never animates.
   const calm = new GameMarkerOverlay({ parent, frameAt: planarFrameAt, reducedMotion: true });
   calm.sync(flips, { now: 0 });
-  assert.equal(calm.group.getObjectByName("flip-pulse"), undefined);
+  assert.equal(calm.animating, false);
   assert.equal(calm.animate(1), false);
   calm.dispose();
 

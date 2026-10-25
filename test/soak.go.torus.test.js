@@ -1,0 +1,5 @@
+import { goSoakSuite } from "./helpers/soakSuites.js";
+
+// Random go games on a torus against the independent reference (see
+// test/helpers/soakSuites.js; SOAK=full plays every board size).
+goSoakSuite("torus");

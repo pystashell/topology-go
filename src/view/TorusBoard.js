@@ -23,6 +23,7 @@ import {
 } from "./playerViewLighting.js";
 import { translateText } from "../i18n.js";
 import { createRenderScheduler } from "./renderScheduler.js";
+import { poseFlippingStones } from "./flipWave.js";
 import {
   createAnalysisVariationMarker,
   placeAnalysisVariationMarker,
@@ -154,6 +155,7 @@ export class TorusBoard {
     this.territorySignature = "";
     this.territoryGroup = null;
     this.gameMarkers = EMPTY_GAME_MARKERS;
+    this.flippingStones = [];
     this.gameMarkerOverlay = null;
     this.boardStyle = normalizeBoardStyle();
     this.pointerStart = null;
@@ -462,6 +464,7 @@ export class TorusBoard {
 
   createGameMarkerOverlay() {
     this.gameMarkers = EMPTY_GAME_MARKERS;
+    this.flippingStones = [];
     this.gameMarkerOverlay = new GameMarkerOverlay({
       parent: this.boardGroup,
       frameAt: (row, col) => this.gameMarkerFrame(row, col),
@@ -589,6 +592,9 @@ export class TorusBoard {
             ? this.blackMaterial
             : this.whiteMaterial;
         const stone = new THREE.Mesh(this.stoneGeometry, material);
+        stone.userData.row = row;
+        stone.userData.col = col;
+        stone.userData.color = color;
         this.positionStone(stone, row, col);
         stone.castShadow = !dead;
         stone.receiveShadow = true;
@@ -639,6 +645,7 @@ export class TorusBoard {
       board,
     });
     this.gameMarkerOverlay?.sync(this.gameMarkers, { currentPlayer });
+    this.collectFlippingStones();
     this.refreshHover();
     this.requestRender();
   }
@@ -1001,6 +1008,31 @@ export class TorusBoard {
     this.requestRender();
   }
 
+  /** Remember the stones of a flip wave that just started, and pose them. */
+  collectFlippingStones() {
+    const wave = this.gameMarkerOverlay?.flipWave;
+    this.flippingStones = wave?.startedAt != null
+      ? this.stonesGroup.children
+        .filter((stone) => wave.has(stone.userData.row, stone.userData.col))
+        .map((mesh) => ({ mesh, row: mesh.userData.row, col: mesh.userData.col, color: mesh.userData.color }))
+      : [];
+    this.poseFlipWave();
+  }
+
+  /** Turn the discs of a running flip wave; true while it needs frames. */
+  poseFlipWave(now = performance.now()) {
+    const wave = this.gameMarkerOverlay?.flipWave;
+    if (!wave || this.flippingStones.length === 0) return false;
+    poseFlippingStones(this.flippingStones, wave, {
+      positionStone: (stone, row, col) => this.positionStone(stone, row, col),
+      materials: { black: this.blackMaterial, white: this.whiteMaterial },
+      now,
+    });
+    if (wave.running(now)) return true;
+    this.flippingStones = [];
+    return false;
+  }
+
   requestRender() {
     if (!this.active || this.destroyed) return;
     this.renderScheduler.request();
@@ -1017,8 +1049,10 @@ export class TorusBoard {
       this.controls.target,
       this.majorRadius + this.minorRadius,
     );
-    // The short flip pulse asks for frames only while it is running.
-    if (this.gameMarkerOverlay?.animate()) this.requestRender();
+    // The flip wave asks for frames only while it is running.
+    const now = performance.now();
+    const turning = this.poseFlipWave(now);
+    if (this.gameMarkerOverlay?.animate(now) || turning) this.requestRender();
     this.renderer.render(this.scene, this.camera);
   }
 

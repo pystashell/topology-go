@@ -91,6 +91,7 @@ import {
   createGameAi,
   gameAiPosition,
 } from "./ai/gameAiClient.js";
+import { aiMoveWaitMs } from "./ai/aiPacing.js";
 import {
   AI_MATCH_SELF_PLAY,
   isAIControlledColor,
@@ -104,6 +105,8 @@ import { FlatBoard } from "./view/FlatBoard.js";
 import { ArcBoard } from "./view/ArcBoard.js";
 import { TorusBoard } from "./view/TorusBoard.js";
 import { MobiusBoard } from "./view/MobiusBoard.js";
+import { flipWaveDurationMs } from "./view/flipWave.js";
+import { prefersReducedMotion } from "./view/gameMarkers.js";
 import {
   RoomClient,
   CONNECTION_STATUS,
@@ -160,7 +163,9 @@ import {
   translateText,
 } from "./i18n.js";
 import {
+  announceLobby,
   cancelLobbyRequest,
+  chooseQuickJoinRoom,
   loadLobbyOnce,
   refreshLobby,
   renderLobbyRooms,
@@ -207,9 +212,17 @@ const elements = {
   gameScreen: $("#game-screen"),
   headerTopologySwitch: $(".topology-switch"),
   lobbyCreateRoom: $("#lobby-create-room"),
+  lobbyQuickJoin: $("#lobby-quick-join"),
   lobbyJoinRoom: $("#lobby-join-room"),
   lobbyRefresh: $("#lobby-refresh"),
   lobbyStatusButtons: [...document.querySelectorAll("[data-lobby-status]")],
+  lobbyCounts: [...document.querySelectorAll("[data-lobby-count]")],
+  lobbyStats: $("#lobby-stats"),
+  lobbySearch: $("#lobby-search"),
+  lobbySort: $("#lobby-sort"),
+  lobbyMyRooms: $("#lobby-my-rooms"),
+  lobbyMyRoomList: $("#lobby-my-room-list"),
+  lobbyEmptyCreate: $("#lobby-empty-create"),
   lobbyGameFilter: $("#lobby-game-filter"),
   lobbyTopologyFilter: $("#lobby-topology-filter"),
   lobbySizeFilter: $("#lobby-size-filter"),
@@ -240,6 +253,7 @@ const elements = {
   playControls: $("#play-controls"),
   passButton: $("#pass-button"),
   undoButton: $("#undo-button"),
+  hintButton: $("#hint-button"),
   resignButton: $("#resign-button"),
   newGameButton: $("#new-game-button"),
   postGameActions: $("#post-game-actions"),
@@ -527,6 +541,13 @@ let pendingRuleSet = GOMOKU_FREESTYLE;
 const pendingDimensionsByGame = new Map();
 const gameMarkerCache = new Map();
 let lastPlayedPoint = null;
+// The last position drawn on the board ({context, count}). An Othello flip
+// wave runs only when the next one is a single move further on in the same
+// context: a move just played or one step forward in a replay, never an
+// undo, a jump through history or a redraw.
+let renderedMoveMark = null;
+// When the running flip wave ends (performance.now() time); AI moves wait for it.
+let flipWaveEndsAt = 0;
 let onlineRoom = null;
 let onlineStateSynchronized = false;
 let onlineBusy = false;
@@ -557,6 +578,16 @@ let aiGameLevels = {
 };
 const gameAiClients = new Map();
 let aiThinking = false;
+// A move suggested to the human in a game against AI ({key, move}), shown
+// while the position it was asked for (key) is still on the board.
+let moveHint = null;
+// The hint being worked out ({key, requestId}); null when none.
+let hintPending = null;
+let hintRequestSequence = 0;
+const HINT_AI_LEVEL = "hard";
+const HINT_THINK_MS = 2_000;
+// aiWorkerContext.kind of a KataGo request that answers a hint.
+const AI_CONTEXT_HINT = "hint";
 let aiWorker = null;
 let aiWorkerModelId = null;
 let aiWorkerBusy = false;
@@ -2415,6 +2446,9 @@ function scheduleAIWorkerIdleRelease() {
  * older request ids are ignored). Pass terminate to always release it.
  */
 function cancelAIThinking({ terminate = false } = {}) {
+  if (aiWorkerContext?.kind === AI_CONTEXT_HINT) {
+    aiWorkerContext.reject({ code: GAME_AI_ERRORS.CANCELLED });
+  }
   aiRequestId += 1;
   cancelGameAITurn({ terminate });
   if (terminate || aiWorkerBusy) terminateAIWorker();
@@ -2574,20 +2608,41 @@ function handleAIWorkerMessage(event) {
   aiWorkerBusy = false;
   if (message.type === "result") scheduleAIWorkerIdleRelease();
   else terminateAIWorker();
+  if (context?.kind === AI_CONTEXT_HINT) {
+    aiWorkerContext = null;
+    if (message.type === "result") context.resolve(message.move);
+    else context.reject(message);
+    return;
+  }
+  if (message.type === "result") {
+    // The AI stays "thinking" through the pause, so no other turn starts.
+    const requestId = aiRequestId;
+    afterAIPause(context?.startedAt, () => requestId === aiRequestId, () => {
+      aiThinking = false;
+      elements.boardStage.removeAttribute("aria-busy");
+      if (context?.kind === MATCH_TRANSPORT_ONLINE) {
+        void applyOnlineAIMove(message.move, message.stats, context);
+      } else {
+        applyAIMove(message.move, message.stats);
+      }
+    });
+    return;
+  }
   aiThinking = false;
   elements.boardStage.removeAttribute("aria-busy");
-  if (message.type === "result") {
-    if (context?.kind === MATCH_TRANSPORT_ONLINE) {
-      void applyOnlineAIMove(message.move, message.stats, context);
-    } else {
-      applyAIMove(message.move, message.stats);
-    }
-  } else if (message.code !== "AI_SEARCH_CANCELLED") {
+  if (message.code !== "AI_SEARCH_CANCELLED") {
     recoverFromAIError(localizedErrorMessage(message, "AI 思考时发生错误。"));
   }
 }
 
 function handleAIWorkerError(event) {
+  const context = aiWorkerContext;
+  if (context?.kind === AI_CONTEXT_HINT) {
+    aiWorkerContext = null;
+    terminateAIWorker();
+    context.reject(event);
+    return;
+  }
   if (!aiThinking) {
     // A kept idle worker that broke must not be reused by the next game.
     terminateAIWorker();
@@ -2649,8 +2704,7 @@ function startGameAITurn() {
     recoverFromAIError(localizedErrorMessage(error, "AI 无法读取当前棋局。"));
     return;
   }
-  // Self-play is paced so that each move can be seen.
-  const delay = isAIvsAI() || isOnlineAISelfPlay() ? 420 : 120;
+  const startedAt = performance.now();
   window.setTimeout(async () => {
     if (requestId !== aiRequestId || !shouldRunCurrentAI()) return;
     let answer;
@@ -2669,20 +2723,23 @@ function startGameAITurn() {
       return;
     }
     if (requestId !== aiRequestId) return;
-    aiThinking = false;
-    elements.boardStage.removeAttribute("aria-busy");
     const move = { type: "play", row: answer.move.row, col: answer.move.col };
-    if (!game.checkPlay(move.row, move.col).ok) {
-      recoverFromAIError("AI 返回了不合规则的落点。");
-      return;
-    }
-    if (context.kind === MATCH_TRANSPORT_ONLINE) {
-      void applyOnlineAIMove(move, answer.info, context);
-    } else {
-      aiWorkerContext = null;
-      applyAIMove(move, answer.info);
-    }
-  }, delay);
+    // The AI stays "thinking" through the pause, so no other turn starts.
+    afterAIPause(startedAt, () => requestId === aiRequestId, () => {
+      aiThinking = false;
+      elements.boardStage.removeAttribute("aria-busy");
+      if (!game.checkPlay(move.row, move.col).ok) {
+        recoverFromAIError("AI 返回了不合规则的落点。");
+        return;
+      }
+      if (context.kind === MATCH_TRANSPORT_ONLINE) {
+        void applyOnlineAIMove(move, answer.info, context);
+      } else {
+        aiWorkerContext = null;
+        applyAIMove(move, answer.info);
+      }
+    });
+  }, 120);
 }
 
 function maybeStartAITurn() {
@@ -2724,8 +2781,9 @@ function maybeStartAITurn() {
         moveCount,
         color: game.currentPlayer,
         modelId,
+        startedAt: performance.now(),
       }
-    : { kind: MATCH_TRANSPORT_LOCAL, modelId };
+    : { kind: MATCH_TRANSPORT_LOCAL, modelId, startedAt: performance.now() };
 
   window.setTimeout(() => {
     if (requestId !== aiRequestId || !shouldRunCurrentAI()) return;
@@ -2772,6 +2830,198 @@ function maybeStartAITurn() {
       },
     });
   }, 120);
+}
+
+/**
+ * Whether this page plays against an AI: a local human-vs-AI game, or an
+ * online room where this viewer holds a seat and the other seat is an AI.
+ * Only then does the play bar offer a hint.
+ */
+function playsAgainstAI() {
+  if (!game || !gameRulesOf(game).capabilities.ai) return false;
+  if (!hasOnlineSession()) return isAIMode() && !isAIvsAI();
+  if (!isOnlinePlayer()) return false;
+  const ownColor = currentIdentity().color;
+  return onlineController(oppositeColor(ownColor))?.kind === MATCH_CONTROLLER_AI &&
+    onlineController(ownColor)?.kind === MATCH_CONTROLLER_HUMAN;
+}
+
+/**
+ * The play bar's hint button: shown through a game against AI, usable on the
+ * human's turn, and busy while a hint is worked out.
+ */
+function syncHintButton(playing) {
+  syncMoveHint();
+  const offered = playing && playsAgainstAI() && !isReplaying() && !isNextGameSetup();
+  elements.hintButton.hidden = !offered;
+  elements.hintButton.disabled = !offered || Boolean(hintPending) || !canAskForHint();
+  elements.hintButton.textContent = hintPending ? "提示中…" : "提示";
+}
+
+/** Whether the human may ask for a hint now (their turn, live play). */
+function canAskForHint() {
+  if (!playsAgainstAI() || game.phase !== PHASE_PLAY) return false;
+  if (isReplaying() || isNextGameSetup() || currentTimeoutOutcome()) return false;
+  if (hasOnlineSession()) {
+    return isOnlineTurn() && onlineStateSynchronized && !currentUndoRequest() && !onlineCommandPending;
+  }
+  return game.currentPlayer === aiHumanColor && !aiThinking;
+}
+
+/** The position a hint answers: it lapses when any move, undo or game changes it. */
+function hintPositionKey() {
+  if (!game) return "";
+  const state = game.getState();
+  return JSON.stringify([
+    gameTypeOf(state), state.width, state.height, state.topology, moveCount,
+    state.currentPlayer, state.phase, state.lastMove,
+  ]);
+}
+
+/** The hinted point to draw on the live board, while it still applies. */
+function hintMoveFor(state) {
+  if (!moveHint || moveHint.move?.type !== "play") return null;
+  if (state !== undefined && gameTypeOf(state) !== gameTypeOf(game)) return null;
+  return moveHint.key === hintPositionKey() && canAskForHint() ? moveHint.move : null;
+}
+
+/** Forget a hint that no longer applies (and one still being worked out). */
+function syncMoveHint() {
+  const key = hintPositionKey();
+  if (moveHint && moveHint.key !== key) moveHint = null;
+  if (hintPending && hintPending.key !== key) hintPending = null;
+}
+
+/**
+ * Ask the AI for the move it would play for the human. Gomoku and Othello
+ * use the game's own engine at its strongest level with a short think; Go
+ * asks KataGo through the page's worker. The hint is drawn on the board and
+ * named in the message until the position changes.
+ */
+async function requestMoveHint() {
+  syncMoveHint();
+  if (!canAskForHint() || hintPending) return;
+  const key = hintPositionKey();
+  if (moveHint?.key === key) {
+    announceMoveHint(moveHint.move);
+    renderCurrentAnalysisPosition();
+    return;
+  }
+  const requestId = ++hintRequestSequence;
+  hintPending = { key, requestId };
+  setMessage("正在为你计算提示…");
+  updateUI();
+  let move = null;
+  try {
+    move = usesGameAiProtocol(gameTypeOf(game)) ? await gameAIHintMove() : await kataGoHintMove();
+  } catch (error) {
+    if (hintPending?.requestId !== requestId) return;
+    hintPending = null;
+    if (error?.code !== GAME_AI_ERRORS.CANCELLED) {
+      setMessage(localizedErrorMessage(error, "暂时无法计算提示，请稍后再试。"), true);
+    }
+    updateUI();
+    return;
+  }
+  if (hintPending?.requestId !== requestId) return;
+  hintPending = null;
+  if (hintPositionKey() !== key || !canAskForHint()) {
+    updateUI();
+    return;
+  }
+  const valid = move?.type === "pass"
+    ? gameRulesOf(game).capabilities.pass
+    : move?.type === "play" && game.checkPlay(move.row, move.col).ok;
+  if (!valid) {
+    setMessage("暂时无法计算提示，请稍后再试。", true);
+    updateUI();
+    return;
+  }
+  moveHint = {
+    key,
+    move: move.type === "pass" ? { type: "pass" } : { type: "play", row: move.row, col: move.col },
+  };
+  announceMoveHint(moveHint.move);
+  updateUI();
+}
+
+function announceMoveHint(move) {
+  setMessage(move.type === "pass"
+    ? "提示：AI 建议这一手停一手。"
+    : `提示：AI 建议下在 ${formatReviewMove(move, boardHeight())}（棋盘上已标出）。`);
+}
+
+/** A Gomoku/Othello hint: the game's engine plays the human's side. */
+async function gameAIHintMove() {
+  const answer = await gameAIFor(gameTypeOf(game)).choose(
+    gameAiPosition(game, { moveCount }),
+    { level: HINT_AI_LEVEL, timeLimitMs: HINT_THINK_MS },
+  );
+  return { type: "play", row: answer.move.row, col: answer.move.col };
+}
+
+/** A Go hint from KataGo, through the worker the AI opponent already uses. */
+function kataGoHintMove() {
+  return new Promise((resolve, reject) => {
+    const online = hasOnlineSession();
+    const opponentSeat = online ? onlineAISeat(oppositeColor(game.currentPlayer)) : null;
+    const modelId = aiWorkerModelId ??
+      (online ? normalizeAIModelId(opponentSeat?.modelId) : localAIModelId(aiColor()));
+    if (!browserSupportsAIModel(modelId)) {
+      reject(new Error(`${getAIModel(modelId).name} 需要 WebGPU，当前浏览器无法运行。`));
+      return;
+    }
+    if (typeof Worker !== "function") {
+      reject(new Error("当前浏览器不支持后台 AI 计算。"));
+      return;
+    }
+    if (aiWorker && aiWorkerModelId && aiWorkerModelId !== modelId) terminateAIWorker();
+    let worker;
+    let state;
+    try {
+      worker = ensureAIWorker();
+      state = online && onlineRoom?.replay
+        ? buildReplayStateAtStep(onlineRoom.replay, moveCount)
+        : game.exportSearchState();
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    const id = ++aiRequestId;
+    aiWorkerContext = { kind: AI_CONTEXT_HINT, modelId, resolve, reject };
+    aiWorkerModelId = modelId;
+    aiWorkerBusy = true;
+    clearAIWorkerIdleRelease();
+    const level = KATAGO_AI;
+    worker.postMessage({
+      type: "think",
+      id,
+      modelId,
+      state,
+      options: {
+        difficulty: "hard",
+        timeLimitMs: level.timeMs,
+        maxIterations: level.maxIterations,
+        rolloutLimit: Math.min(level.rolloutLimit, boardPointCount() * 2),
+      },
+    });
+  });
+}
+
+/**
+ * Play an AI move only once it has been on screen long enough to follow:
+ * at least a second after the AI's turn began and after the previous
+ * move's flip wave. `stillWanted` is checked again after the wait.
+ */
+function afterAIPause(startedAt, stillWanted, play) {
+  const wait = aiMoveWaitMs({ startedAt, now: performance.now(), animationEndsAt: flipWaveEndsAt });
+  if (wait <= 0) {
+    play();
+    return;
+  }
+  window.setTimeout(() => {
+    if (stillWanted()) play();
+  }, wait);
 }
 
 async function startAIGame(event) {
@@ -3585,6 +3835,11 @@ function updateRoomUI() {
       } else if (roomClient.connectionStatus === CONNECTION_STATUS.DISCONNECTED) {
         elements.roomHint.textContent =
           "多次重连仍未成功；网络恢复或回到本页时会自动重试，也可以忘记这个房间。";
+      } else if (roomClient.connectionStatus === CONNECTION_STATUS.RECONNECTING) {
+        // A dropped connection says so; the browser knows when it is offline.
+        elements.roomHint.textContent = globalThis.navigator?.onLine === false
+          ? "网络已断开；恢复后会自动重新连接。"
+          : "连接中断，正在重新连接…";
       } else {
         elements.roomHint.textContent = connecting
           ? "正在连接房间，稍等一下…"
@@ -5181,8 +5436,20 @@ function renderBoardPosition(
   referencePoint = chatReferencePoint,
   analysisCandidates = [],
   analysisVariation = [],
+  { moveMark = null } = {},
 ) {
   const gameType = availableGameType(gameTypeOf(state));
+  // Gomoku rows and Renju forbidden points, Othello legal moves and flips.
+  let gameMarkers = gameMarkersForState(state, { hints: showsLegalMoveHints(state) });
+  // Previews and analysis redraws pass no mark and leave the last one alone.
+  const animateFlips = isOneMoveOn(renderedMoveMark, moveMark);
+  if (moveMark) renderedMoveMark = moveMark;
+  if (gameMarkers?.flipped?.length > 0) {
+    gameMarkers = { ...gameMarkers, animateFlips };
+    if (animateFlips && !prefersReducedMotion()) {
+      flipWaveEndsAt = performance.now() + flipWaveDurationMs(gameMarkers.flipped);
+    }
+  }
   const viewState = {
     ...state,
     lastMove,
@@ -5191,11 +5458,19 @@ function renderBoardPosition(
     analysisCandidates,
     analysisVariation,
     territoryRegions: territoryRegionsForState(state),
-    // Gomoku rows and Renju forbidden points, Othello legal moves and flips.
-    gameMarkers: gameMarkersForState(state, { hints: showsLegalMoveHints(state) }),
+    gameMarkers,
     boardStyle: { gameType },
   };
   activeBoardView()?.setPosition(viewState);
+}
+
+/** Whether `next` is exactly one move after `previous` in the same context. */
+function isOneMoveOn(previous, next) {
+  return Boolean(
+    previous && next &&
+      previous.context === next.context &&
+      next.count === previous.count + 1,
+  );
 }
 
 /**
@@ -5344,7 +5619,7 @@ function renderCurrentAnalysisPosition() {
   renderBoardPosition(
     preview?.state ?? state,
     preview?.state?.lastMove ?? normalLastMove,
-    null,
+    preview ? null : hintMoveFor(state),
     chatReferencePoint,
     decoratedCandidates,
     preview?.variation ?? [],
@@ -5640,7 +5915,9 @@ function updateReplayUI() {
     : "";
   const terminalAtEnd = finishedAtEnd || Boolean(recordedResultAtEnd);
 
-  renderBoardPosition(frame, move);
+  renderBoardPosition(frame, move, null, chatReferencePoint, [], [], {
+    moveMark: { context: "replay", count: replaySession.index },
+  });
   const controls = syncGameCountersUI(frame);
   elements.boardTopology.textContent = boardSummaryLabel(frame);
   elements.moveNumber.textContent = `复盘 · 第 ${replaySession.index} / ${lastIndex} 手`;
@@ -5739,7 +6016,9 @@ function updateUI() {
     : lastPlayedPoint
       ? { type: "play", ...lastPlayedPoint }
       : state.lastMove;
-  renderBoardPosition(state, renderLastMove);
+  renderBoardPosition(state, renderLastMove, rematchSetup ? null : hintMoveFor(state), chatReferencePoint, [], [], {
+    moveMark: rematchSetup ? null : { context: "live", count: moveCount },
+  });
 
   if (rematchSetup) {
     syncGameCountersUI(state, { preview: true });
@@ -5805,6 +6084,7 @@ function updateUI() {
   const playing = state.phase === PHASE_PLAY && !timeoutOutcome;
   const terminal = Boolean(timeoutOutcome || resignOutcome || state.phase === PHASE_FINISHED);
   elements.passButton.hidden = !playing || !controls.pass;
+  syncHintButton(playing);
   elements.newGameButton.hidden = true;
   elements.playControls.hidden = terminal;
   elements.playControls.dataset.live = String(playing);
@@ -6214,6 +6494,10 @@ elements.passButton.addEventListener("click", () => {
 
 elements.undoButton.addEventListener("click", () => {
   void dispatchMatchAction(MATCH_ACTION_UNDO);
+});
+
+elements.hintButton.addEventListener("click", () => {
+  void requestMoveHint();
 });
 
 elements.resignButton.addEventListener("click", showResignDialog);
@@ -6960,6 +7244,29 @@ elements.joinRoom.addEventListener("click", () => void joinOnlineRoom());
 elements.watchRoom.addEventListener("click", () => void joinOnlineRoom("spectator"));
 elements.lobbyCreateRoom.addEventListener("click", () => {
   showOnlineDialog("", { intent: "create" });
+});
+elements.lobbyEmptyCreate.addEventListener("click", () => {
+  showOnlineDialog("", { intent: "create" });
+});
+elements.lobbyQuickJoin.addEventListener("click", async () => {
+  const code = await chooseQuickJoinRoom();
+  if (code) {
+    navigateAppPath(onlineRoomPath(code, "player"));
+    return;
+  }
+  // Nothing open under these filters: offer a room of the filtered game.
+  announceLobby("现在没有符合筛选、正在等对手的房间；已为你打开建房窗口。");
+  showOnlineDialog("", { intent: "create" });
+  const game = elements.lobbyGameFilter.value;
+  if (game && game !== "all") {
+    elements.onlineDialog.querySelector(`[data-game-type="${game}"]`)?.click();
+  }
+});
+elements.lobbyMyRoomList.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-lobby-room]");
+  if (!target) return;
+  const code = sanitizeRoomCode(target.dataset.lobbyRoom);
+  if (code) navigateAppPath(onlineRoomPath(code, ""));
 });
 elements.lobbyJoinRoom.addEventListener("click", () => {
   showOnlineDialog("", { intent: "join" });

@@ -4,7 +4,8 @@ Read `docs/HANDOFF.md` first. It covers current status, the owner's decisions, h
 
 - **Communication:** the owner writes in Chinese, so reply in Chinese. They prefer speed: once dev checks pass, ship it and let them give feedback.
 - **Checks to run before pushing** (the same as CI):
-  - `npm test`
+  - `npm test` (CI runs it as `npm run test:coverage`, which fails below 95% lines / 90% branches / 95% functions of the rules code)
+  - `npm run test:soak` (every board size of every game: random games against independent references, about two minutes)
   - `npm run build`
   - `npx wrangler deploy --dry-run --strict`
   - `npm audit --audit-level=moderate`

@@ -74,6 +74,7 @@ export async function scanBoard(page, { step = 4 } = {}) {
     }));
     canvas.dispatchEvent(new PointerEvent("pointerleave", { bubbles: true, pointerId: 1 }));
     const best = {};
+    const sums = {};
     const radius = 2;
     for (let i = 0; i < ys.length; i += 1) {
       for (let j = 0; j < xs.length; j += 1) {
@@ -86,7 +87,16 @@ export async function scanBoard(page, { step = 4 } = {}) {
           }
         }
         if (!best[key] || score > best[key].score) best[key] = { x: xs[j], y: ys[i], score };
+        // The centre of a point (cx, cy): the mean of every sample showing it.
+        const sum = (sums[key] ??= { x: 0, y: 0, n: 0 });
+        sum.x += xs[j];
+        sum.y += ys[i];
+        sum.n += 1;
       }
+    }
+    for (const [key, sum] of Object.entries(sums)) {
+      best[key].cx = sum.x / sum.n;
+      best[key].cy = sum.y / sum.n;
     }
     return best;
   }, step);

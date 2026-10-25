@@ -27,6 +27,12 @@ export const LOBBY_EXPIRY_REFRESH_MS = 30 * 60 * 1_000;
 // is always recorded).
 export const CONNECTION_WRITE_INTERVAL_MS = 60 * 1_000;
 const MAX_SOCKET_CONNECTIONS = 64;
+// Pages ping every 10 s (answered without waking the room); a background
+// tab throttled to one timer a minute pings about once a minute. A member
+// socket silent for longer than this lost its network; the room checks
+// while members are connected.
+const SILENT_SOCKET_MS = 90_000;
+const SOCKET_SWEEP_MS = 30_000;
 const MAX_CLIENT_MESSAGE_BYTES = 8 * 1024;
 const POSITION_BOUND_ACTIONS = new Set([
   "play",
@@ -270,6 +276,7 @@ export class BadukRoom {
   async alarm() {
     await this.enqueue(async () => {
       if (!this.engine) return;
+      await this.sweepSilentSockets(Date.now());
       const result = this.engine.advance(Date.now(), { includeRoom: false });
       if (result.expired) {
         await this.retireRoom();
@@ -493,7 +500,7 @@ export class BadukRoom {
 
     try {
       const connectionId = crypto.randomUUID();
-      const joinableBefore = this.lobbyJoinable();
+      const visibleBefore = this.lobbyVisibleKey();
       const connected = await this.engine.connectByToken({
         token,
         connectionId,
@@ -525,7 +532,7 @@ export class BadukRoom {
       const lastWrite = this.connectionWrites?.get(playerId);
       if (connected.firstConnection !== false || lastWrite === undefined ||
           connectedAt - lastWrite >= CONNECTION_WRITE_INTERVAL_MS ||
-          this.lobbyJoinable() !== joinableBefore) {
+          this.lobbyVisibleKey() !== visibleBefore) {
         await this.persist();
         this.connectionWrites?.set(playerId, connectedAt);
       }
@@ -777,7 +784,7 @@ export class BadukRoom {
     const attachment = this.readAttachment(socket);
     if (!attachment.identity) return;
     try {
-      const joinableBefore = this.lobbyJoinable();
+      const visibleBefore = this.lobbyVisibleKey();
       const disconnected = this.engine.disconnect({
         connectionId: attachment.connectionId,
       });
@@ -785,10 +792,11 @@ export class BadukRoom {
         this.rememberPlayerOffline(disconnected.playerId, Date.now(), socket);
       }
       // Only a spectator's reconnect grace starts here and must survive a
-      // restart, and the lobby must learn when a host's presence opens or
-      // closes the room to joiners; other presence is not worth a rewrite.
+      // restart, and the lobby must learn what it shows (a seat opening or
+      // closing, a player going offline, fewer spectators); other presence is
+      // not worth a rewrite.
       if (disconnected?.spectatorOffline !== false ||
-          this.lobbyJoinable() !== joinableBefore) {
+          this.lobbyVisibleKey() !== visibleBefore) {
         await this.persist();
       }
       await this.scheduleAlarm();
@@ -849,6 +857,31 @@ export class BadukRoom {
     }
   }
 
+  /**
+   * What the lobby shows of this room (expiry aside), or null without a
+   * lobby. Socket events that change it (a seat, a player going on- or
+   * offline, the spectator count) write, because a publish needs a stored
+   * directory revision.
+   */
+  lobbyVisibleKey(room = null) {
+    if (!this.engine || !this.env?.BADUK_ROOM_INDEX) return null;
+    try {
+      const snapshot = room ?? this.engine.directorySnapshot();
+      const {
+        revision: _revision,
+        directoryRevision: _directoryRevision,
+        updatedAt: _updatedAt,
+        expiresAt: _expiresAt,
+        ...visible
+      } = lobbySummaryFromRoom(snapshot);
+      // An unlisted room publishes listed: false, which the lobby treats as
+      // a versioned removal.
+      return JSON.stringify({ ...visible, listed: snapshot.listed !== false });
+    } catch {
+      return null;
+    }
+  }
+
   queueIndexPublish() {
     if (!this.engine || !this.env?.BADUK_ROOM_INDEX) return;
     let room;
@@ -865,16 +898,8 @@ export class BadukRoom {
     // global lobby rewrites its whole index per upsert, so only publish a
     // visible change, a materially later expiry, or a retry after a failure.
     // A skipped publish just leaves an older directory revision in the lobby.
-    const {
-      revision: _revision,
-      directoryRevision: _directoryRevision,
-      updatedAt: _updatedAt,
-      expiresAt,
-      ...visible
-    } = summary;
-    // An unlisted room publishes listed: false, which the lobby treats as a
-    // versioned removal.
-    const key = JSON.stringify({ ...visible, listed: room.listed !== false });
+    const { expiresAt } = summary;
+    const key = this.lobbyVisibleKey(room);
     const previous = this.indexPublication;
     if (previous?.key === key &&
         expiresAt - previous.expiresAt < LOBBY_EXPIRY_REFRESH_MS) {
@@ -931,8 +956,34 @@ export class BadukRoom {
     }
   }
 
+  /**
+   * Close the sockets of pages that stopped pinging for SILENT_SOCKET_MS: the
+   * network under them died without a close, so the member is offline even
+   * though the socket looks open. Pages that never pinged (older builds) are
+   * left to the transport.
+   */
+  async sweepSilentSockets(now) {
+    if (typeof this.ctx.getWebSocketAutoResponseTimestamp !== "function") return;
+    for (const socket of this.ctx.getWebSockets?.() ?? []) {
+      if (!this.readAttachment(socket).identity) continue;
+      const lastPing = this.ctx.getWebSocketAutoResponseTimestamp(socket);
+      if (!lastPing || now - lastPing.getTime() < SILENT_SOCKET_MS) continue;
+      this.closeSocket(socket, 4000, "Heartbeat lost");
+      await this.disconnectSocket(socket);
+    }
+  }
+
+  /** Whether a member socket is open, so heartbeats need checking. */
+  hasMemberSockets() {
+    return (this.ctx.getWebSockets?.() ?? []).some((socket) => this.readAttachment(socket).identity);
+  }
+
   async scheduleAlarm() {
-    const dueAt = this.engine?.nextDueAt();
+    let dueAt = this.engine?.nextDueAt();
+    if (this.engine && this.hasMemberSockets()) {
+      const sweepAt = Date.now() + SOCKET_SWEEP_MS;
+      dueAt = dueAt === null || dueAt === undefined ? sweepAt : Math.min(dueAt, sweepAt);
+    }
     if (dueAt === null || dueAt === undefined) {
       if ((await this.ctx.storage.getAlarm()) !== null) {
         await this.ctx.storage.deleteAlarm();

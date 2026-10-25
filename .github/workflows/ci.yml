@@ -24,11 +24,27 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
-      - name: Test rules, protocol, and SQLite runtime
-        run: npm test
+      - name: Test rules, protocol, and SQLite runtime (with the rules coverage gate)
+        run: npm run test:coverage
       - name: Build client
         run: npm run build
       - name: Validate Worker without deployment
         run: npx wrangler deploy --dry-run --strict
       - name: Audit all dependencies
         run: npm audit --audit-level=moderate
+
+  soak:
+    # Every board size of every game, random games against the independent
+    # references (npm test runs a quick plan of the same suites).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Soak the rules on every board
+        run: npm run test:soak

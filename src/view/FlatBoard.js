@@ -32,14 +32,12 @@ import {
 import {
   EMPTY_GAME_MARKERS,
   GAME_MARKER_STYLES,
-  flipPulseLook,
-  flipPulseProgress,
   gameMarkerKey,
-  gameMarkerPointsSignature,
   lineSegmentsOnScreen,
   normalizeGameMarkers,
   prefersReducedMotion,
 } from "./gameMarkers.js";
+import { FlipWave } from "./flipWave.js";
 
 const TAU = Math.PI * 2;
 const DRAG_THRESHOLD = 6;
@@ -98,9 +96,8 @@ export class FlatBoard {
     this.territoryPoints = [];
     this.gameMarkers = EMPTY_GAME_MARKERS;
     this.forbiddenKeys = new Set();
-    this.flippedSignature = "";
-    this.flipPulseStartedAt = null;
-    this.flipPulseFrame = null;
+    this.flipWave = new FlipWave({ reducedMotion: prefersReducedMotion() });
+    this.flipFrame = null;
     this.boardStyle = normalizeBoardStyle();
     this.feltPattern = null;
     this.hoveredPoint = null;
@@ -170,8 +167,7 @@ export class FlatBoard {
     this.territoryPoints = [];
     this.gameMarkers = EMPTY_GAME_MARKERS;
     this.forbiddenKeys = new Set();
-    this.flippedSignature = "";
-    this.cancelFlipPulse();
+    this.cancelFlipWave({ reset: true });
     this.offsetColumns = 0;
     this.offsetRows = 0;
     this.hoveredPoint = null;
@@ -269,36 +265,36 @@ export class FlatBoard {
       board,
     });
     this.forbiddenKeys = new Set(this.gameMarkers.forbidden.map(gameMarkerKey));
-    const flippedSignature = gameMarkerPointsSignature(this.gameMarkers.flipped);
-    if (flippedSignature !== this.flippedSignature) {
-      this.flippedSignature = flippedSignature;
-      if (flippedSignature) this.startFlipPulse();
-      else this.cancelFlipPulse();
-    }
+    const started = this.flipWave.sync(this.gameMarkers.flipped, {
+      origin: this.gameMarkers.flipOrigin ?? null,
+      animate: this.active && this.gameMarkers.animateFlips === true,
+    });
+    if (started) this.startFlipFrames();
+    else if (this.flipWave.startedAt === null) this.stopFlipFrames();
   }
 
-  /** A short pulse on newly flipped discs; frames stop when it ends. */
-  startFlipPulse() {
-    this.cancelFlipPulse();
-    if (!this.active || prefersReducedMotion()) return;
-    this.flipPulseStartedAt = performance.now();
+  /** Frames for a running flip wave; they stop when it ends. */
+  startFlipFrames() {
+    this.stopFlipFrames();
     const step = (now) => {
-      this.flipPulseFrame = null;
-      if (flipPulseProgress(this.flipPulseStartedAt, now) === null) {
-        this.flipPulseStartedAt = null;
-      }
+      this.flipFrame = null;
+      const running = this.flipWave.running(now);
       this.draw();
-      if (this.flipPulseStartedAt !== null) {
-        this.flipPulseFrame = requestAnimationFrame(step);
-      }
+      if (running) this.flipFrame = requestAnimationFrame(step);
     };
-    this.flipPulseFrame = requestAnimationFrame(step);
+    this.flipFrame = requestAnimationFrame(step);
   }
 
-  cancelFlipPulse() {
-    if (this.flipPulseFrame !== null) cancelAnimationFrame(this.flipPulseFrame);
-    this.flipPulseFrame = null;
-    this.flipPulseStartedAt = null;
+  stopFlipFrames() {
+    if (this.flipFrame !== null) cancelAnimationFrame(this.flipFrame);
+    this.flipFrame = null;
+  }
+
+  /** Stop the flip wave; with reset, the same flips may start a wave again. */
+  cancelFlipWave({ reset = false } = {}) {
+    this.stopFlipFrames();
+    if (reset) this.flipWave.reset();
+    else this.flipWave.cancel();
   }
 
   isForbiddenPoint(point) {
@@ -315,7 +311,7 @@ export class FlatBoard {
       this.container.classList.remove("dragging");
       this.setHoveredPoint(null);
       this.cancelSnap();
-      this.cancelFlipPulse();
+      this.cancelFlipWave();
     }
   }
 
@@ -1018,6 +1014,7 @@ export class FlatBoard {
   drawStones(context) {
     if (!this.board?.length) return;
     const radius = this.cell * 0.41;
+    const now = performance.now();
     context.save();
     context.beginPath();
     context.rect(
@@ -1033,12 +1030,14 @@ export class FlatBoard {
         const color = this.board[row]?.[col];
         if (!color) continue;
         const dead = this.deadKeys.has(`${row},${col}`);
+        const turning = this.flipWave.look(row, col, now);
         this.forEachLogicalPoint(
           row,
           col,
           radius,
           (x, y) => {
-            this.drawStone(context, x, y, radius, color, dead);
+            if (turning) this.drawTurningDisc(context, x, y, radius, color, turning);
+            else this.drawStone(context, x, y, radius, color, dead);
             if (
               this.lastMove?.type === "play" &&
               this.lastMove.row === row &&
@@ -1114,7 +1113,7 @@ export class FlatBoard {
   }
 
   /**
-   * Flipped-disc outlines (with their brief pulse) and the winning line: a
+   * Flipped-disc outlines (fading in with the flip wave) and the winning line: a
    * glow ring on each winning stone plus a stroke joining neighbouring
    * stones. The stroke is drawn pair by pair between images that are
    * neighbours on screen, so it stays correct across wrapped edges and the
@@ -1136,26 +1135,22 @@ export class FlatBoard {
 
     if (flipped.length > 0) {
       const style = GAME_MARKER_STYLES.flipped;
-      const progress = flipPulseProgress(this.flipPulseStartedAt, performance.now());
-      const pulse = progress === null ? null : flipPulseLook(progress);
+      const now = performance.now();
       const lineWidth = clamp(this.cell * 0.06, 1.5, 3);
       for (const { row, col } of flipped) {
+        // A ring fades in as its disc turns over in the flip wave.
+        const turning = this.flipWave.look(row, col, now);
+        const strength = turning ? turning.ring : 1;
+        if (strength <= 0) continue;
         this.forEachLogicalPoint(row, col, stoneRadius * 1.9, (x, y) => {
+          context.save();
+          context.globalAlpha *= strength;
           context.strokeStyle = style.stroke;
           context.lineWidth = lineWidth;
           context.beginPath();
           context.arc(x, y, stoneRadius * 1.07, 0, TAU);
           context.stroke();
-          if (pulse) {
-            context.save();
-            context.globalAlpha = pulse.opacity;
-            context.strokeStyle = style.pulse;
-            context.lineWidth = lineWidth * 1.3;
-            context.beginPath();
-            context.arc(x, y, stoneRadius * 1.07 * pulse.scale, 0, TAU);
-            context.stroke();
-            context.restore();
-          }
+          context.restore();
         });
       }
     }
@@ -1241,6 +1236,19 @@ export class FlatBoard {
       context.stroke();
       context.restore();
     }
+  }
+
+  /**
+   * A disc of the flip wave seen from above as it turns over: it narrows to
+   * its edge, rises a little, and shows the new colour on the way down.
+   */
+  drawTurningDisc(context, x, y, radius, color, look) {
+    const shown = look.showNewColor ? color : color === "black" ? "white" : "black";
+    context.save();
+    context.translate(x, y - look.lift * radius * 0.35);
+    context.scale(Math.max(0.06, look.squash), 1 + look.lift * 0.12);
+    this.drawDisc(context, 0, 0, radius, shown);
+    context.restore();
   }
 
   /** A flat Othello disc: a darker edge under the face suggests thickness. */
@@ -1909,7 +1917,7 @@ export class FlatBoard {
     this.destroyed = true;
     this.active = false;
     this.cancelSnap();
-    this.cancelFlipPulse();
+    this.cancelFlipWave();
     this.resizeObserver.disconnect();
     this.canvas.removeEventListener("pointerdown", this.handlePointerDown);
     this.canvas.removeEventListener("pointermove", this.handlePointerMove);

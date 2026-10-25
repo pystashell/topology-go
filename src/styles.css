@@ -269,6 +269,11 @@ summary:focus-visible {
   min-height: 50px;
 }
 
+.lobby-primary-actions #lobby-join-room {
+  grid-column: 1 / -1;
+  min-height: 40px;
+}
+
 .lobby-primary-actions a.secondary-button {
   grid-column: 1 / -1;
   min-height: 38px;
@@ -328,9 +333,94 @@ summary:focus-visible {
 
 .lobby-filters {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
   margin-top: 15px;
+}
+
+.lobby-filters .lobby-search {
+  grid-column: span 2;
+}
+
+.lobby-filters input[type="search"] {
+  width: 100%;
+  min-height: 40px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  color: var(--text);
+  background: #15201c;
+  font: inherit;
+  font-size: 12px;
+}
+
+.lobby-count {
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.lobby-stats {
+  min-height: 16px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* This browser's rooms, above the public list. */
+.lobby-my-rooms {
+  margin-top: 26px;
+  padding: 24px;
+  border: 1px solid rgba(215, 169, 91, 0.3);
+  border-radius: 22px;
+  background: rgba(24, 33, 27, 0.82);
+}
+
+.lobby-my-rooms-note {
+  margin: 8px 0 14px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.lobby-my-room-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.lobby-my-room {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.lobby-my-room-role {
+  color: var(--accent-strong);
+  font-size: 11px;
+}
+
+.lobby-my-room small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.lobby-my-room-status span + span::before {
+  content: " · ";
+}
+
+.lobby-my-room .room-card-actions {
+  display: flex;
+  gap: 7px;
+  margin-top: 4px;
+}
+
+.lobby-my-room button {
+  min-height: 32px;
+  padding: 6px 10px;
+  font-size: 10px;
 }
 
 .lobby-filters label {
@@ -524,6 +614,46 @@ summary:focus-visible {
   font-size: 9px;
 }
 
+.lobby-room-players > span:not(.versus) {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+/* A player's connection in a lobby card. */
+.lobby-presence {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+}
+
+.lobby-presence.online {
+  border-color: #6fd39d;
+  background: #6fd39d;
+  box-shadow: 0 0 6px rgba(111, 211, 157, 0.6);
+}
+
+.lobby-presence.offline {
+  border-color: #7b8782;
+  background: #4c5551;
+}
+
+.lobby-player-tag {
+  padding: 1px 5px;
+  border-radius: 6px;
+  color: #c9d8f7;
+  background: rgba(110, 140, 210, 0.18);
+  font-size: 8px;
+}
+
+.lobby-room-note {
+  color: var(--accent-strong);
+  font-size: 10px;
+}
+
 .lobby-room-card-footer small {
   color: var(--muted);
   font-size: 9px;
@@ -552,6 +682,12 @@ summary:focus-visible {
 
 .lobby-empty strong {
   color: #dbe4df;
+}
+
+.lobby-empty button {
+  margin-top: 8px;
+  min-height: 40px;
+  padding: 8px 18px;
 }
 
 .board-stage {
@@ -3042,6 +3178,15 @@ select:disabled {
   .lobby-filters,
   .lobby-room-list {
     grid-template-columns: 1fr;
+  }
+
+  .lobby-filters .lobby-search {
+    grid-column: auto;
+  }
+
+  .lobby-my-rooms {
+    padding: 17px;
+    border-radius: 16px;
   }
 
   .lobby-room-card-body {

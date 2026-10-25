@@ -344,15 +344,32 @@ export function isLobbySummary(value) {
   );
 }
 
-export function sortLobbyRooms(rooms) {
+/** Orders the lobby offers: rooms waiting for players first (the default). */
+export const LOBBY_SORT_ORDERS = Object.freeze(["recommended", "newest", "watchers", "moves"]);
+
+/** Square sizes the size filter names; "custom" is every other shape. */
+export const LOBBY_LISTED_SIZES = Object.freeze([8, 9, 11, 13, 15, 19]);
+
+/**
+ * Sort summaries. "recommended" puts open invitations and rooms in setup
+ * first, then games in progress, then finished ones (newest activity first
+ * within each); "newest" sorts by creation; "watchers" and "moves" by
+ * spectators and moves played. Ties fall back to recent activity, then code.
+ */
+export function sortLobbyRooms(rooms, order = "recommended") {
   const priority = {
     [LOBBY_STATUS_INVITED]: 0,
     [LOBBY_STATUS_SETUP]: 1,
     [LOBBY_STATUS_PLAYING]: 2,
     [LOBBY_STATUS_FINISHED]: 3,
   };
+  const primary = {
+    newest: (left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0),
+    watchers: (left, right) => (right.spectatorCount ?? 0) - (left.spectatorCount ?? 0),
+    moves: (left, right) => (right.moveCount ?? 0) - (left.moveCount ?? 0),
+  }[order] ?? ((left, right) => (priority[left.status] ?? 9) - (priority[right.status] ?? 9));
   return [...rooms].sort((left, right) =>
-    (priority[left.status] ?? 9) - (priority[right.status] ?? 9) ||
+    primary(left, right) ||
     right.updatedAt - left.updatedAt ||
     left.code.localeCompare(right.code)
   );
@@ -367,8 +384,22 @@ export function pruneLobbyRooms(rooms, now = Date.now()) {
   ).slice(0, MAX_LOBBY_ROOMS);
 }
 
+/** Whether a summary matches a search for a room code or a player's name. */
+export function lobbyRoomMatchesQuery(room, query) {
+  const needle = String(query ?? "").trim().toLocaleLowerCase();
+  if (!needle) return true;
+  if (room.code.toLocaleLowerCase().includes(needle)) return true;
+  return (room.players ?? []).some((player) =>
+    String(player?.name ?? "").toLocaleLowerCase().includes(needle));
+}
+
+/**
+ * Filter (status, game, topology, size, mode and a search query) and sort
+ * (filters.order) lobby summaries.
+ */
 export function filterLobbyRooms(rooms, filters = {}) {
   return sortLobbyRooms(rooms.filter((room) => {
+    if (!lobbyRoomMatchesQuery(room, filters.query)) return false;
     if (filters.status === "joinable" && room.joinable !== true) return false;
     if (
       filters.status &&
@@ -380,12 +411,76 @@ export function filterLobbyRooms(rooms, filters = {}) {
     if (filters.mode && filters.mode !== "all" && room.mode !== filters.mode) return false;
     if (filters.size && filters.size !== "all") {
       if (filters.size === "custom") {
-        if ([9, 13, 19].includes(room.width) && room.width === room.height) return false;
+        if (LOBBY_LISTED_SIZES.includes(room.width) && room.width === room.height) return false;
       } else {
         const size = Number(filters.size);
         if (room.width !== size || room.height !== size) return false;
       }
     }
     return true;
-  }));
+  }), filters.order);
+}
+
+/**
+ * Counts for the lobby's summary line and status buttons: rooms by status,
+ * joinable seats, spectators watching, and players online in the rooms.
+ */
+export function lobbyStats(rooms) {
+  const stats = {
+    total: 0, joinable: 0, waiting: 0, playing: 0, finished: 0, spectators: 0, playersOnline: 0,
+  };
+  for (const room of rooms) {
+    stats.total += 1;
+    if (room.joinable === true) stats.joinable += 1;
+    if (room.status === LOBBY_STATUS_PLAYING) stats.playing += 1;
+    else if (room.status === LOBBY_STATUS_FINISHED) stats.finished += 1;
+    else stats.waiting += 1;
+    stats.spectators += Number.isSafeInteger(room.spectatorCount) ? room.spectatorCount : 0;
+    stats.playersOnline += (room.players ?? []).filter((player) =>
+      player?.online === true && player?.controller !== "ai").length;
+  }
+  return stats;
+}
+
+/**
+ * The room "Quick join" takes: a joinable room that passes the other
+ * filters (status aside), preferring a room still in setup or invitation
+ * over one whose game is already running, then the most recent activity.
+ * Rooms this browser already holds a seat in are skipped.
+ *
+ * @returns {object|null}
+ */
+export function pickQuickJoinRoom(rooms, filters = {}, { exclude = [] } = {}) {
+  const skip = new Set(exclude);
+  const candidates = filterLobbyRooms(
+    rooms.filter((room) => room.joinable === true && !skip.has(room.code)),
+    { ...filters, status: "all", order: "recommended" },
+  );
+  return candidates[0] ?? null;
+}
+
+/**
+ * This browser's rooms for the "My rooms" list: each stored seat or
+ * spectator session with the room's public summary when the lobby lists it
+ * (null for an unlisted, finished-and-expired or not yet indexed room).
+ * One entry per room; a seat is preferred over a spectator session.
+ */
+export function myLobbyRooms(sessions, rooms) {
+  const summaries = new Map(rooms.map((room) => [room.code, room]));
+  const byCode = new Map();
+  for (const session of sessions) {
+    if (!session || typeof session.code !== "string") continue;
+    const known = byCode.get(session.code);
+    if (known && known.role === "player") continue;
+    byCode.set(session.code, {
+      code: session.code,
+      role: session.role === "player" ? "player" : "spectator",
+      color: session.color === "black" || session.color === "white" ? session.color : null,
+      playerName: typeof session.playerName === "string" ? session.playerName : "",
+      summary: summaries.get(session.code) ?? null,
+    });
+  }
+  return [...byCode.values()].sort((left, right) =>
+    (right.summary?.updatedAt ?? 0) - (left.summary?.updatedAt ?? 0) ||
+    left.code.localeCompare(right.code));
 }
