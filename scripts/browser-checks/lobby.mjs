@@ -35,6 +35,13 @@ async function untilLobby(pageValue, check, arg, { tries = 20, label = "lobby" }
   throw new Error(`${label}: condition not reached`);
 }
 
+/** Chinese text left on an English page, player names (typed by people) aside. */
+async function englishLeftovers(pageValue) {
+  const names = new Set(await pageValue.$$eval(".lobby-room-players > span:not(.versus) > span, #black-seat, #white-seat",
+    (nodes) => nodes.map((node) => node.textContent.trim())));
+  return (await cjkLeftovers(pageValue)).filter((value) => !names.has(value) && !/^(房主甲|客人乙|观众丙)$/u.test(value));
+}
+
 function card(code) {
   return `.lobby-room-card[data-room-code="${code}"]`;
 }
@@ -153,7 +160,7 @@ try {
     card: await cardInfo(english, code),
     stats: await text(english, "#lobby-stats"),
     // Player names are what people typed; everything else must be English.
-    leftovers: (await cjkLeftovers(english)).filter((value) => !/^(房主甲|客人乙|观众丙)$/u.test(value)),
+    leftovers: await englishLeftovers(english),
   };
   record.englishShot = await shot(english, "lobby-english");
 
@@ -189,7 +196,7 @@ try {
   await host.waitForTimeout(400);
   record.myRoomsEnglish = {
     entry: await text(host, "#lobby-my-room-list .lobby-my-room"),
-    leftovers: (await cjkLeftovers(host)).filter((value) => !/^(房主甲|客人乙|观众丙)$/u.test(value)),
+    leftovers: await englishLeftovers(host),
   };
   await host.click('[data-language="zh-CN"]');
   await host.waitForTimeout(400);
