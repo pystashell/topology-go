@@ -11,6 +11,7 @@ import {
   parseWebSocketProtocols,
 } from "../src/multiplayer/protocol.js";
 import {
+  MATCH_STATUS_PLAYING,
   RoomEngine,
   RoomEngineError,
 } from "../src/multiplayer/roomEngine.js";
@@ -29,10 +30,12 @@ export const CONNECTION_WRITE_INTERVAL_MS = 60 * 1_000;
 const MAX_SOCKET_CONNECTIONS = 64;
 // Pages ping every 10 s (answered without waking the room); a background
 // tab throttled to one timer a minute pings about once a minute. A member
-// socket silent for longer than this lost its network; the room checks
-// while members are connected.
+// socket silent for longer than this lost its network. The room checks only
+// while a game is being played (where presence decides abandonment and the
+// opponent's view), once a minute: every check is a billed request and an
+// alarm write, which the free plan counts per day.
 const SILENT_SOCKET_MS = 90_000;
-const SOCKET_SWEEP_MS = 30_000;
+const SOCKET_SWEEP_MS = 60_000;
 const MAX_CLIENT_MESSAGE_BYTES = 8 * 1024;
 const POSITION_BOUND_ACTIONS = new Set([
   "play",
@@ -973,14 +976,15 @@ export class BadukRoom {
     }
   }
 
-  /** Whether a member socket is open, so heartbeats need checking. */
-  hasMemberSockets() {
-    return (this.ctx.getWebSockets?.() ?? []).some((socket) => this.readAttachment(socket).identity);
+  /** Whether heartbeats need checking: a game is being played and a member is connected. */
+  needsHeartbeatChecks() {
+    return this.engine?.state?.match?.status === MATCH_STATUS_PLAYING &&
+      (this.ctx.getWebSockets?.() ?? []).some((socket) => this.readAttachment(socket).identity);
   }
 
   async scheduleAlarm() {
     let dueAt = this.engine?.nextDueAt();
-    if (this.engine && this.hasMemberSockets()) {
+    if (this.needsHeartbeatChecks()) {
       const sweepAt = Date.now() + SOCKET_SWEEP_MS;
       dueAt = dueAt === null || dueAt === undefined ? sweepAt : Math.min(dueAt, sweepAt);
     }

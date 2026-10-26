@@ -84,6 +84,7 @@ async function runGomokuScenario(host, guest) {
   try {
     created = await host.createRoom({
       name: "Smoke Gomoku Black",
+      listed: false,
       gameType: "gomoku",
       ruleSet: "freestyle",
       size: 15,
@@ -197,6 +198,7 @@ try {
   );
   const created = await black.createRoom({
     name: "Smoke Black",
+    listed: false,
     size: 9,
     komi: 6.5,
     scoringRule: "japanese",
@@ -470,6 +472,7 @@ try {
   );
   const aiCreated = await aiHost.createRoom({
     name: "Smoke AI Host",
+    listed: false,
     width: 9,
     height: 7,
     komi: 6.5,

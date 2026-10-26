@@ -263,14 +263,22 @@ test("the room closes member sockets that stopped pinging, and only those", asyn
   assert.deepEqual(old.closed, []);
 });
 
-test("the room keeps an alarm for heartbeat checks only while members are connected", async () => {
+test("the room checks heartbeats once a minute, only while a game is played and members are connected", async () => {
   const members = [{ name: "m", attachment: { identity: { playerId: "a" } }, lastPing: null }];
   const busy = roomWith(members, { now: Date.now() });
+  busy.room.engine.state = { match: { status: "playing" } };
   const before = Date.now();
   await busy.room.scheduleAlarm();
-  assert.ok(busy.alarm() >= before + 29_000 && busy.alarm() <= Date.now() + 30_000);
+  assert.ok(busy.alarm() >= before + 59_000 && busy.alarm() <= Date.now() + 60_000);
+  // Waiting for an opponent or after the game: no periodic wake-ups.
+  for (const status of ["setup", "invited", "finished"]) {
+    const idle = roomWith(members, { now: Date.now() });
+    idle.room.engine.state = { match: { status } };
+    await idle.room.scheduleAlarm();
+    assert.equal(idle.alarm(), null, status);
+  }
   // An earlier room deadline (a clock, a count) still comes first.
-  busy.room.engine = { nextDueAt: () => before + 5_000 };
+  busy.room.engine = { nextDueAt: () => before + 5_000, state: { match: { status: "playing" } } };
   await busy.room.scheduleAlarm();
   assert.equal(busy.alarm(), before + 5_000);
   // Nobody connected and nothing due: no alarm.
