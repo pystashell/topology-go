@@ -52,6 +52,7 @@ const SAMPLES = [
   [/\.downloadLabel$/u, "约 11 MB"],
   [/(?:getAIModel\([^)]*\)|model)\.name$/u, "KataGo b10"],
   [/formatReviewMove\(/u, "D4"],
+  [/gameName\(/u, "五子棋"],
   [/lobbyUpdatedLabel\(/u, "3 分钟前"],
   [/boardDimensionLabel\(|^dimensions$/u, "9 × 9"],
   [/localizedErrorMessage\(|^message$|^reason$|\.message$/u, "等待服务器确认超时。"],

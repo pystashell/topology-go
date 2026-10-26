@@ -4194,14 +4194,7 @@ function syncTopologyPresentation(topology = displayedTopology()) {
     button.setAttribute("aria-pressed", String(active));
   }
   elements.boardStage.dataset.topology = topology;
-  elements.boardStage.setAttribute(
-    "aria-label",
-    torus
-      ? "上下左右相连的甜甜圈围棋棋盘区域"
-      : mobius
-        ? "左右反向相连、上下保留边界的莫比乌斯围棋棋盘区域"
-        : "左右相连的竹筒围棋棋盘区域",
-  );
+  syncBoardLabels(topology);
   elements.flatScene.setAttribute(
     "aria-label",
     torus
@@ -4230,6 +4223,7 @@ function syncTopologyPresentation(topology = displayedTopology()) {
 function syncRulesNotes(topology = displayedTopology()) {
   const shown = displayedBoardState();
   const gameType = availableGameType(gameTypeOf(shown));
+  syncBoardLabels(topology, gameType);
   const ruleSet = gameType === GAME_GOMOKU
     ? normalizeRuleSet(shown?.ruleSet ?? pendingRuleSet)
     : null;
@@ -4243,6 +4237,24 @@ function syncRulesNotes(topology = displayedTopology()) {
     item.hidden = !item.dataset.rulesTopology.split(/\s+/u).includes(topology ?? TOPOLOGY_CYLINDER);
   }
   for (const item of elements.rulesSetItems) item.hidden = item.dataset.rulesSet !== ruleSet;
+}
+
+/** The board's accessible labels name its shape and the game it shows. */
+function syncBoardLabels(
+  topology = displayedTopology(),
+  gameType = availableGameType(gameTypeOf(displayedBoardState())),
+) {
+  elements.boardStage.setAttribute(
+    "aria-label",
+    isTorusTopology(topology)
+      ? `上下左右相连的甜甜圈${gameName(gameType)}棋盘区域`
+      : isMobiusTopology(topology)
+        ? `左右反向相连、上下保留边界的莫比乌斯${gameName(gameType)}棋盘区域`
+        : `左右相连的竹筒${gameName(gameType)}棋盘区域`,
+  );
+  elements.scene.setAttribute("aria-label", `可旋转的3D竹筒${gameName(gameType)}棋盘`);
+  elements.torusScene.setAttribute("aria-label", `可旋转的3D甜甜圈${gameName(gameType)}棋盘`);
+  elements.mobiusScene.setAttribute("aria-label", `可旋转的3D莫比乌斯${gameName(gameType)}棋盘`);
 }
 
 function rebuildViews(width, height, topology) {

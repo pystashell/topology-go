@@ -24,6 +24,7 @@ import {
   createFeltTexture,
   normalizeBoardStyle,
   starPointsFor,
+  boardViewLabel,
 } from "./boardStyle.js";
 import {
   EMPTY_GAME_MARKERS,
@@ -167,9 +168,7 @@ export class ArcBoard {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.setAttribute(
       "aria-label",
-      translateText(
-        "竹筒围棋的弧面视图。左键点击落子；右键或触屏单指横向拖动棋盘，滚轮或双指缩放。",
-      ),
+      translateText(boardViewLabel("arc", this.boardStyle)),
     );
     this.container.appendChild(this.renderer.domElement);
 
@@ -231,9 +230,7 @@ export class ArcBoard {
   refreshLanguage() {
     this.renderer.domElement.setAttribute(
       "aria-label",
-      translateText(
-        "竹筒围棋的弧面视图。左键点击落子；右键或触屏单指横向拖动棋盘，滚轮或双指缩放。",
-      ),
+      translateText(boardViewLabel("arc", this.boardStyle)),
     );
   }
 
@@ -634,6 +631,8 @@ export class ArcBoard {
     ) {
       this.boardStyle = nextStyle;
       this.rebuild(nextWidth, nextHeight);
+      // The label names the game shown.
+      this.refreshLanguage();
     }
     this.board = board;
     this.currentPlayer = currentPlayer;

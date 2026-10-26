@@ -2,6 +2,7 @@ import * as THREE from "three";
 
 import { TorusBoard } from "./TorusBoard.js";
 import { translateText } from "../i18n.js";
+import { boardViewLabel } from "./boardStyle.js";
 import {
   createAnalysisVariationMarker,
   placeAnalysisVariationMarker,
@@ -33,18 +34,14 @@ export class MobiusBoard extends TorusBoard {
     super(container, options);
     this.renderer.domElement.setAttribute(
       "aria-label",
-      translateText(
-        "左右反向相接、上下保留一圈边界的三维莫比乌斯围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
-      ),
+      translateText(boardViewLabel("3d-mobius", this.boardStyle)),
     );
   }
 
   refreshLanguage() {
     this.renderer.domElement.setAttribute(
       "aria-label",
-      translateText(
-        "左右反向相接、上下保留一圈边界的三维莫比乌斯围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
-      ),
+      translateText(boardViewLabel("3d-mobius", this.boardStyle)),
     );
   }
 
