@@ -28,6 +28,7 @@
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-backend-webgpu": "^4.22.0",
+    "better-auth": "1.7.13",
     "pako": "^2.2.0",
     "three": "^0.185.1"
   },
