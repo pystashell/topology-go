@@ -68,41 +68,45 @@ test("game types and rule sets normalise to known values", () => {
 });
 
 test("board sides clamp to each game's limits and parity", () => {
-  assert.equal(clampBoardDimension("go", 3), 5);
+  assert.equal(clampBoardDimension("go", 3), 3);
+  assert.equal(clampBoardDimension("go", 2), 3);
   assert.equal(clampBoardDimension("go", 31), 30);
   assert.equal(clampBoardDimension("go", "x", 13), 13);
   assert.equal(clampBoardDimension("go", 9.4), 9);
-  assert.equal(clampBoardDimension("gomoku", 9), 11);
+  assert.equal(clampBoardDimension("gomoku", 9), 9);
+  assert.equal(clampBoardDimension("gomoku", 3), 5);
   assert.equal(clampBoardDimension("gomoku", 19), 19);
   assert.equal(clampBoardDimension("othello", 7), 8);
   assert.equal(clampBoardDimension("othello", 9), 10);
   assert.equal(clampBoardDimension("othello", 29), 30);
-  assert.equal(clampBoardDimension("othello", 4), 6);
+  assert.equal(clampBoardDimension("othello", 4), 4);
+  assert.equal(clampBoardDimension("othello", 3), 4);
   assert.equal(clampBoardDimension("othello", 31), 30);
   assert.equal(clampBoardDimension("othello", undefined), 8);
-  assert.ok(isOfferedBoardDimension("go", 5));
-  assert.ok(!isOfferedBoardDimension("go", 4));
-  assert.ok(!isOfferedBoardDimension("gomoku", 10));
+  assert.ok(isOfferedBoardDimension("go", 3));
+  assert.ok(!isOfferedBoardDimension("go", 2));
+  assert.ok(isOfferedBoardDimension("gomoku", 5));
+  assert.ok(!isOfferedBoardDimension("gomoku", 4));
   assert.ok(!isOfferedBoardDimension("othello", 9));
   assert.ok(isOfferedBoardDimension("othello", 30));
   // Every shortcut is a board the game accepts.
   for (const [gameType, sizes] of Object.entries(GAME_SIZE_SHORTCUTS)) {
     for (const size of sizes) assert.ok(isOfferedBoardDimension(gameType, size), `${gameType} ${size}`);
   }
-  assert.deepEqual(GAME_SIZE_SHORTCUTS, { go: [9, 13, 19], gomoku: [15, 19], othello: [6, 8, 10] });
+  assert.deepEqual(GAME_SIZE_SHORTCUTS, { go: [9, 13, 19], gomoku: [7, 11, 15], othello: [6, 8, 10] });
 });
 
 test("size captions and limit notes name each game's range", () => {
-  assert.equal(dimensionRangeText("go", "width"), "横向列数 · 5–30");
-  assert.equal(dimensionRangeText("go", "height"), "纵向行数 · 5–30");
-  assert.equal(dimensionRangeText("gomoku", "height"), "纵向行数 · 11–30");
-  assert.equal(dimensionRangeText("othello", "width"), "偶数列 · 6–30");
-  assert.equal(english(dimensionRangeText("othello", "width")), "Even columns · 6–30");
-  assert.equal(english(dimensionRangeText("othello", "height")), "Even rows · 6–30");
-  assert.equal(english(dimensionRangeText("gomoku", "height")), "Rows · 11–30");
+  assert.equal(dimensionRangeText("go", "width"), "横向列数 · 3–30");
+  assert.equal(dimensionRangeText("go", "height"), "纵向行数 · 3–30");
+  assert.equal(dimensionRangeText("gomoku", "height"), "纵向行数 · 5–30");
+  assert.equal(dimensionRangeText("othello", "width"), "偶数列 · 4–30");
+  assert.equal(english(dimensionRangeText("othello", "width")), "Even columns · 4–30");
+  assert.equal(english(dimensionRangeText("othello", "height")), "Even rows · 4–30");
+  assert.equal(english(dimensionRangeText("gomoku", "height")), "Rows · 5–30");
   assert.equal(boardLimitNote("go"), "");
-  assert.equal(english(boardLimitNote("gomoku")), "Gomoku boards need at least 11 lines per side.");
-  assert.equal(english(boardLimitNote("othello")), "Othello boards need even sides from 6 to 30.");
+  assert.equal(english(boardLimitNote("gomoku")), "Gomoku boards need at least 5 lines per side.");
+  assert.equal(english(boardLimitNote("othello")), "Othello boards need even sides from 4 to 30.");
 });
 
 test("settings summaries keep Go's line and name other games and rules", () => {

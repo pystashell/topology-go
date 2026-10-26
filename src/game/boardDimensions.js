@@ -1,10 +1,10 @@
 /**
- * Dimensions accepted by the rules engine and every persisted wire format.
- * The public new-game UI has a stricter minimum of 5, while the lower minimum
- * remains available for backwards-compatible SGF and saved-state imports.
+ * Dimensions accepted by the rules engine, every persisted wire format and
+ * the new-game settings (3 to 30 lines). Games narrow it further: Gomoku
+ * needs room for five in a row, Othello even sides (see BOARD_LIMITS).
  */
 export const MIN_BOARD_DIMENSION = 3;
-export const PUBLIC_MIN_BOARD_DIMENSION = 5;
+export const PUBLIC_MIN_BOARD_DIMENSION = 3;
 export const MAX_BOARD_DIMENSION = 30;
 
 const GO_COLUMN_DIGITS = "ABCDEFGHJKLMNOPQRSTUVWXYZ";

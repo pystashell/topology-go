@@ -60,20 +60,21 @@ export const BOARD_LIMITS = Object.freeze({
     defaultWidth: 19,
     defaultHeight: 19,
   }),
-  // Renju pattern scans need P±5 on every line (an 11-cell window), and every
-  // cyclic line must be long enough that no window overlaps itself.
+  // Five in a row needs at least five lines each way. Renju reads short
+  // closed lines as rings (renju.js), so every size from 5 works.
   [GAME_GOMOKU]: Object.freeze({
-    min: 11,
-    publicMin: 11,
+    min: 5,
+    publicMin: 5,
     max: MAX_BOARD_DIMENSION,
     parity: null,
     defaultWidth: 15,
     defaultHeight: 15,
   }),
-  // The four starting discs sit on the centre, so both sides must be even.
+  // The four starting discs sit on the centre, so both sides must be even;
+  // 4 x 4 is the smallest board that holds them.
   [GAME_OTHELLO]: Object.freeze({
-    min: 6,
-    publicMin: 6,
+    min: 4,
+    publicMin: 4,
     max: MAX_BOARD_DIMENSION,
     parity: "even",
     defaultWidth: 8,

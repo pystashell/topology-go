@@ -14,7 +14,7 @@ import { NON_GO_ROOM_ACTIONS } from "./shared.js";
 
 /**
  * Othello adapter for the GameRules interface. Boards are rectangular with
- * even sides from 6 to 30 on every topology; passes are automatic, so the
+ * even sides from 4 to 30 on every topology; passes are automatic, so the
  * game has no pass action, and there is no scoring phase.
  */
 

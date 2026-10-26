@@ -9,12 +9,63 @@
  *
  * Lines are read on the board's cover (test/helpers/coverGeometry.js): a
  * cylinder (the default) wraps columns, a torus also wraps rows, and a
- * Mobius strip turns every other copy over. With `recursive: false` every
- * straight-four point makes a three, which tests use to show that a sample
- * exercises the recursion.
+ * Mobius strip turns every other copy over. A line that closes on itself
+ * within ten cells (small boards) is read as a ring string instead, and the
+ * same patterns are found around the ring by scanning the ring written out
+ * three times. With `recursive: false` every straight-four point makes a
+ * three, which tests use to show that a sample exercises the recursion.
  */
 
-import { coverCell } from "../helpers/coverGeometry.js";
+import { coverCell, mod } from "../helpers/coverGeometry.js";
+
+/**
+ * The black run through ring position `at` (ring[at] is "X"): its length and
+ * the ring positions it covers. A ring that is all "X" is one run as long as
+ * the ring.
+ */
+function ringRun(ring, at) {
+  const length = ring.length;
+  if (![...ring].some((char) => char !== "X")) {
+    return { length, positions: new Set([...ring].map((_, index) => index)) };
+  }
+  const tripled = ring.repeat(3);
+  let left = length + at;
+  let right = length + at;
+  while (tripled[left - 1] === "X") left -= 1;
+  while (tripled[right + 1] === "X") right += 1;
+  const positions = new Set();
+  for (let index = left; index <= right; index += 1) positions.add(index % length);
+  return { length: right - left + 1, positions, left: left % length, right: right % length };
+}
+
+function setChar(text, index, char) {
+  return text.slice(0, index) + char + text.slice(index + 1);
+}
+
+/** Fours through ring position 0, keyed by their stones. */
+function ringFourKeys(ring) {
+  const keys = new Set();
+  for (let index = 1; index < ring.length; index += 1) {
+    if (ring[index] !== ".") continue;
+    const run = ringRun(setChar(ring, index, "X"), 0);
+    if (run.length !== 5 || !run.positions.has(index)) continue;
+    keys.add([...run.positions].filter((position) => position !== index).sort((a, b) => a - b).join(","));
+  }
+  return keys;
+}
+
+/** Whether "X" at ring position `index` makes a straight four through position 0. */
+function ringStraightFour(ring, index) {
+  if (ring[index] !== ".") return false;
+  const filled = setChar(ring, index, "X");
+  const run = ringRun(filled, 0);
+  if (run.length !== 4 || run.length === ring.length || !run.positions.has(index)) return false;
+  const before = mod(run.left - 1, ring.length);
+  const after = mod(run.right + 1, ring.length);
+  if (before === after || filled[before] !== "." || filled[after] !== ".") return false;
+  return ringRun(setChar(filled, before, "X"), 0).length === 5 &&
+    ringRun(setChar(filled, after, "X"), 0).length === 5;
+}
 
 const AXES = [[0, 1], [1, 0], [1, 1], [1, -1]];
 const CENTRE = 5;
@@ -91,22 +142,56 @@ function hasStraightFour(line, added) {
 export function createRenjuReference({ width, height, topology = "cylinder", recursive = true }) {
   const memo = new Map();
 
-  // (row, col) are cover coordinates: the queried point sits in copy 0.
-  function at(board, row, col) {
-    const cell = coverCell(topology, width, height, row, col);
-    return cell ? board[cell.row][cell.col] : "#";
+  // Cover coordinates: the queried point (row, col) sits in copy 0, so the
+  // cell `step` steps along an axis is coverCell(row + step*dRow, col + step*dCol).
+  function stepCell(row, col, [dRow, dCol], step) {
+    return coverCell(topology, width, height, row + step * dRow, col + step * dCol);
   }
 
-  function cellAt(row, col) {
-    return coverCell(topology, width, height, row, col);
-  }
-
-  function lineAt(board, row, col, [dRow, dCol]) {
-    let line = "";
-    for (let offset = -CENTRE; offset <= CENTRE; offset += 1) {
-      line += at(board, row + offset * dRow, col + offset * dCol);
+  /**
+   * The line through (row, col): a ring (its cells from the point onward)
+   * when walking it comes back to the point travelling the same way within
+   * ten steps, else an 11-character window whose sides grow one cell per
+   * round, forward first, and end at an edge or at a cell already taken.
+   */
+  function lineAt(board, row, col, axis) {
+    const same = (cell) => cell && cell.row === row && cell.col === col;
+    const ringCells = [{ row, col }];
+    for (let step = 1; step <= 10; step += 1) {
+      const cell = stepCell(row, col, axis, step);
+      if (!cell) break;
+      if (same(cell)) {
+        // Back on a turned-over Mobius copy, a slanted line travels the
+        // other way: that is a fold, not a loop.
+        const turned = topology === "mobius" && mod(Math.floor((col + step * axis[1]) / width), 2) === 1;
+        if (!turned || axis[0] === 0) {
+          return { ring: ringCells.map((value) => board[value.row][value.col]).join(""), cells: ringCells };
+        }
+        break;
+      }
+      if (ringCells.some((value) => value.row === cell.row && value.col === cell.col)) break;
+      ringCells.push(cell);
     }
-    return line;
+    const chars = Array(11).fill("#");
+    const cells = Array(11).fill(null);
+    chars[CENTRE] = board[row][col];
+    cells[CENTRE] = { row, col };
+    const taken = new Set([`${row},${col}`]);
+    const open = { 1: true, [-1]: true };
+    for (let distance = 1; distance <= CENTRE; distance += 1) {
+      for (const sign of [1, -1]) {
+        if (!open[sign]) continue;
+        const cell = stepCell(row, col, axis, sign * distance);
+        if (!cell || taken.has(`${cell.row},${cell.col}`)) {
+          open[sign] = false;
+          continue;
+        }
+        taken.add(`${cell.row},${cell.col}`);
+        chars[CENTRE + sign * distance] = board[cell.row][cell.col];
+        cells[CENTRE + sign * distance] = cell;
+      }
+    }
+    return { line: chars.join(""), cells };
   }
 
   function withStone(board, row, col) {
@@ -125,28 +210,31 @@ export function createRenjuReference({ width, height, topology = "cylinder", rec
     if (memo.has(key)) return memo.get(key);
     const after = withStone(board, row, col);
     const lines = AXES.map((axis) => lineAt(after, row, col, axis));
+    const runLength = (entry) => entry.ring !== undefined
+      ? ringRun(entry.ring, 0).length
+      : null;
 
     let answer = null;
-    if (lines.some(hasExactFive)) {
+    if (lines.some((entry) => (entry.ring !== undefined ? runLength(entry) === 5 : hasExactFive(entry.line)))) {
       answer = null;
-    } else if (lines.some(hasOverline)) {
+    } else if (lines.some((entry) => (entry.ring !== undefined ? runLength(entry) > 5 : hasOverline(entry.line)))) {
       answer = "overline";
     } else {
-      const fours = lines.map((line) => fourKeys(line).size);
+      const fours = lines.map((entry) => (entry.ring !== undefined ? ringFourKeys(entry.ring) : fourKeys(entry.line)).size);
       if (fours.reduce((sum, value) => sum + value, 0) >= 2) {
         answer = "double_four";
       } else {
         let threes = 0;
-        AXES.forEach((axis, axisIndex) => {
+        lines.forEach((entry, axisIndex) => {
           if (fours[axisIndex] > 0) return;
-          const line = lines[axisIndex];
           let real = false;
-          for (let index = 0; index < line.length && !real; index += 1) {
-            if (line[index] !== ".") continue;
-            const filled = line.slice(0, index) + "X" + line.slice(index + 1);
-            if (!hasStraightFour(filled, index)) continue;
-            const offset = index - CENTRE;
-            const point = cellAt(row + offset * axis[0], col + offset * axis[1]);
+          const size = entry.ring !== undefined ? entry.ring.length : entry.line.length;
+          for (let index = 0; index < size && !real; index += 1) {
+            const makes = entry.ring !== undefined
+              ? ringStraightFour(entry.ring, index)
+              : entry.line[index] === "." && hasStraightFour(setChar(entry.line, index, "X"), index);
+            if (!makes) continue;
+            const point = entry.cells[index];
             if (!recursive || verdict(after, point.row, point.col) === null) real = true;
           }
           if (real) threes += 1;

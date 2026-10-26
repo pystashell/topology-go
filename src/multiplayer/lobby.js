@@ -348,7 +348,7 @@ export function isLobbySummary(value) {
 export const LOBBY_SORT_ORDERS = Object.freeze(["recommended", "newest", "watchers", "moves"]);
 
 /** Square sizes the size filter names; "custom" is every other shape. */
-export const LOBBY_LISTED_SIZES = Object.freeze([8, 9, 11, 13, 15, 19]);
+export const LOBBY_LISTED_SIZES = Object.freeze([6, 7, 8, 9, 10, 11, 13, 15, 19]);
 
 /**
  * Sort summaries. "recommended" puts open invitations and rooms in setup

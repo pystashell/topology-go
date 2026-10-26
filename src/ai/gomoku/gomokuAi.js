@@ -3,6 +3,7 @@ import { buildFlatView } from "./flatView.js";
 import {
   RAPFI_LICENSE,
   RAPFI_MAX_BOARD_SIZE,
+  RAPFI_MIN_BOARD_SIZE,
   RAPFI_VERSION,
   RapfiCancelledError,
   RapfiEngine,
@@ -303,6 +304,9 @@ async function askRapfi({
     cells: board.cells,
     lastMove,
     maxSize: RAPFI_MAX_BOARD_SIZE,
+    // Rapfi plays boards of 5 lines or more; a smaller view sits in a
+    // corner of one, the rest blocked.
+    size: RAPFI_MIN_BOARD_SIZE,
   });
   const wantNetwork = level.network && rapfiNetworkSupports(ruleSet, view.size);
   if (wantNetwork && !engine.networkReady(ruleSet)) {

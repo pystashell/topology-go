@@ -455,9 +455,9 @@ test("O9: the game ends when neither side can move", () => {
   });
 });
 
-test("O10: sides must be even from 6 to 30, and the start is centred on rectangles", () => {
+test("O10: sides must be even from 4 to 30, and the start is centred on rectangles", () => {
   for (const options of [
-    { size: 7 }, { size: 4 }, { size: 32 }, { width: 8, height: 7 }, { width: 5, height: 8 },
+    { size: 7 }, { size: 3 }, { size: 2 }, { size: 32 }, { width: 8, height: 7 }, { width: 5, height: 8 },
     { width: 31, height: 8 }, { width: 8.5, height: 8 }, { width: "8", height: 8 },
     { width: 0, height: 8 }, { size: 8, width: 10 },
   ]) {
@@ -469,7 +469,7 @@ test("O10: sides must be even from 6 to 30, and the start is centred on rectangl
     () => new OthelloEngine({ initialBoard: parseBoard(START_8X8).slice(1) }),
     RangeError,
   );
-  for (const [width, height] of [[6, 6], [30, 30], [6, 30]]) {
+  for (const [width, height] of [[4, 4], [6, 6], [30, 30], [4, 30]]) {
     assert.doesNotThrow(() => new OthelloEngine({ width, height }));
   }
 

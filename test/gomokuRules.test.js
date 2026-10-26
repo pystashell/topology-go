@@ -60,10 +60,10 @@ test("normalizeSettings validates sizes and rule sets with clear errors", () => 
   }
 
   for (const [raw, field, message] of [
-    [{ size: 10 }, "width", /Gomoku boards need at least 11 lines per side/u],
-    [{ height: 9 }, "height", /Gomoku boards need at least 11 lines per side/u],
-    [{ width: 31 }, "width", /Gomoku board width must be an integer from 11 to 30/u],
-    [{ height: 12.5 }, "height", /must be an integer from 11 to 30/u],
+    [{ size: 4 }, "width", /Gomoku boards need at least 5 lines per side/u],
+    [{ height: 3 }, "height", /Gomoku boards need at least 5 lines per side/u],
+    [{ width: 31 }, "width", /Gomoku board width must be an integer from 5 to 30/u],
+    [{ height: 12.5 }, "height", /must be an integer from 5 to 30/u],
     [{ width: "15" }, "width", /must be an integer/u],
     [{ topology: "sphere" }, "topology", /Unknown board topology: sphere/u],
     [{ ruleSet: "standard" }, "ruleSet", /Unknown Gomoku rule set: standard \(expected freestyle or renju\)/u],
@@ -87,7 +87,8 @@ test("create builds a fresh engine from settings", () => {
     new GomokuEngine({ width: 11, height: 14, topology: "torus", ruleSet: "renju" }).getState(),
   );
   assert.deepEqual(gomokuRules.create().getState(), new GomokuEngine().getState());
-  assert.throws(() => gomokuRules.create({ width: 9, height: 9 }), RangeError);
+  assert.throws(() => gomokuRules.create({ width: 4, height: 4 }), RangeError);
+  assert.equal(gomokuRules.create({ width: 7, height: 7 }).width, 7);
   assert.throws(() => gomokuRules.create({ gameType: "go" }), TypeError);
 });
 

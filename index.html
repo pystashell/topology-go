@@ -138,8 +138,11 @@
               <span>棋盘尺寸</span>
               <select id="lobby-size-filter">
                 <option value="all">全部尺寸</option>
+                <option value="6">6 × 6</option>
+                <option value="7">7 × 7</option>
                 <option value="8">8 × 8</option>
                 <option value="9">9 × 9</option>
+                <option value="10">10 × 10</option>
                 <option value="11">11 × 11</option>
                 <option value="13">13 × 13</option>
                 <option value="15">15 × 15</option>
@@ -745,9 +748,10 @@
               <div class="size-buttons" role="group" aria-label="棋盘尺寸快捷选择">
                 <button type="button" data-board-size="9" data-size-games="go">9 × 9</button>
                 <button type="button" data-board-size="13" data-size-games="go">13 × 13</button>
+                <button type="button" data-board-size="7" data-size-games="gomoku" hidden>7 × 7</button>
                 <button type="button" data-board-size="11" data-size-games="gomoku" hidden>11 × 11</button>
                 <button type="button" data-board-size="15" data-size-games="gomoku" hidden>15 × 15</button>
-                <button type="button" data-board-size="19" data-size-games="go gomoku" class="active" aria-pressed="true">19 × 19</button>
+                <button type="button" data-board-size="19" data-size-games="go" class="active" aria-pressed="true">19 × 19</button>
                 <button type="button" data-board-size="6" data-size-games="othello" hidden>6 × 6</button>
                 <button type="button" data-board-size="8" data-size-games="othello" hidden>8 × 8</button>
                 <button type="button" data-board-size="10" data-size-games="othello" hidden>10 × 10</button>
@@ -758,16 +762,16 @@
               <label class="input-row" for="custom-width">
                 <span>
                   <strong>宽度</strong>
-                  <small id="custom-width-range">横向列数 · 5–30</small>
+                  <small id="custom-width-range">横向列数 · 3–30</small>
                 </span>
-                <input id="custom-width" type="number" min="5" max="30" step="1" value="19" inputmode="numeric" />
+                <input id="custom-width" type="number" min="3" max="30" step="1" value="19" inputmode="numeric" />
               </label>
               <label class="input-row" for="custom-height">
                 <span>
                   <strong>高度</strong>
-                  <small id="custom-height-range">纵向行数 · 5–30</small>
+                  <small id="custom-height-range">纵向行数 · 3–30</small>
                 </span>
-                <input id="custom-height" type="number" min="5" max="30" step="1" value="19" inputmode="numeric" />
+                <input id="custom-height" type="number" min="3" max="30" step="1" value="19" inputmode="numeric" />
               </label>
             </div>
             <p id="board-limit-note" class="board-limit-note" hidden></p>
@@ -868,7 +872,7 @@
               <li>落子必须沿横、竖或斜向夹住至少一枚对方棋子，夹住的棋子全部翻成己方颜色。</li>
               <li>夹子的直线可以跨越接缝；绕回落子点的一整圈不会翻转任何棋子。</li>
               <li>一方无子可下时自动跳过，由另一方继续；双方都无子可下时对局结束。</li>
-              <li>终局时棋子多的一方获胜，数量相同为和棋。棋盘宽高须为 6–30 的偶数。</li>
+              <li>终局时棋子多的一方获胜，数量相同为和棋。棋盘宽高须为 4–30 的偶数。</li>
             </ul>
           </details>
 

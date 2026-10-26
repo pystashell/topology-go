@@ -95,24 +95,30 @@ test("game types, rule sets, limits and errors are fixed constants", () => {
 test("board limits follow each game's rules", () => {
   assert.deepEqual(
     { ...BOARD_LIMITS.go },
-    { min: 3, publicMin: 5, max: 30, parity: null, defaultWidth: 19, defaultHeight: 19 },
+    { min: 3, publicMin: 3, max: 30, parity: null, defaultWidth: 19, defaultHeight: 19 },
   );
   assert.deepEqual(
     { ...BOARD_LIMITS.gomoku },
-    { min: 11, publicMin: 11, max: 30, parity: null, defaultWidth: 15, defaultHeight: 15 },
+    { min: 5, publicMin: 5, max: 30, parity: null, defaultWidth: 15, defaultHeight: 15 },
   );
   assert.deepEqual(
     { ...BOARD_LIMITS.othello },
-    { min: 6, publicMin: 6, max: 30, parity: "even", defaultWidth: 8, defaultHeight: 8 },
+    { min: 4, publicMin: 4, max: 30, parity: "even", defaultWidth: 8, defaultHeight: 8 },
   );
   assert.equal(isValidBoardDimension("go", 3), true);
-  assert.equal(isValidBoardDimension("go", 3, { publicOnly: true }), false);
+  // New games offer every size the engine takes, 3 to 30.
+  assert.equal(isValidBoardDimension("go", 3, { publicOnly: true }), true);
+  assert.equal(isValidBoardDimension("go", 2), false);
   assert.equal(isValidBoardDimension("go", 31), false);
-  assert.equal(isValidBoardDimension("gomoku", 10), false);
-  assert.equal(isValidBoardDimension("gomoku", 11), true);
+  // Five in a row needs five lines.
+  assert.equal(isValidBoardDimension("gomoku", 4), false);
+  assert.equal(isValidBoardDimension("gomoku", 5), true);
+  assert.equal(isValidBoardDimension("gomoku", 7), true);
   assert.equal(isValidBoardDimension("othello", 7), false);
   assert.equal(isValidBoardDimension("othello", 30), true);
-  assert.equal(isValidBoardDimension("othello", 4), false);
+  assert.equal(isValidBoardDimension("othello", 4), true);
+  assert.equal(isValidBoardDimension("othello", 3), false);
+  assert.equal(isValidBoardDimension("othello", 2), false);
   assert.equal(isValidBoardDimension("othello", 8.5), false);
   assert.throws(() => isValidBoardDimension("chess", 8), TypeError);
 });

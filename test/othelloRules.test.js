@@ -37,7 +37,7 @@ test("Othello rules describe the game", () => {
   assert.equal(rulesFor(gameTypeOf(game.getReplayState().base)), othelloRules);
 });
 
-test("normalizeSettings takes even sides from 6 to 30 and Othello's previous board", () => {
+test("normalizeSettings takes even sides from 4 to 30 and Othello's previous board", () => {
   assert.deepEqual(othelloRules.normalizeSettings(), {
     gameType: "othello", width: 8, height: 8, size: 8, topology: "cylinder",
   });
@@ -72,7 +72,7 @@ test("normalizeSettings takes even sides from 6 to 30 and Othello's previous boa
   }
 
   for (const [raw, field] of [
-    [{ width: 7 }, "width"], [{ height: 4 }, "height"], [{ size: 31 }, "width"],
+    [{ width: 7 }, "width"], [{ height: 2 }, "height"], [{ size: 31 }, "width"],
     [{ size: 32 }, "width"], [{ width: 8.5 }, "width"], [{ height: "8" }, "height"],
     [{ width: 6, height: 5 }, "height"], [{ topology: "sphere" }, "topology"],
     [{ gameType: "go" }, "gameType"],
@@ -86,7 +86,7 @@ test("normalizeSettings takes even sides from 6 to 30 and Othello's previous boa
   }
   assert.throws(
     () => othelloRules.normalizeSettings({ width: 9 }),
-    { message: "Othello board width must be an even integer from 6 to 30" },
+    { message: "Othello board width must be an even integer from 4 to 30" },
   );
 });
 

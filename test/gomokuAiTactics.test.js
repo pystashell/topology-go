@@ -440,7 +440,7 @@ test("rejects malformed positions and honours an aborted signal", async () => {
     { code: "BAD_POSITION" },
   );
   await assert.rejects(
-    chooseGomokuMove(position({ toMove: "black", width: 9, height: 9 }), settings, { engine: null }),
+    chooseGomokuMove(position({ toMove: "black", width: 4, height: 4 }), settings, { engine: null }),
     { code: "BAD_POSITION" },
   );
   const controller = new AbortController();
