@@ -120,6 +120,14 @@ export function parseAppRoute(value, baseUrl = "http://localhost/") {
   if (pathname.toLowerCase() === "/single") {
     return { mode: "single", roomCode: "", role: "" };
   }
+  // My games, and one of them (its id: 16 characters, see worker/records.js).
+  if (pathname.toLowerCase() === "/records") {
+    return { mode: "records", roomCode: "", role: "" };
+  }
+  const recordMatch = pathname.match(/^\/game\/([a-km-z2-9]{16})$/u);
+  if (recordMatch) {
+    return { mode: "record", roomCode: "", role: "", recordId: recordMatch[1] };
+  }
 
   const onlineMatch = pathname.match(/^\/online\/([^/]+)$/iu);
   const roomCode = normalizeRoomCode(onlineMatch?.[1] ?? "");

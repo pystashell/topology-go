@@ -2,6 +2,20 @@
 // lets every local/online/AI renderer share one code path while the i18n layer
 // chooses what each browser displays.
 export const ENGLISH_DYNAMIC = Object.freeze({
+  // My games (src/app/myGames.js).
+  "对局中断": "Interrupted",
+  "联机对局": "Online game",
+  "本机对局": "Game on this device",
+  "回放": "Replay",
+  "只从你的棋谱里移除；对方的那份不受影响": "Removes it from your games only; the other player keeps theirs",
+  "还没有棋谱。下完一盘棋，它会自动出现在这里。": "No games yet. Finish a game and it appears here automatically.",
+  "这个棋类还没有棋谱。": "No games of this kind yet.",
+  "正在读取棋谱…": "Loading your games…",
+  "暂时无法读取棋谱，请稍后再试。": "Your games cannot be loaded right now. Try again shortly.",
+  "已从你的棋谱中移除。": "Removed from your games.",
+  "暂时无法移除，请稍后再试。": "It cannot be removed right now. Try again shortly.",
+  "正在打开棋谱…": "Opening the game…",
+  "暂时无法打开棋谱，请稍后再试。": "The game cannot be opened right now. Try again shortly.",
   "现在不能落子。": "A move cannot be played right now.",
   "这个位置不在棋盘上。": "That point is outside the board.",
   "这里已经有棋子了。": "That point is already occupied.",
@@ -904,6 +918,12 @@ export const ENGLISH_PATTERNS = Object.freeze([
     replace: (_, hours) => `${hours} hour${hours === "1" ? "" : "s"} ago`,
   },
   { pattern: /^房间 ([A-Z0-9]{6})$/u, replace: "Room $1" },
+  {
+    // Opening a saved game: "<black> 对 <white> · <result> · <n> 手".
+    pattern: /^(.+) 对 (.+) · (.+) · (\d+) 手$/u,
+    replace: (_, black, white, result, moves) =>
+      `${capturedPhrase(black)} vs ${capturedPhrase(white)} · ${capturedPhrase(result)} · ${moves} move${moves === "1" ? "" : "s"}`,
+  },
   { pattern: /^第 (\d+) 局$/u, replace: "Game $1" },
   {
     pattern: /^(\d+) 人观战 · (刚刚更新|\d+ 分钟前|\d+ 小时前)$/u,

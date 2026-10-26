@@ -27,6 +27,19 @@ GitHub Release 正文会记录 commit、来源分支和两个 Cloudflare ID。�
 
 `public/version.json` 是候选版本清单（版本号随发布分支更新）；正式发布后，tag、Worker Version、Deployment 与 GitHub prerelease 会共同组成可审计记录。已发布：`0.3.0-rc.1`（2026-10-24，多棋种首次上线）。
 
+### 0.3.0-rc.9 的兼容边界
+
+- **游客身份和“我的棋谱”**（账号与棋谱第 1 阶段）：新增 D1 数据库 `topology-go`（`migrations/0001_accounts_and_records.sql`）、Worker 密钥 `BETTER_AUTH_SECRET`、两个限流绑定、`nodejs_compat` 兼容标志。以棋手身份建房或加入、或本机对局下完时，浏览器成为游客（HttpOnly 会话 Cookie）；每盘下完的棋存进双方的“我的棋谱”（`/records`），`/game/编号` 只有对局双方能打开。
+- **第一次发布前，负责人在项目目录里设置一次密钥**（生成一串随机字符直接交给 Wrangler，不会显示出来，也不进仓库）：
+
+  ```powershell
+  node -e "process.stdout.write(require('crypto').randomBytes(32).toString('base64url'))" | npx wrangler secret put BETTER_AUTH_SECRET
+  ```
+
+  之后发布脚本会先检查这个密钥，再运行 `npm run db:migrate:remote` 建表，然后部署。密钥一旦设置就不要更换：换了以后所有游客的会话失效（他们的棋谱就找不回来了）。
+- **房间状态**：成员记录多了可选的 `userId`。旧房间照常读取；回滚到 rc.8 时，旧代码也能读含 `userId` 的房间（多出的字段被忽略），只是不再存棋谱。
+- **回滚**：回到 rc.8 后，“我的棋谱”页面和接口消失，已存的棋谱留在 D1 里，重新部署后原样可见；游客的 Cookie 在回滚期间不会被清除。D1 表结构不需要回滚。
+
 ### 0.3.0-rc.8 的兼容边界
 
 - **大厅只列等待和进行中的对局**（参考 OGS）：下完的对局立刻离开大厅；等人的房间只在有棋手在时列出（房主离开就不列，回来再列）。“已结束”状态按钮去掉了。房间本身不变，棋手仍可用链接或“我的房间”回去。

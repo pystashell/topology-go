@@ -21,6 +21,13 @@ export const SERVER_ERROR_COPY = Object.freeze({
   JOIN_NOT_COMMITTED: "加入结果尚未确认。",
   PROTOCOL_UPGRADE_REQUIRED: "客户端与房间服务版本不兼容，请刷新页面。",
   INTERNAL_ERROR: "房间服务出现内部错误，请稍后重试。",
+  // Game records and sign-in (worker/records.js, worker/auth.js)
+  BAD_RECORD: "这盘棋谱无法保存。",
+  RECORD_TOO_LARGE: "棋谱过长，无法保存。",
+  RECORDS_UNAVAILABLE: "棋谱服务暂时不可用，请稍后再试。",
+  RECORD_NOT_FOUND: "没有找到这盘棋谱。",
+  RECORD_FORBIDDEN: "这盘棋只有对局双方能看。",
+  AUTH_UNAVAILABLE: "账号服务暂时不可用。",
   // Room durable object (worker/BadukRoom.js)
   ROOM_NOT_FOUND: "没有找到这个房间。",
   ROOM_EXPIRED: "房间已因长时间无活动而关闭。",
@@ -96,6 +103,12 @@ export const SERVER_ERROR_COPY = Object.freeze({
 
 /** English for the copy above that is not already in the main dictionary. */
 export const ENGLISH_SERVER_ERRORS = Object.freeze({
+  "这盘棋谱无法保存。": "This game record could not be saved.",
+  "棋谱过长，无法保存。": "This game record is too long to save.",
+  "棋谱服务暂时不可用，请稍后再试。": "Game records are unavailable right now. Try again shortly.",
+  "没有找到这盘棋谱。": "That game record was not found.",
+  "这盘棋只有对局双方能看。": "Only the two players can see this game.",
+  "账号服务暂时不可用。": "Accounts are unavailable right now.",
   "请求无效，请刷新页面后重试。": "The request was invalid. Refresh the page and try again.",
   "你没有权限执行这个操作。": "You are not allowed to do that.",
   "房间已经存在。": "That room already exists.",

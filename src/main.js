@@ -183,6 +183,15 @@ import {
   importSgfFile,
 } from "./app/recordFiles.js";
 import {
+  adoptLocalRecordKey,
+  flushPendingRecords,
+  localRecordKey,
+  maybeSaveFinishedLocalGame,
+  openRecord,
+  showRecordsScreen,
+  wireRecordsScreen,
+} from "./app/myGames.js";
+import {
   buildChatPickers,
   chatChannelView,
   chatPointPicking,
@@ -210,6 +219,13 @@ const $ = (selector) => document.querySelector(selector);
 const elements = {
   lobbyScreen: $("#lobby-screen"),
   gameScreen: $("#game-screen"),
+  recordsScreen: $("#records-screen"),
+  recordsLink: $("#records-link"),
+  recordsGameButtons: [...document.querySelectorAll("[data-records-game]")],
+  recordsRefresh: $("#records-refresh"),
+  recordsStatus: $("#records-status"),
+  recordsList: $("#records-list"),
+  recordsMore: $("#records-more"),
   headerTopologySwitch: $(".topology-switch"),
   lobbyCreateRoom: $("#lobby-create-room"),
   lobbyQuickJoin: $("#lobby-quick-join"),
@@ -3259,16 +3275,23 @@ function appendLobbyMetadata(container, text) {
 }
 
 function showAppScreen(mode) {
-  appRouteMode = mode === "lobby" ? "lobby" : mode === "online" ? "online" : "single";
+  appRouteMode = ["lobby", "online", "records"].includes(mode) ? mode : "single";
   const lobbyVisible = appRouteMode === "lobby";
+  const recordsVisible = appRouteMode === "records";
   elements.lobbyScreen.hidden = !lobbyVisible;
-  elements.gameScreen.hidden = lobbyVisible;
-  elements.headerTopologySwitch.hidden = lobbyVisible;
+  elements.recordsScreen.hidden = !recordsVisible;
+  elements.gameScreen.hidden = lobbyVisible || recordsVisible;
+  elements.headerTopologySwitch.hidden = lobbyVisible || recordsVisible;
+  elements.recordsLink.setAttribute("aria-current", recordsVisible ? "page" : "false");
   if (lobbyVisible) {
     loadLobbyOnce();
     return;
   }
   cancelLobbyRequest();
+  if (recordsVisible) {
+    showRecordsScreen();
+    return;
+  }
   window.requestAnimationFrame(() => {
     cylinderView?.resize?.();
     torusView?.resize?.();
@@ -4169,6 +4192,7 @@ function rememberOfflineGame() {
   offlineGameState = {
     lifecycle: matchLifecycle,
     game: game.exportState(),
+    record: localRecordKey(game),
     timeControl: cloneSerializable(pausedClock),
     moveCount,
     lastPlayedPoint: cloneSerializable(lastPlayedPoint),
@@ -4273,6 +4297,7 @@ function restoreOfflineGame() {
   const previousDimensions = { width: boardWidth(), height: boardHeight() };
   const previousTopology = game?.topology;
   game = rulesFor(gameTypeOf(offlineGameState.game)).fromState(offlineGameState.game);
+  adoptLocalRecordKey(game, offlineGameState.record);
   matchLifecycle = [
     MATCH_LIFECYCLE_LOBBY,
     MATCH_LIFECYCLE_WAITING,
@@ -6015,6 +6040,8 @@ function updateUI() {
   }
 
   syncLifecycleFromCurrentGame();
+  // A game on this page that just finished goes to My games, once.
+  maybeSaveFinishedLocalGame();
   elements.message.setAttribute("aria-live", "polite");
   const rematchSetup = isNextGameSetup();
   const renderedGame = rematchSetup ? rematchPreviewGame ?? game : game;
@@ -7286,6 +7313,7 @@ elements.lobbyJoinRoom.addEventListener("click", () => {
 elements.lobbyRefresh.addEventListener("click", () => void refreshLobby({ announce: true }));
 document.addEventListener("visibilitychange", resumeLobbyPolling);
 wireLobbyFilters();
+wireRecordsScreen();
 elements.lobbyRoomList.addEventListener("click", (event) => {
   const target = event.target.closest("[data-lobby-room]");
   if (!target) return;
@@ -7504,6 +7532,10 @@ if (initialRoute.mode === "root") {
 
 if (initialRoute.mode === "lobby") restoreLobbyBoardSettings();
 showAppScreen(initialRoute.mode);
+// A saved game (/game/<id>) opens in the replay player on the game screen.
+if (initialRoute.mode === "record") void openRecord(initialRoute.recordId);
+// Finished games that could not be sent last time.
+if (initialRoute.mode !== "records") void flushPendingRecords();
 if (initialRoute.mode === "online" && initialRoute.roomCode.length === 6) {
   const sharedRoomCode = initialRoute.roomCode;
   replaceAppPath(onlineRoomPath(sharedRoomCode, initialRoute.role));
@@ -7603,6 +7635,7 @@ export {
   replaySource,
   roomClient,
   roomSeat,
+  savedPlayerName,
   sendOnlineCommand,
   setMessage,
   syncReferenceFocusRotationState,
