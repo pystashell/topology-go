@@ -74,10 +74,11 @@ test("a new game is a 15x15 freestyle cylinder with Black to move", () => {
   assert.equal(Object.hasOwn(wide.getState(), "size"), false);
   assert.equal(new GomokuEngine({ size: 11 }).width, 11);
 
-  for (const options of [{ size: 10 }, { width: 31 }, { height: 10 }, { width: 12.5 }, { size: 12, width: 13 }]) {
+  for (const options of [{ size: 4 }, { width: 31 }, { height: 4 }, { width: 12.5 }, { size: 12, width: 13 }]) {
     assert.throws(() => new GomokuEngine(options), RangeError, JSON.stringify(options));
   }
-  assert.throws(() => new GomokuEngine({ size: 10 }), /at least 11 lines per side/u);
+  assert.throws(() => new GomokuEngine({ size: 4 }), /at least 5 lines per side/u);
+  assert.equal(new GomokuEngine({ size: 5 }).legalMoves().length, 25, "the smallest board");
   assert.throws(() => new GomokuEngine({ topology: "sphere" }), TypeError);
   assert.throws(() => new GomokuEngine({ ruleSet: "standard" }), TypeError);
   assert.throws(() => new GomokuEngine({ currentPlayer: "red" }), TypeError);

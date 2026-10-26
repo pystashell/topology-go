@@ -125,7 +125,8 @@ test("Gomoku imports enforce Renju, refuse setups and passes, and keep resignati
 
   assert.throws(() => importSgf(`(;FF[4]GM[4]SZ[15]AB[${point(7, 7)}])`), { code: "UNSUPPORTED_SETUP" });
   assert.throws(() => importSgf(`(;FF[4]GM[4]SZ[15];B[${point(7, 7)}];W[])`), { code: "INVALID_MOVE" });
-  assert.throws(() => importSgf("(;FF[4]GM[4]SZ[9])"), { code: "INVALID_BOARD_SIZE" });
+  assert.throws(() => importSgf("(;FF[4]GM[4]SZ[4])"), { code: "INVALID_BOARD_SIZE" });
+  assert.equal(importSgf("(;FF[4]GM[4]SZ[7])").replay.base.width, 7, "small Gomoku boards import");
   assert.throws(() => importSgf("(;FF[4]GM[4]SZ[15]XCOMPLETE[0])"), { code: "INVALID_PARTIAL_BASE" });
 
   // A resignation in RE becomes the record's final event, and exports back to RE.

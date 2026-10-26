@@ -77,9 +77,9 @@ test("search finds a room by code or by a player's name, ignoring case and space
 test("the custom size filter leaves out every size the filter names (regression)", () => {
   // Before: only 9, 13 and 19 were excluded, so 8x8, 11x11 and 15x15 rooms
   // also showed under "custom" although they have their own options.
-  const sized = [8, 9, 11, 12, 13, 15, 19].map((size) => summary(`S${String(size).padStart(2, "0")}234`, { width: size, height: size }));
+  const sized = [6, 7, 8, 9, 10, 11, 12, 13, 15, 19].map((size) => summary(`S${String(size).padStart(2, "0")}234`, { width: size, height: size }));
   sized.push(summary("REC234", { width: 9, height: 13 }));
-  assert.deepEqual(LOBBY_LISTED_SIZES, [8, 9, 11, 13, 15, 19]);
+  assert.deepEqual(LOBBY_LISTED_SIZES, [6, 7, 8, 9, 10, 11, 13, 15, 19]);
   assert.deepEqual(codes(filterLobbyRooms(sized, { size: "custom" })).sort(), ["REC234", "S12234"]);
   assert.deepEqual(codes(filterLobbyRooms(sized, { size: "15" })), ["S15234"]);
 });

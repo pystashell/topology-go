@@ -8,11 +8,15 @@ import { lineWindows } from "./lineRuns.js";
  *
  * Each query hypothetically places a black stone at P and reads an 11-cell
  * window (P±5) on each of the four axes, built from the topology module so
- * windows cross seams exactly as stones do. Boards are at least 11 lines a
- * side, so a window never overlaps itself and covers every cell a pattern
- * through P can depend on. A window that reaches its own edge from P already
- * holds a run of six, so a closed line (whose cells beyond P+5 wrap to P-5)
- * needs no special case: a full cycle of black is an overline.
+ * windows cross seams exactly as stones do. A line through P is either open
+ * (it ends at board edges, or is a closed loop of 11 or more cells, which a
+ * window covers without overlapping itself) or a short loop: a closed line
+ * of at most 10 cells (a row of a narrow cylinder, a column of a short torus,
+ * a diagonal of a small torus), whose cells a window would meet twice. Open
+ * lines are read from the window; short loops are read as a ring of their
+ * cells, with the same definitions taken around the ring (a whole ring of
+ * black is a run as long as the ring, so a ring of exactly five is a five).
+ * So the rules hold on every board size.
  *
  *   five       the run through P is exactly 5            -> legal, beats all
  *   overline   the run through P is 6 or longer          -> "overline"
@@ -42,6 +46,8 @@ const RADIUS = 5;
 const SPAN = 2 * RADIUS + 1;
 const CENTER = RADIUS;
 const AXIS_COUNT = AXES.length;
+// Closed lines of at most this many cells close inside a window.
+const SHORT_LOOP = 2 * RADIUS;
 
 function cellValue(stone) {
   if (stone === "black") return BLACK;
@@ -118,6 +124,121 @@ function straightFourOffsets(line) {
   return offsets;
 }
 
+const shortLoopCache = new WeakMap();
+
+/**
+ * Short loops of a topology: entry (cell * AXIS_COUNT + axis) * SHORT_LOOP
+ * starts the cells of the closed line through `cell` along that axis, in the
+ * axis' direction from `cell` itself, when the line closes within
+ * SHORT_LOOP cells; lengths[cell * AXIS_COUNT + axis] is its length, or 0
+ * for an open line. A line closes when walking it returns to the start
+ * travelling the original way; any other repeated cell (a Mobius diagonal
+ * folding back) ends it like an edge, as in lineRuns.js.
+ */
+function shortLoops(topology) {
+  const cached = shortLoopCache.get(topology);
+  if (cached) return cached;
+  const { width, pointCount } = topology;
+  const lengths = new Uint8Array(pointCount * AXIS_COUNT);
+  const cells = new Int32Array(pointCount * AXIS_COUNT * SHORT_LOOP).fill(-1);
+  for (let cell = 0; cell < pointCount; cell += 1) {
+    const row = Math.floor(cell / width);
+    const col = cell - row * width;
+    AXES.forEach(([dRow, dCol], axis) => {
+      const key = cell * AXIS_COUNT + axis;
+      const loop = [cell];
+      let at = { row, col, dRow, dCol };
+      for (let step = 1; step <= SHORT_LOOP; step += 1) {
+        const next = topology.step(at.row, at.col, at.dRow, at.dCol);
+        if (next === null) return;
+        const index = next.row * width + next.col;
+        if (index === cell) {
+          if (next.dRow === dRow && next.dCol === dCol) {
+            lengths[key] = loop.length;
+            loop.forEach((value, offset) => { cells[key * SHORT_LOOP + offset] = value; });
+          }
+          return;
+        }
+        if (loop.includes(index)) return;
+        loop.push(index);
+        at = next;
+      }
+    });
+  }
+  const table = { lengths, cells };
+  shortLoopCache.set(topology, table);
+  return table;
+}
+
+/**
+ * The black run through ring position `at`: its first position and length,
+ * the whole ring when every cell is black.
+ */
+function ringRun(ring, at) {
+  const length = ring.length;
+  let behind = 0;
+  while (behind < length - 1 && ring[(at - behind - 1 + length) % length] === BLACK) behind += 1;
+  if (behind === length - 1) return { start: 0, length, full: true };
+  let ahead = 0;
+  while (ring[(at + ahead + 1) % length] === BLACK) ahead += 1;
+  return { start: (at - behind + length) % length, length: behind + ahead + 1, full: false };
+}
+
+function ringRunHolds(run, position, length) {
+  return run.full || (position - run.start + length) % length < run.length;
+}
+
+/** countFours on a ring whose position 0 holds the stone. */
+function countRingFours(ring) {
+  const length = ring.length;
+  let first = -1;
+  let count = 0;
+  for (let position = 1; position < length; position += 1) {
+    if (ring[position] !== EMPTY) continue;
+    ring[position] = BLACK;
+    const run = ringRun(ring, 0);
+    ring[position] = EMPTY;
+    if (run.length !== 5 || !ringRunHolds(run, position, length)) continue;
+    let key = 0;
+    for (let offset = 0; offset < run.length; offset += 1) {
+      const index = (run.start + offset) % length;
+      if (index !== position) key |= 1 << index;
+    }
+    if (key === first) continue;
+    if (first === -1) first = key;
+    count += 1;
+    if (count === 2) break;
+  }
+  return count;
+}
+
+/** straightFourOffsets on a ring whose position 0 holds the stone. */
+function ringStraightFourPositions(ring) {
+  const length = ring.length;
+  const positions = [];
+  for (let position = 1; position < length; position += 1) {
+    if (ring[position] !== EMPTY) continue;
+    ring[position] = BLACK;
+    const run = ringRun(ring, 0);
+    if (!run.full && run.length === 4 && ringRunHolds(run, position, length)) {
+      const before = (run.start - 1 + length) % length;
+      const after = (run.start + 4) % length;
+      // Both ends open and distinct, each completing exactly five.
+      if (before !== after && ring[before] === EMPTY && ring[after] === EMPTY) {
+        ring[before] = BLACK;
+        const throughBefore = ringRun(ring, 0).length;
+        ring[before] = EMPTY;
+        ring[after] = BLACK;
+        const throughAfter = ringRun(ring, 0).length;
+        ring[after] = EMPTY;
+        if (throughBefore === 5 && throughAfter === 5) positions.push(position);
+      }
+    }
+    ring[position] = EMPTY;
+  }
+  return positions;
+}
+
 /**
  * A reusable Renju analysis of one board position. Queries share a memo, so
  * scanning many points of the same position (forbiddenPoints) reuses every
@@ -131,6 +252,7 @@ export class RenjuAnalyzer {
   #memo = new Map();
   #placed = [];
   #line = new Int8Array(SPAN);
+  #loops;
 
   /**
    * @param {import("../topology/index.js").Topology} topology
@@ -153,6 +275,19 @@ export class RenjuAnalyzer {
     });
     this.#cells = cells;
     this.#windows = lineWindows(topology, RADIUS);
+    this.#loops = shortLoops(topology);
+  }
+
+  /** The short loop through a cell along an axis as a ring of values, or null. */
+  #readRing(cell, axis) {
+    const key = cell * AXIS_COUNT + axis;
+    const length = this.#loops.lengths[key];
+    if (length === 0) return null;
+    const ring = new Int8Array(length);
+    for (let offset = 0; offset < length; offset += 1) {
+      ring[offset] = this.#cells[this.#loops.cells[key * SHORT_LOOP + offset]];
+    }
+    return ring;
   }
 
   /**
@@ -253,9 +388,13 @@ export class RenjuAnalyzer {
   /** Classify the black stone now standing at `cell`. */
   #classify(cell) {
     // Five beats everything; then overline; then fours; then threes.
+    const rings = [];
     let overline = false;
     for (let axis = 0; axis < AXIS_COUNT; axis += 1) {
-      const length = runLength(this.#readWindow(cell, axis));
+      rings[axis] = this.#readRing(cell, axis);
+      const length = rings[axis]
+        ? ringRun(rings[axis], 0).length
+        : runLength(this.#readWindow(cell, axis));
       if (length === 5) return null;
       if (length > 5) overline = true;
     }
@@ -265,11 +404,20 @@ export class RenjuAnalyzer {
     /** @type {Array<number[]>} straight-four cells per axis without a four */
     const threeCandidates = [];
     for (let axis = 0; axis < AXIS_COUNT; axis += 1) {
-      const line = this.#readWindow(cell, axis);
-      const axisFours = countFours(line);
+      const ring = rings[axis];
+      const line = ring ? null : this.#readWindow(cell, axis);
+      const axisFours = ring ? countRingFours(ring) : countFours(line);
       if (axisFours > 0) {
         fours += axisFours;
         if (fours >= 2) return FORBIDDEN_REASONS.DOUBLE_FOUR;
+        continue;
+      }
+      if (ring) {
+        const positions = ringStraightFourPositions(ring);
+        if (positions.length > 0) {
+          const base = (cell * AXIS_COUNT + axis) * SHORT_LOOP;
+          threeCandidates.push(positions.map((position) => this.#loops.cells[base + position]));
+        }
         continue;
       }
       const offsets = straightFourOffsets(line);

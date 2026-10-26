@@ -109,10 +109,10 @@ test("a Gomoku room is created, stored as schema 3 and restored through its rule
 });
 
 test("room creation validates boards and rules with the chosen game's limits", () => {
-  rejects(() => createRoom({ gameType: "gomoku", size: 9 }), 400, "BAD_REQUEST",
-    "五子棋棋盘宽高必须是 11 到 30 之间的整数。");
+  rejects(() => createRoom({ gameType: "gomoku", size: 4 }), 400, "BAD_REQUEST",
+    "五子棋棋盘宽高必须是 5 到 30 之间的整数。");
   rejects(() => createRoom({ gameType: "othello", width: 8, height: 7 }), 400, "BAD_REQUEST",
-    "黑白棋棋盘宽高必须是 6 到 30 之间的偶数。");
+    "黑白棋棋盘宽高必须是 4 到 30 之间的偶数。");
   rejects(() => createRoom({ gameType: "gomoku", ruleSet: "swap2" }), 400, "BAD_REQUEST",
     "对局规则设置无效。");
   rejects(() => createRoom({ gameType: "othello", topology: "sphere" }), 400, "BAD_REQUEST",
@@ -257,7 +257,7 @@ test("next-round settings keep the game unless asked and switch to the new game'
     () => act(gomoku, "host", "request_game", { mode: "friend", gameType: "othello", size: 9 }, 2_500),
     400,
     "BAD_REQUEST",
-    "黑白棋棋盘宽高必须是 6 到 30 之间的偶数。",
+    "黑白棋棋盘宽高必须是 4 到 30 之间的偶数。",
   );
   rejects(
     () => act(gomoku, "host", "request_game", { mode: "friend", gameType: "shogi" }, 2_500),

@@ -33,7 +33,7 @@ export function goSoakSuite(topology) {
         [3, 4, 100, { fullProbe: true }],
         [4, 3, 100, { fullProbe: true }],
         [6, 6, 100, { fullProbe: true }],
-        ...squares(range(5, 30)).map(([w, h]) => [w, h, 10, { deep: true }]),
+        ...squares(range(3, 30)).map(([w, h]) => [w, h, 10, { deep: true }]),
         ...[[5, 9], [9, 5], [7, 19], [19, 7], [13, 30], [30, 13], [3, 30], [30, 3]].map(([w, h]) => [w, h, 10]),
       ]
     : [...small, [9, 9, 2, { deep: true }], [13, 13, 2], [19, 19, 2, { deep: true }], [7, 13, 2]];
@@ -56,12 +56,14 @@ export function goSoakSuite(topology) {
 
 export function gomokuSoakSuite(topology) {
   const seedBase = { cylinder: 7, torus: 300_000, mobius: 600_000 }[topology];
-  const small = [[11, 11, 100], [11, 11, 30, { fill: true }]];
+  // 5 x 5 and 7 x 7 rows and torus columns are short rings for Renju.
+  const small = [[5, 5, 100], [7, 7, 100], [11, 11, 100], [7, 7, 30, { fill: true }], [11, 11, 30, { fill: true }]];
   const plan = SOAK_FULL
     ? [
         ...small,
         [12, 12, 20, { fill: true }],
-        ...squares(range(11, 30)).map(([w, h]) => [w, h, 10]),
+        ...squares(range(5, 30)).map(([w, h]) => [w, h, 10]),
+        [5, 9, 10], [9, 5, 10], [6, 10, 10], [10, 6, 10],
         ...[[11, 30], [30, 11], [11, 19], [19, 11], [13, 17]].map(([w, h]) => [w, h, 10]),
       ]
     : [...small, [15, 15, 2], [19, 19, 2], [11, 17, 2]];
@@ -89,13 +91,15 @@ export function gomokuSoakSuite(topology) {
 
 export function othelloSoakSuite(topology) {
   const seedBase = { cylinder: 11, torus: 400_000, mobius: 800_000 }[topology];
-  const small = [[6, 6, 100, { probeEvery: 1 }]];
+  const small = [[4, 4, 100, { probeEvery: 1 }], [6, 6, 100, { probeEvery: 1 }]];
   const plan = SOAK_FULL
     ? [
         ...small,
         [6, 8, 30, { probeEvery: 2 }],
         [8, 6, 30, { probeEvery: 2 }],
-        ...squares(range(6, 30, 2)).map(([w, h]) => [w, h, 10, {
+        [4, 8, 30, { probeEvery: 2 }],
+        [8, 4, 30, { probeEvery: 2 }],
+        ...squares(range(4, 30, 2)).map(([w, h]) => [w, h, 10, {
           probeEvery: w <= 10 ? 3 : 40,
           slowChoices: w <= 12,
         }]),

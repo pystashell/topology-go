@@ -167,8 +167,8 @@ export class GomokuEngine {
 
   /**
    * @param {object} [options]
-   * @param {number} [options.width=15] Column count (11 to 30).
-   * @param {number} [options.height=15] Row count (11 to 30).
+   * @param {number} [options.width=15] Column count (5 to 30).
+   * @param {number} [options.height=15] Row count (5 to 30).
    * @param {number} [options.size] Square-board alias for width and height.
    * @param {'cylinder'|'torus'|'mobius'} [options.topology='cylinder']
    * @param {'freestyle'|'renju'} [options.ruleSet='freestyle']

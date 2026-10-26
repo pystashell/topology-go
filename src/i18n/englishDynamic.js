@@ -18,10 +18,10 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "棋类无效。": "That game is not available.",
   "持久化棋类无效。": "The stored game type is invalid.",
   "对局规则设置无效。": "The game rule settings are invalid.",
-  "五子棋棋盘宽高必须是 11 到 30 之间的整数。":
-    "Gomoku boards need whole-number sides from 11 to 30.",
-  "黑白棋棋盘宽高必须是 6 到 30 之间的偶数。":
-    "Othello boards need even sides from 6 to 30.",
+  "五子棋棋盘宽高必须是 5 到 30 之间的整数。":
+    "Gomoku boards need whole-number sides from 5 to 30.",
+  "黑白棋棋盘宽高必须是 4 到 30 之间的偶数。":
+    "Othello boards need even sides from 4 to 30.",
   "黑方禁手，不能落在这里。": "That point is forbidden for Black.",
   "黑方禁手：长连。": "Forbidden for Black: overline.",
   "黑方禁手：四四。": "Forbidden for Black: double four.",
@@ -67,8 +67,8 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "黑方已无可下之处，和棋。": "Black has no legal point left: draw.",
   "黑方子数": "Black discs",
   "白方子数": "White discs",
-  "五子棋棋盘每边至少 11 路。": "Gomoku boards need at least 11 lines per side.",
-  "黑白棋棋盘宽高须为 6–30 的偶数。": "Othello boards need even sides from 6 to 30.",
+  "五子棋棋盘每边至少 5 路。": "Gomoku boards need at least 5 lines per side.",
+  "黑白棋棋盘宽高须为 4–30 的偶数。": "Othello boards need even sides from 4 to 30.",
   "这个棋类暂不支持 AI 对手、AI 分析或 SGF 棋谱。":
     "This game does not support AI opponents, AI analysis or SGF records yet.",
   "五子棋和黑白棋暂不支持 AI，请选择好友或本地双人对局。":

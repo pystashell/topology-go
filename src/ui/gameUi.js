@@ -32,7 +32,7 @@ export const RULE_SET_LABELS = Object.freeze({
 /** Square sizes offered as one-click shortcuts in the settings panel. */
 export const GAME_SIZE_SHORTCUTS = Object.freeze({
   [GAME_GO]: Object.freeze([9, 13, 19]),
-  [GAME_GOMOKU]: Object.freeze([15, 19]),
+  [GAME_GOMOKU]: Object.freeze([7, 11, 15]),
   [GAME_OTHELLO]: Object.freeze([6, 8, 10]),
 });
 
@@ -130,7 +130,7 @@ export function isOfferedBoardDimension(gameType, value) {
 /** The small caption under the width or height field. */
 export function dimensionRangeText(gameType, axis = "width") {
   const limits = BOARD_LIMITS[normalizeGameType(gameType)];
-  // Short enough to sit beside the number field ("偶数列 · 6–30").
+  // Short enough to sit beside the number field ("偶数列 · 4–30").
   const label = limits.parity === "even"
     ? axis === "height" ? "偶数行" : "偶数列"
     : axis === "height" ? "纵向行数" : "横向列数";
@@ -140,8 +140,8 @@ export function dimensionRangeText(gameType, axis = "width") {
 /** Why a typed size was adjusted, for games with their own limits. */
 export function boardLimitNote(gameType) {
   const type = normalizeGameType(gameType);
-  if (type === GAME_GOMOKU) return "五子棋棋盘每边至少 11 路。";
-  if (type === GAME_OTHELLO) return "黑白棋棋盘宽高须为 6–30 的偶数。";
+  if (type === GAME_GOMOKU) return "五子棋棋盘每边至少 5 路。";
+  if (type === GAME_OTHELLO) return "黑白棋棋盘宽高须为 4–30 的偶数。";
   return "";
 }
 

@@ -436,8 +436,8 @@ export const ENGLISH_STATIC = Object.freeze({
     "Outflanking lines continue across seams; a line that loops back to the new disc flips nothing.",
   "一方无子可下时自动跳过，由另一方继续；双方都无子可下时对局结束。":
     "A player with no legal move is skipped automatically and the other continues; the game ends when neither side can move.",
-  "终局时棋子多的一方获胜，数量相同为和棋。棋盘宽高须为 6–30 的偶数。":
-    "The player with more discs at the end wins; equal counts are a draw. Board sides must be even, from 6 to 30.",
+  "终局时棋子多的一方获胜，数量相同为和棋。棋盘宽高须为 4–30 的偶数。":
+    "The player with more discs at the end wins; equal counts are a draw. Board sides must be even, from 4 to 30.",
   // Room management, guest vs AI and abandoned games.
   "好友和访客需要接受邀请；AI 都在本浏览器中运行":
     "Friends and guests accept an invitation; every AI runs in this browser",
