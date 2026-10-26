@@ -6,7 +6,8 @@
 // comes back (room hints, seat presence, lobby dots); the host leaves and
 // returns through "My rooms"; an unlisted room stays out of the public list
 // but shows in "My rooms" and can be removed there; a card copies the room
-// link; a resignation moves the room to "finished". About two minutes.
+// link; a resignation takes the finished game out of the lobby (My rooms
+// keeps it). About two minutes.
 import { BASE, cjkLeftovers, launch, openPage, problems, shot, text } from "./lib.mjs";
 import { installCspWatch } from "./play.mjs";
 
@@ -168,9 +169,10 @@ try {
   await guest.context().setOffline(true);
   await guest.waitForFunction(() => /网络已断开/u.test(document.querySelector("#room-hint")?.textContent ?? ""), null, { timeout: 10_000 });
   const offlineHint = await text(guest, "#room-hint");
-  // The room notices a silent socket within about two minutes (90 s without
-  // a ping, checked every 30 s) unless the close reached it first.
-  await host.waitForFunction(() => /暂时离线/u.test(document.querySelector("#white-seat")?.textContent ?? ""), null, { timeout: 150_000 });
+  // The room notices a silent socket within about two and a half minutes
+  // (90 s without a ping, checked every 60 s during a game) unless the close
+  // reached it first.
+  await host.waitForFunction(() => /暂时离线/u.test(document.querySelector("#white-seat")?.textContent ?? ""), null, { timeout: 180_000 });
   const hostSeesOffline = await text(host, "#white-seat");
   await untilLobby(english, (selector) => {
     const dots = [...(document.querySelector(selector)?.querySelectorAll(".lobby-presence") ?? [])];
@@ -236,7 +238,8 @@ try {
     status: await text(host, "#lobby-status"),
   };
 
-  // 11. The host resigns in the first room: it moves to "finished".
+  // 11. The host resigns in the first room: the finished game leaves the
+  // lobby; the host's My rooms keeps it.
   await host.click(`#lobby-my-room-list [data-lobby-room="${code}"]`);
   await host.waitForURL(new RegExp(`/online/${code}`, "u"));
   await host.waitForSelector("#resign-button:not([hidden])", { timeout: 20_000 });
@@ -244,9 +247,14 @@ try {
   await host.click("#resign-button");
   await host.click("#confirm-resign");
   await host.waitForTimeout(1_200);
-  await english.click('[data-lobby-status="finished"]');
-  await untilLobby(english, (selector) => /Finished/u.test(document.querySelector(selector)?.textContent ?? ""), card(code), { label: "finished card" });
-  record.finished = await cardInfo(english, code);
+  await untilLobby(english, (selector) => !document.querySelector(selector), card(code), { label: "finished game leaves the lobby" });
+  await host.goto(`${BASE}/lobby`);
+  await host.waitForSelector(`#lobby-my-room-list [data-room-code="${code}"]`, { timeout: 10_000 });
+  record.finished = {
+    publicCard: await english.locator(card(code)).count(),
+    myRoom: await text(host, `#lobby-my-room-list [data-room-code="${code}"]`),
+    statusTabs: await english.$$eval("[data-lobby-status]", (buttons) => buttons.map((button) => button.dataset.lobbyStatus)),
+  };
 } catch (error) {
   record.error = error.stack;
   record.failShots = [await shot(host, "lobby-fail-host"), await shot(guest, "lobby-fail-guest"), await shot(english, "lobby-fail-english")];
@@ -270,8 +278,9 @@ const ok = !record.error &&
   /You play Black/u.test(record.myRoomsEnglish?.entry ?? "") && record.myRoomsEnglish?.leftovers.length === 0 &&
   new RegExp(`/online/${record.code}`, "u").test(record.resumed?.url ?? "") &&
   record.copied?.clipboard === `${BASE}/online/${record.code}` &&
-  record.unlisted?.publicCard === 0 && /不在公开列表/u.test(record.unlisted?.myRoom ?? "") &&
+  record.unlisted?.publicCard === 0 && /不在大厅/u.test(record.unlisted?.myRoom ?? "") &&
   record.unlisted?.armed === "确认移除" && record.unlisted?.afterRemove.gone && record.unlisted?.afterRemove.stillThere === 1 &&
-  /Finished/u.test(record.finished?.status ?? "");
+  record.finished?.publicCard === 0 && /不在大厅/u.test(record.finished?.myRoom ?? "") &&
+  record.finished?.statusTabs.join() === "all,joinable,playing";
 console.log(JSON.stringify({ ok, record, problems: unexpected }, null, 2));
 process.exitCode = ok && unexpected.length === 0 ? 0 : 1;

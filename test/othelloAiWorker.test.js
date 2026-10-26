@@ -79,7 +79,10 @@ test("othello AI worker returns a legal move with info and progress", async () =
   assert.equal(engine.checkPlay(reply.move.row, reply.move.col).ok, true);
   assert.deepEqual(Object.keys(reply.move).sort(), ["col", "row"]);
   assert.equal(reply.info.engine, "topo-othello");
-  assert.ok(reply.info.ms <= 240);
+  // Within the 200 ms limit plus slack for a loaded machine (the whole suite
+  // runs in parallel; 240 ms failed there once). A search that ignored the
+  // limit takes seconds at this level.
+  assert.ok(reply.info.ms <= 400, `${reply.info.ms} ms`);
   assert.ok(reply.info.depth >= 1);
   const progress = messages.filter((message) => message.type === "progress");
   assert.ok(progress.length >= 1);

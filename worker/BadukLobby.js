@@ -1,6 +1,7 @@
 import {
   MAX_LOBBY_ROOMS,
   isLobbySummary,
+  lobbyShowsRoom,
   lobbySummaryFromRoom,
   pruneLobbyRooms,
   sortLobbyRooms,
@@ -116,14 +117,17 @@ export class BadukLobby {
       if (staleAgainst(summary, current) || staleAgainst(summary, watermark)) {
         return jsonResponse({ ok: true, ignored: "stale" });
       }
-      if (room.listed === false) {
-        // An unlisted room is a versioned removal: its watermark keeps an
-        // older listed snapshot that arrives late from bringing it back.
-        if (!current && !watermark) return jsonResponse({ ok: true, ignored: "unlisted" });
+      if (room.listed === false || !lobbyShowsRoom(summary)) {
+        // An unlisted room, a finished game or a waiting room nobody is in is
+        // a versioned removal: its watermark keeps an older listed snapshot
+        // that arrives late from bringing it back. A newer snapshot (a new
+        // game, a player back) lists it again.
+        const reason = room.listed === false ? "unlisted" : "hidden";
+        if (!current && !watermark) return jsonResponse({ ok: true, ignored: reason });
         this.rooms.delete(summary.code);
         this.remember(summary);
         await this.persist();
-        return jsonResponse({ ok: true, removed: "unlisted" });
+        return jsonResponse({ ok: true, removed: reason });
       }
       if (!current && !watermark &&
           this.rooms.size + this.watermarks.size >= MAX_TRACKED_CODES) {
@@ -162,7 +166,9 @@ export class BadukLobby {
   }
 
   pruneInMemory(now = Date.now()) {
-    const rooms = pruneLobbyRooms([...this.rooms.values()], now);
+    // Rooms stored before the lobby hid finished and empty rooms leave on
+    // the first read, remembered like any other removal.
+    const rooms = pruneLobbyRooms([...this.rooms.values()].filter(lobbyShowsRoom), now);
     const kept = new Set(rooms.map((room) => room.code));
     let changed = rooms.length !== this.rooms.size;
     for (const room of this.rooms.values()) {

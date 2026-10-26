@@ -118,6 +118,8 @@ async function upsert(instance, room) {
 test("the lobby drops a room that becomes unlisted and keeps a late listed snapshot out", async () => {
   const now = Date.now();
   const room = setupRoom({ now });
+  // A waiting room is listed while its host is there.
+  room.resumeConnection("host", "host-socket", now);
   const instance = lobby();
   const listedSnapshot = room.directorySnapshot(now);
   assert.deepEqual(await upsert(instance, listedSnapshot), { ok: true });
