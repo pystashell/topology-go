@@ -86,6 +86,79 @@ test("the directory derives an index entry from a room snapshot", async () => {
   assert.equal(writes.length, 1);
 });
 
+test("a finished game leaves the lobby and a new game in the room brings it back", async () => {
+  const { instance, writes } = directory();
+  const post = async (body) => (await instance.fetch(new Request("https://index/internal/upsert", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }))).json();
+  const players = [
+    { id: "host", name: "Host", color: "black", online: true },
+    { id: "guest", name: "Guest", color: "white", online: true },
+  ];
+  const controllers = {
+    black: { kind: "human", operatorId: "host" },
+    white: { kind: "human", operatorId: "guest" },
+  };
+  const playing = roomSnapshot({
+    directoryRevision: 5, players, match: { status: "playing", mode: "friend", roundId: 1, controllers },
+  });
+  assert.deepEqual(await post(playing), { ok: true });
+  assert.equal(instance.rooms.get("ABC123").status, "playing");
+  // Both players offline mid-game: still listed (the game is not over).
+  assert.deepEqual(await post({
+    ...playing, directoryRevision: 6, players: players.map((player) => ({ ...player, online: false })),
+  }), { ok: true });
+  assert.equal(instance.rooms.has("ABC123"), true);
+
+  const finished = roomSnapshot({
+    directoryRevision: 7, players, match: { status: "finished", mode: "friend", roundId: 1, controllers },
+  });
+  assert.deepEqual(await post(finished), { ok: true, removed: "hidden" });
+  assert.equal(instance.rooms.has("ABC123"), false);
+  // The late "playing" snapshot cannot bring the finished game back.
+  assert.deepEqual(await post(playing), { ok: true, ignored: "stale" });
+  assert.equal(instance.rooms.has("ABC123"), false);
+
+  // A rematch (a newer snapshot) lists the room again.
+  assert.deepEqual(await post(roomSnapshot({
+    directoryRevision: 8, players, match: { status: "playing", mode: "friend", roundId: 2, controllers },
+  })), { ok: true });
+  assert.equal(instance.rooms.get("ABC123").roundNumber, 2);
+
+  // A room never listed that is already over is not written at all.
+  const before = writes.length;
+  assert.deepEqual(await post(roomSnapshot({
+    code: "DEF234", directoryRevision: 3, players,
+    match: { status: "finished", mode: "friend", roundId: 1, controllers },
+  })), { ok: true, ignored: "hidden" });
+  assert.equal(writes.length, before);
+});
+
+test("finished and empty rooms stored by an older version leave on the first read", async () => {
+  const { instance, writes } = directory();
+  const summary = (code, status, online) => lobbySummaryFromRoom(roomSnapshot({
+    code,
+    players: [{ id: "host", name: "Host", color: "black", online }],
+    match: {
+      status,
+      mode: "friend",
+      roundId: status === "setup" ? 0 : 1,
+      controllers: { black: { kind: "human", operatorId: "host" }, white: { kind: "human", operatorId: null } },
+    },
+  }));
+  for (const room of [
+    summary("FIN234", "finished", true),
+    summary("EMP234", "setup", false),
+    summary("WAI234", "setup", true),
+  ]) instance.rooms.set(room.code, room);
+  const response = await instance.fetch(new Request("https://index/internal/rooms"));
+  assert.deepEqual((await response.json()).rooms.map((room) => room.code), ["WAI234"]);
+  assert.equal(writes.length, 1, "the cleanup is written once");
+  // Both are remembered, so a late copy of either stays out.
+  assert.deepEqual([...instance.watermarks.keys()].sort(), ["EMP234", "FIN234"]);
+});
+
 test("the directory derives AI seats from v2 controllers, not legacy members", async () => {
   const { instance } = directory();
   const response = await instance.fetch(new Request("https://index/internal/upsert", {
@@ -192,12 +265,14 @@ test("directory versions order same-game presence and protect a reused room code
   }));
   const old = roomSnapshot({ revision: 9, directoryRevision: 12 });
   assert.equal((await post("/internal/upsert", old)).status, 200);
-  assert.equal((await post("/internal/upsert", roomSnapshot({
+  // The host leaving a waiting room takes it out of the lobby; the watermark
+  // keeps the older snapshot (host online) from bringing it back.
+  assert.deepEqual(await (await post("/internal/upsert", roomSnapshot({
     revision: 9,
     directoryRevision: 13,
     players: [{ id: "host", name: "Host", color: "black", online: false }],
-  }))).status, 200);
-  assert.equal(instance.rooms.get(old.code).players[0].online, false);
+  }))).json(), { ok: true, removed: "hidden" });
+  assert.equal(instance.rooms.has(old.code), false);
   assert.deepEqual(await (await post("/internal/upsert", old)).json(),
     { ok: true, ignored: "stale" });
 

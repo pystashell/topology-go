@@ -384,6 +384,20 @@ export function pruneLobbyRooms(rooms, now = Date.now()) {
   ).slice(0, MAX_LOBBY_ROOMS);
 }
 
+/**
+ * Whether the lobby lists a room: a game in progress, or a room waiting for
+ * an opponent while someone is there to play with (a player online, or an
+ * open seat people in the room can fill). A finished game leaves the lobby
+ * (its players keep the room link), and so does a waiting room everyone has
+ * left; either comes back when that changes.
+ */
+export function lobbyShowsRoom(room) {
+  if (room?.status === LOBBY_STATUS_PLAYING) return true;
+  if (room?.status === LOBBY_STATUS_FINISHED) return false;
+  return room?.joinable === true || (room?.players ?? []).some((player) =>
+    player?.online === true && player?.controller !== "ai");
+}
+
 /** Whether a summary matches a search for a room code or a player's name. */
 export function lobbyRoomMatchesQuery(room, query) {
   const needle = String(query ?? "").trim().toLocaleLowerCase();

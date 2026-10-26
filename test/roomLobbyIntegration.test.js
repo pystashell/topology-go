@@ -87,10 +87,7 @@ test("an operator departure advertises the reusable black seat in the lobby", as
 
   engine.leave({ playerId: "host", now: now + 200 });
   await publisher.persist();
-  const emptyEntry = lobby.rooms.get(code);
-  assert.equal(emptyEntry.status, "setup");
-  assert.equal(emptyEntry.mode, "friend");
-  assert.equal(emptyEntry.joinable, false, "an empty room is not advertised");
+  assert.equal(lobby.rooms.has(code), false, "an empty waiting room leaves the lobby");
 
   engine.join({
     name: "Viewer", role: "spectator", playerId: "viewer",
@@ -126,27 +123,33 @@ test("persisted directory versions follow presence, expiry and room incarnations
   });
   const publisher = publishingRoom(engine, lobby);
   let storedRoom = await publisher.persist();
-  const first = engine.snapshot(now);
-  const firstEntry = lobby.rooms.get(code);
-  assert.equal(firstEntry.players[0].online, false);
-  assert.equal(firstEntry.directoryRevision, first.directoryRevision);
-  assert.equal(firstEntry.incarnationId, first.incarnationId);
+  // A created room whose host has not connected yet is not listed.
+  assert.equal(lobby.rooms.has(code), false);
   const initialGameRevision = engine.state.revision;
-  const initialExpiry = firstEntry.expiresAt;
 
   engine.resumeConnection("host", "host-socket", now + 1_000);
   storedRoom = await publisher.persist();
   assert.equal(engine.state.revision, initialGameRevision);
-  assert.equal(lobby.rooms.get(code).players[0].online, true);
-  assert.ok(lobby.rooms.get(code).directoryRevision > firstEntry.directoryRevision);
-  const connectedSnapshot = engine.snapshot(now + 1_000);
+  const first = engine.snapshot(now + 1_000);
+  const firstEntry = lobby.rooms.get(code);
+  assert.equal(firstEntry.players[0].online, true);
+  assert.equal(firstEntry.directoryRevision, first.directoryRevision);
+  assert.equal(firstEntry.incarnationId, first.incarnationId);
+  const initialExpiry = firstEntry.expiresAt;
 
+  // The host leaving takes the waiting room out of the lobby; the watermark
+  // keeps the older snapshot (host online) out.
   engine.disconnect({ connectionId: "host-socket", now: now + 2_000 });
   await publisher.persist();
   assert.equal(engine.state.revision, initialGameRevision);
-  assert.equal(lobby.rooms.get(code).players[0].online, false);
-  assert.deepEqual(await (await post(lobby, "/internal/upsert", connectedSnapshot)).json(),
+  assert.equal(lobby.rooms.has(code), false);
+  assert.deepEqual(await (await post(lobby, "/internal/upsert", first)).json(),
     { ok: true, ignored: "stale" });
+  // The host coming back lists it again.
+  engine.resumeConnection("host", "host-socket-2", now + 2_500);
+  await publisher.persist();
+  assert.equal(lobby.rooms.get(code).players[0].online, true);
+  assert.ok(lobby.rooms.get(code).directoryRevision > firstEntry.directoryRevision);
 
   engine.join({
     name: "Viewer",
@@ -202,6 +205,7 @@ test("persisted directory versions follow presence, expiry and room incarnations
     startImmediately: false,
     now: now + 60_000,
   });
+  next.resumeConnection("next-host", "next-socket", now + 60_000);
   const nextPublisher = publishingRoom(next, lobby);
   await nextPublisher.persist();
   assert.equal(lobby.rooms.get(code).incarnationId, next.state.incarnationId);
@@ -230,12 +234,14 @@ test("uncertain writes publish only a confirmed recovered room", async (t) => {
     for (const recovery of ["recoverCommittedRoom", "lookupCommittedJoin"]) {
       const code = failurePoint === "before" ? "BCA234" : "CAB234";
       const tokenHash = await hashRoomToken("host-secret");
+      // A game in progress, so the recovered room is listed although nobody
+      // is connected to this test object.
       const engine = RoomEngine.create({
         code,
         name: "Host",
         playerId: "host",
         tokenHash,
-        startImmediately: false,
+        startImmediately: true,
         now: Date.now(),
       });
       const lobby = lobbyStorage().spawn();

@@ -430,7 +430,7 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "你执白": "You play White",
   "你执黑": "You play Black",
   "你的席位": "Your seat",
-  "不在公开列表（不公开或已过期）": "Not in the public list (unlisted or expired)",
+  "不在大厅（已结束、不公开、没人在或已过期）": "Not in the lobby (finished, unlisted, empty or expired)",
   "确认移除": "Confirm remove",
   "移除": "Remove",
   "只删除这台设备上的记录；房间和其他人的席位不受影响，之后不能再用这个身份返回":

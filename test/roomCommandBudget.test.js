@@ -284,11 +284,12 @@ test("host presence that opens or closes the lobby seat is written and published
   }, { BADUK_ROOM_INDEX: { getByName: () => lobby } });
   await ready;
   const settle = () => Promise.all(pending.splice(0));
-  const joinable = async () => { await settle(); return lobby.rooms.get("BUD234").joinable; };
+  // A waiting room is listed only while one of its players is there.
+  const joinable = async () => { await settle(); return lobby.rooms.get("BUD234")?.joinable ?? "unlisted"; };
   const close = (playerId) => room.webSocketClose(sockets.filter((socket) =>
     socket.attachment?.identity?.playerId === playerId).at(-1), 1000, "bye");
 
-  assert.equal(await joinable(), false, "a created room whose host never connected");
+  assert.equal(await joinable(), "unlisted", "a created room whose host never connected");
   await openSocket(room, tokens.host);
   assert.equal(await joinable(), true);
   const writes = storage.writes;
@@ -296,7 +297,7 @@ test("host presence that opens or closes the lobby seat is written and published
   t.mock.timers.tick(1_000);
   await close("host");
   assert.equal(storage.writes, writes + 1, "the host leaving the page closes the seat");
-  assert.equal(await joinable(), false);
+  assert.equal(await joinable(), "unlisted");
   await openSocket(room, tokens.host);
   assert.equal(storage.writes, writes + 2, "a quick return reopens it despite the write interval");
   assert.equal(await joinable(), true);
@@ -321,9 +322,9 @@ test("host presence that opens or closes the lobby seat is written and published
   assert.deepEqual(await presence(), ["Host:true", "Friend:false"]);
   await close("host");
   assert.equal(storage.writes, settled + 2);
-  assert.deepEqual(await presence(), ["Host:false", "Friend:false"]);
+  assert.equal(await joinable(), "unlisted", "nobody is left in the waiting room");
   // A second close of an already closed seat changes nothing.
   await close("host");
   assert.equal(storage.writes, settled + 2);
-  assert.equal(await joinable(), false);
+  assert.equal(await joinable(), "unlisted");
 });

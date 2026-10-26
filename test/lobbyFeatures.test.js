@@ -5,6 +5,7 @@ import {
   LOBBY_LISTED_SIZES,
   filterLobbyRooms,
   lobbyRoomMatchesQuery,
+  lobbyShowsRoom,
   lobbyStats,
   myLobbyRooms,
   pickQuickJoinRoom,
@@ -50,6 +51,25 @@ const ROOMS = [
 ];
 
 const codes = (rooms) => rooms.map((room) => room.code);
+
+test("the lobby lists games in progress and waiting rooms someone is in, not finished games", () => {
+  const shown = (room) => lobbyShowsRoom(room);
+  // AAA (playing, one player offline), BBB and FFF (waiting, host online,
+  // open seat), DDD (invitation, host online), EEE (playing, open seat).
+  assert.deepEqual(ROOMS.filter(shown).map((room) => room.code), ["AAA234", "BBB234", "DDD234", "EEE234", "FFF234"]);
+  assert.equal(shown(ROOMS[2]), false, "CCC234 is finished");
+  // A game in progress stays listed even with both players away.
+  assert.equal(shown(summary("PLY234", { status: "playing",
+    players: [{ name: "A", color: "black", controller: "human", online: false }] })), true);
+  // A waiting room whose host left is not listed, nor one where only an AI seat is "online".
+  assert.equal(shown(summary("AWY234", {
+    players: [{ name: "Host", color: "black", controller: "human", online: false }] })), false);
+  assert.equal(shown(summary("AIO234", { status: "invited",
+    players: [{ name: "KataGo b10 AI", color: "white", controller: "ai", online: true }] })), false);
+  // An open seat that people in the room can fill keeps it listed.
+  assert.equal(shown(summary("OPN234", { joinable: true, players: [] })), true);
+  assert.equal(shown(null), false);
+});
 
 test("the lobby sorts by what is waiting, newest, most watched or most moves", () => {
   // Recommended: invitations, then setup, then playing, then finished;

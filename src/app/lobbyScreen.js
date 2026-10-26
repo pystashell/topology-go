@@ -337,7 +337,7 @@ function renderMyLobbyRooms(myLobbyRooms) {
           `${entry.summary.width} × ${entry.summary.height}`,
           lobbyStatusLabel(entry.summary.status),
         ]
-      : ["不在公开列表（不公开或已过期）"];
+      : ["不在大厅（已结束、不公开、没人在或已过期）"];
     status.append(...parts.map((part) => {
       const span = document.createElement("span");
       span.textContent = part;
@@ -369,7 +369,7 @@ function renderMyLobbyRooms(myLobbyRooms) {
 /** Counts on the status buttons and the summary line. */
 function renderLobbyCounts(lobbyStats) {
   const stats = lobbyStats(lobbyRooms);
-  const counts = { all: stats.total, joinable: stats.joinable, playing: stats.playing, finished: stats.finished };
+  const counts = { all: stats.total, joinable: stats.joinable, playing: stats.playing };
   for (const node of elements.lobbyCounts) {
     const value = counts[node.dataset.lobbyCount];
     node.textContent = Number.isFinite(value) && value > 0 ? ` ${value}` : "";
