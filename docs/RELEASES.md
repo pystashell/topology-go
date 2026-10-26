@@ -27,6 +27,10 @@ GitHub Release 正文会记录 commit、来源分支和两个 Cloudflare ID。�
 
 `public/version.json` 是候选版本清单（版本号随发布分支更新）；正式发布后，tag、Worker Version、Deployment 与 GitHub prerelease 会共同组成可审计记录。已发布：`0.3.0-rc.1`（2026-10-24，多棋种首次上线）。
 
+### 0.3.0-rc.5 的兼容边界
+
+- 只改了页面里给读屏软件的棋盘标签（按当前棋种和形状命名），存档、协议和规则都没变，可以直接回滚到 0.3.0-rc.4。
+
 ### 0.3.0-rc.4 的兼容边界
 
 - **连接心跳**：新页面连上房间后每 10 秒发一条纯文本 `ping`，房间用 `setWebSocketAutoResponse` 自动回 `pong`，不唤醒对象、不写存储。旧页面不发心跳，行为不变。新页面连到旧服务器时也一样收到 `pong`（自动回复早已注册），所以新旧混用都安全。
