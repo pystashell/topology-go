@@ -363,7 +363,10 @@ test("a pending negotiated undo keeps the opponent's play and pass available", (
   assert.equal(session.capabilities.resign, true);
 });
 
-test("the requester must cancel their own pending undo before continuing", () => {
+// Owner's rule (2026-10-26): a pending undo never blocks play. The clock
+// keeps running, so the requester may simply play on, which withdraws the
+// request; the room enforces the same (see undoRequestRules.test.js).
+test("the requester may play on while their own undo request waits", () => {
   const session = createMatchSession({
     transport: MATCH_TRANSPORT_ONLINE,
     controllerByColor: { black: "human", white: "human" },
@@ -376,9 +379,9 @@ test("the requester must cancel their own pending undo before continuing", () =>
     undoAvailable: true,
     undoRequest: { requesterId: "white-player", requesterColor: "white" },
   });
-  assert.equal(session.capabilities.play, false);
-  assert.equal(session.capabilities.pass, false);
-  assert.equal(session.capabilities.undo, false);
+  assert.equal(session.capabilities.play, true);
+  assert.equal(session.capabilities.pass, true);
+  assert.equal(session.capabilities.undo, false, "one request at a time");
   assert.equal(session.capabilities.resign, true);
 });
 

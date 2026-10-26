@@ -21,6 +21,12 @@ import { lobbySummaryFromRoom } from "../src/multiplayer/lobby.js";
 import { STORAGE_KEY, loadRoomSnapshot, saveRoomSnapshot } from "./roomStorage.js";
 import { onlineRoundRecord, saveRecord } from "./records.js";
 
+/**
+ * The account behind a WebSocket request, set by the Worker from the
+ * caller's session (and removed from anything a client sends).
+ */
+export const SESSION_USER_HEADER = "X-Topology-Session-User";
+
 // The lobby mirrors the room's expiry. Refresh an otherwise unchanged entry
 // once the room's TTL has slid this far past the last published one.
 export const LOBBY_EXPIRY_REFRESH_MS = 30 * 60 * 1_000;
@@ -523,8 +529,36 @@ export class BadukRoom {
         this.closeSocket(existing, 4408, "Session replaced");
       }
 
+      // One identity per person: a player's browser never also watches.
+      const seat = this.engine.checkSessionUser(
+        connected.identity.playerId,
+        request.headers.get(SESSION_USER_HEADER),
+      );
+      for (const removed of seat.removed) {
+        this.closeDuplicateIdentity(removed, "ALREADY_PLAYING_HERE");
+      }
+
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
+      if (seat.refused) {
+        // Accept, explain and close with 4401 so the page drops this
+        // identity and stops reconnecting with it.
+        this.engine.disconnect({ connectionId });
+        await this.persist();
+        server.accept();
+        this.sendError(server, {
+          code: "ALREADY_PLAYING_HERE",
+          message: "你是这盘棋的对局者，不能再以旁观者身份进入；请直接返回你的席位。",
+        });
+        this.closeSocket(server, 4401, "Already playing here");
+        this.broadcastState();
+        this.broadcastPresence();
+        return new Response(null, {
+          status: 101,
+          webSocket: client,
+          headers: { "Sec-WebSocket-Protocol": protocol },
+        });
+      }
       const attachment = {
         connectionId,
         identity: connected.identity,
@@ -536,7 +570,7 @@ export class BadukRoom {
       const connectedAt = Date.now();
       const playerId = connected.identity.playerId;
       const lastWrite = this.connectionWrites?.get(playerId);
-      if (connected.firstConnection !== false || lastWrite === undefined ||
+      if (seat.changed || connected.firstConnection !== false || lastWrite === undefined ||
           connectedAt - lastWrite >= CONNECTION_WRITE_INTERVAL_MS ||
           this.lobbyVisibleKey() !== visibleBefore) {
         await this.persist();
@@ -753,6 +787,20 @@ export class BadukRoom {
       console.error("Unable to notify committed room command", error);
     }
     await this.scheduleAlarmAfterCommit();
+  }
+
+  /** Close the sockets of an identity removed because its person plays here. */
+  closeDuplicateIdentity(playerId, code) {
+    for (const socket of this.ctx.getWebSockets?.() ?? []) {
+      const attachment = this.readAttachment(socket);
+      if (attachment.identity?.playerId !== playerId) continue;
+      this.sendError(socket, {
+        code,
+        message: "你是这盘棋的对局者，不能再以旁观者身份进入；请直接返回你的席位。",
+      });
+      socket.serializeAttachment({ ...attachment, identity: null });
+      this.closeSocket(socket, 4401, "Already playing here");
+    }
   }
 
   /** Tell a member the host removed that their seat is gone and close it. */

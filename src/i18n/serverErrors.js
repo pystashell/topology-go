@@ -40,6 +40,8 @@ export const SERVER_ERROR_COPY = Object.freeze({
   MESSAGE_TOO_LARGE: "这条消息太大，房间无法处理。",
   COMMAND_REJECTED: GENERIC_SERVER_ERROR,
   // Room engine (src/multiplayer/roomEngine.js)
+  ALREADY_PLAYING_HERE: "你是这盘棋的对局者，不能再以旁观者或新身份进入；请直接返回你的席位。",
+  ALREADY_WATCHING_HERE: "你已经在这个房间里观战，请直接返回房间；有空位时可以在房间里申请对手席位。",
   BAD_ROOM_STATE: "房间数据暂时无法读取，请稍后重新连接。",
   STALE_COMMAND: "这个操作已经过期，请按最新棋局重试。",
   STALE_GAME_STATE: "棋局已经更新，请按最新局面重试。",
@@ -103,6 +105,13 @@ export const SERVER_ERROR_COPY = Object.freeze({
 
 /** English for the copy above that is not already in the main dictionary. */
 export const ENGLISH_SERVER_ERRORS = Object.freeze({
+  "你是这盘棋的对局者，不能再以旁观者或新身份进入；请直接返回你的席位。":
+    "You are playing in this game, so you cannot also enter as a spectator or a new identity. Return to your seat instead.",
+  "你是这盘棋的对局者，不能再以旁观者身份进入；请直接返回你的席位。":
+    "You are playing in this game, so you cannot also enter as a spectator. Return to your seat instead.",
+  "你已经在这个房间里观战，请直接返回房间；有空位时可以在房间里申请对手席位。":
+    "You are already watching this room. Return to it; when a seat is free you can ask for it from inside the room.",
+  "你是这盘棋的对局者，已回到你的席位。": "You are playing in this game; you are back in your seat.",
   "这盘棋谱无法保存。": "This game record could not be saved.",
   "棋谱过长，无法保存。": "This game record is too long to save.",
   "棋谱服务暂时不可用，请稍后再试。": "Game records are unavailable right now. Try again shortly.",

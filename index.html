@@ -780,12 +780,12 @@
             <div class="field-group">
               <span class="field-label">快捷尺寸</span>
               <div class="size-buttons" role="group" aria-label="棋盘尺寸快捷选择">
-                <button type="button" data-board-size="9" data-size-games="go">9 × 9</button>
+                <button type="button" data-board-size="9" data-size-games="go" class="active" aria-pressed="true">9 × 9</button>
                 <button type="button" data-board-size="13" data-size-games="go">13 × 13</button>
                 <button type="button" data-board-size="7" data-size-games="gomoku" hidden>7 × 7</button>
                 <button type="button" data-board-size="11" data-size-games="gomoku" hidden>11 × 11</button>
                 <button type="button" data-board-size="15" data-size-games="gomoku" hidden>15 × 15</button>
-                <button type="button" data-board-size="19" data-size-games="go" class="active" aria-pressed="true">19 × 19</button>
+                <button type="button" data-board-size="19" data-size-games="go">19 × 19</button>
                 <button type="button" data-board-size="6" data-size-games="othello" hidden>6 × 6</button>
                 <button type="button" data-board-size="8" data-size-games="othello" hidden>8 × 8</button>
                 <button type="button" data-board-size="10" data-size-games="othello" hidden>10 × 10</button>
@@ -798,14 +798,14 @@
                   <strong>宽度</strong>
                   <small id="custom-width-range">横向列数 · 3–30</small>
                 </span>
-                <input id="custom-width" type="number" min="3" max="30" step="1" value="19" inputmode="numeric" />
+                <input id="custom-width" type="number" min="3" max="30" step="1" value="9" inputmode="numeric" />
               </label>
               <label class="input-row" for="custom-height">
                 <span>
                   <strong>高度</strong>
                   <small id="custom-height-range">纵向行数 · 3–30</small>
                 </span>
-                <input id="custom-height" type="number" min="3" max="30" step="1" value="19" inputmode="numeric" />
+                <input id="custom-height" type="number" min="3" max="30" step="1" value="9" inputmode="numeric" />
               </label>
             </div>
             <p id="board-limit-note" class="board-limit-note" hidden></p>

@@ -275,6 +275,21 @@ function memberUserId(value) {
   return typeof value === "string" && USER_ID_PATTERN.test(value) ? value : null;
 }
 
+/** The refusal for someone who already has an identity in the room. */
+function alreadyInRoomError(member) {
+  return member.role === "player"
+    ? new RoomEngineError(
+        "你是这盘棋的对局者，不能再以旁观者或新身份进入；请直接返回你的席位。",
+        409,
+        "ALREADY_PLAYING_HERE",
+      )
+    : new RoomEngineError(
+        "你已经在这个房间里观战，请直接返回房间；有空位时可以在房间里申请对手席位。",
+        409,
+        "ALREADY_WATCHING_HERE",
+      );
+}
+
 function normalizeTokenHash(value) {
   if (
     typeof value !== "string" ||
@@ -1850,10 +1865,9 @@ export class RoomEngine {
           "CONFLICT",
         );
       }
-      // The same browser rejoining: remember who it is now (a member who
-      // joined before accounts existed, or since signed in).
-      const userChanged = knownUserId !== null && existing.userId !== knownUserId;
-      if (userChanged) existing.userId = knownUserId;
+      // The same browser rejoining: remember who it is (a member who joined
+      // before accounts existed).
+      const userChanged = this.bindMemberUser(existing, knownUserId);
       return {
         changed: userChanged,
         revision: this.state.revision,
@@ -1873,6 +1887,12 @@ export class RoomEngine {
         "CONFLICT",
       );
     }
+
+    // One identity per person in a room. Spectator chat is hidden from the
+    // players, so a player must never also watch; someone already watching
+    // takes a free seat from inside the room (claim_seat) instead.
+    const already = this.memberOfUser(knownUserId);
+    if (already) throw alreadyInRoomError(already);
 
     let effectiveRole = normalizedRole;
     let color = null;
@@ -2081,6 +2101,60 @@ export class RoomEngine {
       firstConnection,
       room: this.snapshotFor(member.playerId, now),
     };
+  }
+
+  /** The member that belongs to this account, other than exceptPlayerId. */
+  memberOfUser(userId, exceptPlayerId = null) {
+    if (!userId) return null;
+    return this.state.members.find((member) =>
+      member.userId === userId && member.playerId !== exceptPlayerId) ?? null;
+  }
+
+  /**
+   * Remember the account behind a member that has none yet (members from
+   * before accounts, or from a browser that had no session then). An
+   * account another member already has is not given to a second one.
+   * Returns whether the member changed.
+   */
+  bindMemberUser(member, userId) {
+    const known = memberUserId(userId);
+    if (!member || !known || member.userId || this.memberOfUser(known, member.playerId)) return false;
+    member.userId = known;
+    return true;
+  }
+
+  /**
+   * A browser connected to a member: remember its account and keep one
+   * identity per person. A spectator identity of someone who plays here is
+   * removed (refused), as is any other spectator identity a player's
+   * account still holds (removed). Spectator chat is hidden from players.
+   * Returns { changed, refused, removed }.
+   */
+  checkSessionUser(playerId, userId, nowInput) {
+    const now = readNow(nowInput);
+    const result = { changed: false, refused: false, removed: [] };
+    const known = memberUserId(userId);
+    const member = this.member(normalizePlayerId(playerId));
+    if (!member || !known) return result;
+    const person = member.userId ?? known;
+    const others = this.state.members.filter((other) =>
+      other.playerId !== member.playerId && other.userId === person);
+    if (member.role === "spectator" && others.some((other) => other.role === "player")) {
+      this.leave({ playerId: member.playerId, now });
+      return { changed: true, refused: true, removed: [] };
+    }
+    if (member.role === "player") {
+      for (const other of others.filter((entry) => entry.role === "spectator")) {
+        this.leave({ playerId: other.playerId, now });
+        result.removed.push(other.playerId);
+        result.changed = true;
+      }
+    }
+    if (!member.userId && !this.memberOfUser(known, member.playerId)) {
+      member.userId = known;
+      result.changed = true;
+    }
+    return result;
   }
 
   resumeConnection(playerId, connectionId, nowInput) {
@@ -2675,25 +2749,19 @@ export class RoomEngine {
         requestRevision: request.requestRevision,
       };
     } else if (action === "play") {
-      const pendingUndo = this.pendingUndoForContinuedPlay(member);
+      const pendingUndo = this.pendingUndoForContinuedPlay();
       this.requireBothPlayers();
       this.assertControllerTurn(member, "human");
       const row = validateCoordinate(payload.row, "行");
       const col = validateCoordinate(payload.col, "列");
       move = this.game.play(row, col);
-      if (move?.ok && pendingUndo) {
-        this.state.undoRequest = null;
-        move.undoRequestAutoDeclined = true;
-      }
+      this.endUndoRequestByMove(move, pendingUndo, member);
     } else if (action === "pass") {
-      const pendingUndo = this.pendingUndoForContinuedPlay(member);
+      const pendingUndo = this.pendingUndoForContinuedPlay();
       this.requireBothPlayers();
       this.assertControllerTurn(member, "human");
       move = this.game.pass();
-      if (move?.ok && pendingUndo) {
-        this.state.undoRequest = null;
-        move.undoRequestAutoDeclined = true;
-      }
+      this.endUndoRequestByMove(move, pendingUndo, member);
     } else if (action === "set_ai_autoplay_paused") {
       this.assertGamePlaying();
       const blackController = this.controllerFor(BLACK);
@@ -4245,17 +4313,24 @@ export class RoomEngine {
     }
   }
 
-  pendingUndoForContinuedPlay(member) {
+  /**
+   * A pending undo request never holds up the game: the clock keeps running
+   * for whoever is to move, and a move or pass by either side ends the
+   * request (the requester's own move withdraws it, the opponent's move
+   * declines it). The clock itself limits how long anyone can wait, so the
+   * number of requests is not limited.
+   */
+  pendingUndoForContinuedPlay() {
     const request = this.state.undoRequest;
-    if (!request) return null;
-    if (request.requesterId === member.playerId) {
-      throw new RoomEngineError(
-        "请先取消自己的悔棋申请，再继续下棋。",
-        409,
-        "UNDO_PENDING",
-      );
-    }
-    return clone(request);
+    return request ? clone(request) : null;
+  }
+
+  /** Mark how a move ended a pending undo request. */
+  endUndoRequestByMove(move, pendingUndo, member) {
+    if (!move?.ok || !pendingUndo) return;
+    this.state.undoRequest = null;
+    if (pendingUndo.requesterId === member.playerId) move.undoRequestAutoCancelled = true;
+    else move.undoRequestAutoDeclined = true;
   }
 
   requireCurrentUndoRequest(targetMoveCount, requestRevision) {

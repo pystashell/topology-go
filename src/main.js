@@ -30,6 +30,7 @@ import { gameTypeOf, rulesFor } from "./game/rules/index.js";
 import {
   boardLimitNote,
   clampBoardDimension,
+  defaultBoardSide,
   dimensionRangeText,
   formatGameResult,
   gameControls,
@@ -547,8 +548,8 @@ let lobbyPreviewFrame = null;
 let appRouteMode = "single";
 const autoRotateByView = { arc: false, "3d": false };
 let moveCount = 0;
-let pendingWidth = 19;
-let pendingHeight = 19;
+let pendingWidth = defaultBoardSide(GAME_GO);
+let pendingHeight = defaultBoardSide(GAME_GO);
 let pendingTopology = TOPOLOGY_CYLINDER;
 // The game the settings panel prepares (Go unless multiple games are on), its
 // Gomoku rule set, and the last board size chosen for each game this tab.
@@ -568,6 +569,9 @@ let onlineRoom = null;
 let onlineStateSynchronized = false;
 let onlineBusy = false;
 let onlineEntryController = null;
+// What the online dialog was opened for: "all", "create", "join", "player"
+// or "spectator".
+let onlineDialogIntent = "all";
 let onlineCommandPending = false;
 let onlineCommandRevision = null;
 let onlineAIPauseIntent = null;
@@ -3355,7 +3359,12 @@ function renderPendingCreatePanel() {
 
 function renderStoredIdentityPanels() {
   const code = sanitizeRoomCode(elements.roomCodeInput.value);
-  const sessions = code.length === 6 ? roomClient.listStoredSessions(code) : [];
+  const stored = code.length === 6 ? roomClient.listStoredSessions(code) : [];
+  // Someone who plays in this room only returns to that seat: never as a
+  // spectator (spectator chat is hidden from players) or a new identity.
+  // The room refuses those for this browser anyway.
+  const seat = code.length === 6 ? roomClient.storedSeat(code) : null;
+  const sessions = seat ? stored.filter((entry) => entry.playerId === seat.playerId) : stored;
   const joins = code.length === 6 ? roomClient.listPendingJoins(code) : [];
   const selectedSession = elements.storedSessionSelect.value;
   const selectedJoin = elements.pendingJoinSelect.value;
@@ -3388,6 +3397,11 @@ function renderStoredIdentityPanels() {
   const entering = !elements.onlineRoomCodeField.hidden;
   elements.storedSessionPanel.hidden = !entering || sessions.length === 0;
   elements.pendingJoinPanel.hidden = !entering || joins.length === 0;
+  // Already in this room (a seat or a watch): return, do not enter again.
+  const creating = onlineDialogIntent === "create";
+  const inRoom = entering && sessions.length > 0;
+  elements.joinRoom.hidden = creating || onlineDialogIntent === "spectator" || inRoom;
+  elements.watchRoom.hidden = creating || onlineDialogIntent === "player" || inRoom;
 }
 
 function rememberLobbyBoardSettings() {
@@ -3515,6 +3529,7 @@ function showInviteDialog() {
 }
 
 function showOnlineDialog(roomCode = "", { intent = "all" } = {}) {
+  onlineDialogIntent = intent;
   const creating = intent === "create";
   const entering = ["join", "player", "spectator"].includes(intent);
   const spectatorOnly = intent === "spectator";
@@ -4016,9 +4031,11 @@ function updateRoomUI() {
     active && onlineReady && undoRequest && isOnlinePlayer()
   );
   if (undoRequest) {
+    // The request never holds up the game: clocks keep running, and a move
+    // by either side ends it.
     elements.undoRequestText.textContent = ownUndoRequest
-      ? "已申请撤回你的上一手，正在等待对方回应"
-      : `${colorName(undoRequest.requesterColor)}申请撤回自己的上一手`;
+      ? "已申请撤回你的上一手，等待对方回应。计时照走；轮到你时直接落子会撤回申请。"
+      : `${colorName(undoRequest.requesterColor)}申请撤回自己的上一手。轮到你时直接落子视为拒绝。`;
   }
   elements.undoResponseActions.hidden = !undoRequest || ownUndoRequest;
   elements.cancelUndoRequest.hidden = !undoRequest || !ownUndoRequest;
@@ -4392,9 +4409,17 @@ function announceRoomState(room, previousRoom) {
       ? "悔棋申请已发送，等待对方回应。"
       : `${colorName(undoRequest.requesterColor)}申请撤回自己的上一手。`);
   } else if (previousUndoRequest && !undoRequest) {
+    // A move by either side ends a pending request: the requester's own
+    // move withdraws it, the opponent's move declines it.
+    const ownRequest = isOwnUndoRequest(previousUndoRequest);
+    const requesterMoved = room.lastMove?.color === previousUndoRequest.requesterColor;
     setMessage(room.moveCount < previousRoom.moveCount
       ? "悔棋已同意，已撤回申请方的上一手。"
-      : "悔棋申请已结束，棋局继续。");
+      : room.moveCount > previousRoom.moveCount
+        ? requesterMoved
+          ? ownRequest ? "你已落子，悔棋申请自动取消。" : "对方已落子，撤回了悔棋申请。"
+          : ownRequest ? "对方直接落子，视为拒绝你的悔棋申请。" : "你已落子，视为拒绝对方的悔棋申请。"
+        : "悔棋申请已结束，棋局继续。");
   } else if (previousPhase === PHASE_SCORING && room.game.phase === PHASE_FINISHED) {
     // Without both confirmations the room ended the count on its timer.
     setMessage((room.scoreConfirmations ?? []).length < 2
@@ -5012,10 +5037,9 @@ function selectGameType(gameType) {
   if (next === pendingGameType) return;
   setPendingGameType(next);
   const remembered = pendingDimensionsByGame.get(next);
-  const limits = BOARD_LIMITS[next];
   setPendingDimensions(
-    remembered?.width ?? limits.defaultWidth,
-    remembered?.height ?? limits.defaultHeight,
+    remembered?.width ?? defaultBoardSide(next),
+    remembered?.height ?? defaultBoardSide(next),
   );
   elements.boardLimitNote.hidden = true;
   rememberGameTypeChoice();
@@ -7027,6 +7051,10 @@ async function joinOnlineRoom(role = "player", pendingPlayerId = "") {
     updateUI();
   } catch (error) {
     if (signal.aborted) return;
+    if (["ALREADY_PLAYING_HERE", "ALREADY_WATCHING_HERE"].includes(error?.code) &&
+        returnToStoredIdentity(code)) {
+      return;
+    }
     restoreOfflineGame();
     updateUI();
     maybeStartAITurn();
@@ -7047,6 +7075,20 @@ async function joinOnlineRoom(role = "player", pendingPlayerId = "") {
       renderStoredIdentityPanels();
     }
   }
+}
+
+/**
+ * The room says this browser is already in it: return to the stored seat
+ * (or the stored watch). Returns whether an identity was resumed.
+ */
+function returnToStoredIdentity(code) {
+  const identity = roomClient.storedSeat(code) ?? roomClient.listStoredSessions(code)[0] ?? null;
+  if (!identity) return false;
+  elements.roomCodeInput.value = code;
+  renderStoredIdentityPanels();
+  elements.storedSessionSelect.value = identity.playerId;
+  resumeStoredOnlineRoom();
+  return hasOnlineSession();
 }
 
 function resumeStoredOnlineRoom() {
@@ -7415,6 +7457,19 @@ roomClient.on("connection", (event) => {
   // A retained `onlineRoom` is only a visual fallback during reconnect. Do not
   // unlock actions until a welcome/state message for this socket arrives.
   onlineStateSynchronized = false;
+  if (event.terminal && event.code === 4401 && !hasOnlineSession()) {
+    // The room closed a spectator identity because this browser plays
+    // there: continue in the seat.
+    const code = onlineRoom?.code ?? sanitizeRoomCode(elements.roomCodeInput.value);
+    const seat = code ? roomClient.storedSeat(code) : null;
+    if (seat && roomClient.resumeRoom(code, seat.playerId)) {
+      resetChatSessionState();
+      updateRoomUrl(code);
+      setMessage("你是这盘棋的对局者，已回到你的席位。");
+      updateUI();
+      return;
+    }
+  }
   if (event.terminal && [4401, 4404].includes(event.code) && !hasOnlineSession()) {
     const reason = event.code === 4404
       ? "房间已因长时间无活动而关闭。"
@@ -7480,17 +7535,16 @@ if (savedGameChoice) {
   // Each game reopens on the board size this browser last used for it.
   restoreSizesByGame(savedGameChoice.sizesByGame);
   setPendingGameType(savedGameChoice.gameType, { ruleSet: savedGameChoice.ruleSet });
-  const limits = BOARD_LIMITS[pendingGameType];
   const remembered = pendingDimensionsByGame.get(pendingGameType);
   setPendingDimensions(
-    remembered?.width ?? limits.defaultWidth,
-    remembered?.height ?? limits.defaultHeight,
+    remembered?.width ?? defaultBoardSide(pendingGameType),
+    remembered?.height ?? defaultBoardSide(pendingGameType),
   );
 } else {
   syncGameTypeControls();
 }
-// The opening board: 19 × 19 Go on a cylinder (komi 7.5, Chinese rules), or
-// the default board of the game this browser chose last.
+// The opening board: 9 × 9 Go on a cylinder (komi 7.5, Chinese rules), the
+// smallest quick size, or the board of the game this browser chose last.
 game = createGameFromOptions(getNewGameOptions());
 setSidebarTab("settings");
 buildChatPickers();
@@ -7540,7 +7594,9 @@ if (initialRoute.mode === "online" && initialRoute.roomCode.length === 6) {
   const sharedRoomCode = initialRoute.roomCode;
   replaceAppPath(onlineRoomPath(sharedRoomCode, initialRoute.role));
   elements.roomCodeInput.value = sharedRoomCode;
-  if (roomClient.resumeRoom(sharedRoomCode)) {
+  // A player opening the room (any link) goes straight back to the seat.
+  const storedSeat = roomClient.storedSeat(sharedRoomCode);
+  if (roomClient.resumeRoom(sharedRoomCode, storedSeat?.playerId ?? "")) {
     updateRoomUrl(sharedRoomCode);
     setMessage(`正在恢复房间 ${sharedRoomCode}…`);
     updateRoomUI();

@@ -212,6 +212,8 @@ try {
   await host.goto(`${BASE}/lobby`);
   await host.fill("#lobby-search", code);
   await untilLobby(host, (selector) => Boolean(document.querySelector(selector)), card(code), { label: "host card" });
+  // The host's own room: only "Return to room", never "Watch".
+  record.hostCardActions = (await cardInfo(host, code))?.actions ?? [];
   await host.click(`${card(code)} [data-lobby-copy]`);
   await host.waitForTimeout(300);
   record.copied = { clipboard: await host.evaluate(() => navigator.clipboard.readText()), status: await text(host, "#lobby-status") };
@@ -278,6 +280,7 @@ const ok = !record.error &&
   /You play Black/u.test(record.myRoomsEnglish?.entry ?? "") && record.myRoomsEnglish?.leftovers.length === 0 &&
   new RegExp(`/online/${record.code}`, "u").test(record.resumed?.url ?? "") &&
   record.copied?.clipboard === `${BASE}/online/${record.code}` &&
+  record.hostCardActions?.includes("返回房间") && !record.hostCardActions?.includes("观战") &&
   record.unlisted?.publicCard === 0 && /不在大厅/u.test(record.unlisted?.myRoom ?? "") &&
   record.unlisted?.armed === "确认移除" && record.unlisted?.afterRemove.gone && record.unlisted?.afterRemove.stillThere === 1 &&
   record.finished?.publicCard === 0 && /不在大厅/u.test(record.finished?.myRoom ?? "") &&
