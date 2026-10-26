@@ -2,7 +2,9 @@
 // people on one page is saved when it ends and replays from /records; an
 // online friend game is saved for both players (a guest each), a stranger
 // cannot open it, and removing it from one list leaves the other player's
-// copy. The list reads in English too. About a minute.
+// copy. The list reads in English too. A player can never also be in the
+// room as a spectator: not through the page (a room link returns to the
+// seat) and not straight through the API. About a minute.
 import { BASE, cjkLeftovers, clickPoint, configureBoard, launch, openPage, problems, scanBoard, setView, shot, startLocalGame, text } from "./lib.mjs";
 import { finished, installCspWatch } from "./play.mjs";
 
@@ -111,6 +113,27 @@ try {
   await stranger.waitForFunction(() => /只有对局双方能看/u.test(document.querySelector("#message")?.textContent ?? ""), null, { timeout: 15_000 });
   record.stranger = { message: await text(stranger, "#message"), replaying: await stranger.locator("#replay-panel:not([hidden])").count() };
 
+  // 4b. One identity per person: the host (a player) asking the API to
+  // watch with fresh credentials is refused; a plain room link (a watching
+  // link) takes the host straight back to the seat.
+  record.apiWatch = await host.evaluate(async (roomCode) => {
+    const hex = (bytes) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const response = await fetch(`/api/rooms/${roomCode}/join`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ v: 2, name: "偷看", role: "spectator", playerId: crypto.randomUUID(), token: hex(32), multiGame: true }),
+    });
+    return { status: response.status, code: (await response.json()).code };
+  }, code);
+  await host.goto(`${BASE}/online/${code}`);
+  await host.waitForFunction(() => /房主甲/u.test(document.querySelector("#black-seat")?.textContent ?? ""), null, { timeout: 15_000 });
+  await host.waitForTimeout(800);
+  record.linkReturn = {
+    dialogOpen: await host.evaluate(() => Boolean(document.querySelector("#online-dialog")?.open)),
+    blackSeat: await text(host, "#black-seat"),
+    watchOffered: await host.locator("#watch-room:not([hidden])").count(),
+  };
+
   // 5. The guest removes it (two clicks); the host keeps it.
   await guest.click(`#records-list [data-record-remove="${online?.id}"]`);
   record.armed = await text(guest, `#records-list [data-record-remove="${online?.id}"]`);
@@ -148,9 +171,14 @@ const ok = !record.error &&
   /黑方胜 · 白方认输/u.test(record.online?.host?.text ?? "") && record.online?.guestSame &&
   /只有对局双方能看/u.test(record.stranger?.message ?? "") && record.stranger?.replaying === 0 &&
   record.armed === "确认移除" && record.afterRemove?.guest === false && record.afterRemove?.host === true &&
+  record.apiWatch?.status === 409 && record.apiWatch?.code === "ALREADY_PLAYING_HERE" &&
+  record.linkReturn?.dialogOpen === false && /房主甲/u.test(record.linkReturn?.blackSeat ?? "") &&
   /Online game/u.test(record.english?.text ?? "") && record.english?.leftovers.length === 0 &&
   record.filtered === 0;
-// The stranger's refused request is the point of step 4, not a problem.
-const unexpected = problems.filter((problem) => !/^\[stranger\] console\.error: Failed to load resource: .*403/u.test(problem));
+// The refused requests (the stranger's in step 4, the host's in 4b) are the
+// point of those steps, not problems.
+const unexpected = problems.filter((problem) =>
+  !/^\[stranger\] console\.error: Failed to load resource: .*403/u.test(problem) &&
+  !/^\[host\] console\.error: Failed to load resource: .*409/u.test(problem));
 console.log(JSON.stringify({ ok, record, problems: unexpected }, null, 2));
 process.exitCode = ok && unexpected.length === 0 ? 0 : 1;

@@ -1,4 +1,4 @@
-import { BadukRoom } from "./BadukRoom.js";
+import { BadukRoom, SESSION_USER_HEADER } from "./BadukRoom.js";
 import { BadukLobby } from "./BadukLobby.js";
 import {
   BADUK_PROTOCOL_VERSION,
@@ -482,7 +482,13 @@ const worker = {
         if (!(await withinRateLimit(env.ROOM_SOCKET_RATE_LIMITER, request))) {
           return rateLimitedResponse();
         }
-        return await env.BADUK_ROOMS.getByName(socketMatch[1]).fetch(request);
+        // The room learns whose browser this is (to keep one identity per
+        // person); a client cannot claim an account by sending the header.
+        const headers = new Headers(request.headers);
+        headers.delete(SESSION_USER_HEADER);
+        const user = await sessionUser(env, request);
+        if (user?.id) headers.set(SESSION_USER_HEADER, user.id);
+        return await env.BADUK_ROOMS.getByName(socketMatch[1]).fetch(new Request(request, { headers }));
       }
 
       const joinMatch = /^\/api\/rooms\/([A-HJ-NP-Z2-9]{6})(?:\/join)?$/.exec(url.pathname);

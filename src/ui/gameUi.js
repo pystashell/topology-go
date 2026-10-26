@@ -74,6 +74,15 @@ export function normalizeRuleSet(value) {
   return GOMOKU_RULE_SETS.includes(value) ? value : GOMOKU_FREESTYLE;
 }
 
+/**
+ * The board a new player starts on: the smallest quick size of the game
+ * (Go 9, Gomoku 7, Othello 6). The joined edges show most on small boards.
+ * Engines and rooms keep their own defaults for callers that send no size.
+ */
+export function defaultBoardSide(gameType) {
+  return GAME_SIZE_SHORTCUTS[normalizeGameType(gameType)][0];
+}
+
 export function gameName(gameType) {
   return GAME_LABELS[normalizeGameType(gameType)];
 }

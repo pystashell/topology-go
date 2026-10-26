@@ -2,6 +2,17 @@
 // lets every local/online/AI renderer share one code path while the i18n layer
 // chooses what each browser displays.
 export const ENGLISH_DYNAMIC = Object.freeze({
+  // Undo requests (src/main.js): the panel, and a request ended by a move.
+  "已申请撤回你的上一手，等待对方回应。计时照走；轮到你时直接落子会撤回申请。":
+    "You asked to take back your last move; waiting for your opponent. The clock keeps running; playing a move on your turn withdraws the request.",
+  "黑方申请撤回自己的上一手。轮到你时直接落子视为拒绝。":
+    "Black asks to take back their last move. Playing a move on your turn declines it.",
+  "白方申请撤回自己的上一手。轮到你时直接落子视为拒绝。":
+    "White asks to take back their last move. Playing a move on your turn declines it.",
+  "你已落子，悔棋申请自动取消。": "You played a move, so your undo request was withdrawn.",
+  "对方已落子，撤回了悔棋申请。": "Your opponent played a move and withdrew their undo request.",
+  "对方直接落子，视为拒绝你的悔棋申请。": "Your opponent played a move instead, declining your undo request.",
+  "你已落子，视为拒绝对方的悔棋申请。": "You played a move, declining your opponent's undo request.",
   // My games (src/app/myGames.js).
   "对局中断": "Interrupted",
   "联机对局": "Online game",

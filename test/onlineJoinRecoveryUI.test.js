@@ -35,16 +35,19 @@ function joinHarness({ prior = [], fail }) {
     pendingJoinSelect: select(),
     storedSessionPanel: { hidden: true },
     pendingJoinPanel: { hidden: true },
+    joinRoom: { hidden: false },
+    watchRoom: { hidden: false },
   };
   let errorMessage = "";
   const roomClient = {
     listStoredSessions: () => [],
+    storedSeat: () => null,
     listPendingJoins: (code) => code === "AB23CD" ? [...pending] : [],
     async joinRoom() { await fail({ pending, elements }); },
   };
   const noop = () => {};
   const context = {
-    AbortController, onlineBusy: false, onlineEntryController: null,
+    AbortController, onlineBusy: false, onlineEntryController: null, onlineDialogIntent: "all",
     BLACK: "black", WHITE: "white", elements, roomClient,
     document: { createElement: () => ({ value: "", textContent: "", dataset: {} }) },
     translateText: (text) => text,

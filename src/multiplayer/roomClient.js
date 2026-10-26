@@ -688,6 +688,15 @@ export class RoomClient {
     return saved?.token === pointer?.token ? saved : null;
   }
 
+  /**
+   * This browser's seat in a room: a stored identity that plays there, or
+   * null. Someone who plays in a room only ever returns to that seat.
+   */
+  storedSeat(roomCode) {
+    return this.listStoredSessions(roomCode)
+      .find((entry) => entry.role === "player" || entry.color === "black" || entry.color === "white") ?? null;
+  }
+
   listStoredSessions(roomCode) {
     const code = normalizeRoomCode(roomCode);
     if (!code) return [];

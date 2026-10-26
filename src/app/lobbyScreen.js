@@ -274,7 +274,8 @@ function updateLobbyRoomCard(card, room) {
     join.textContent = resumable ? "返回房间" : "加入对局";
     view.actions.append(join);
   }
-  if (room.watchable) {
+  // Someone already in the room (a seat or a watch) only returns to it.
+  if (room.watchable && !resumable) {
     const watch = document.createElement("button");
     watch.type = "button";
     watch.className = "secondary-button";
