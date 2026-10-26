@@ -6,6 +6,17 @@
  * state can reuse the same translator without duplicating DOM-specific keys.
  */
 export const ENGLISH_STATIC = Object.freeze({
+  // My games (the /records screen).
+  "我的棋谱": "My games",
+  "下过的棋": "Games you played",
+  "每盘棋下完都会自动存在这里：人机对战、同机双人、AI 自对弈和联机对局。只有对局双方能打开。":
+    "Every game you finish is saved here automatically: against the AI, two players on one device, AI vs AI, and online games. Only the two players can open a game.",
+  "在线大厅": "Online lobby",
+  "棋谱": "Records",
+  "按时间排列，最新的在前": "Newest first",
+  "加载更多": "Load more",
+  "你现在是游客：棋谱跟着这个浏览器。清除浏览器数据或换设备后就找不回来了；之后可以注册账号，把它们带到别的设备。":
+    "You are a guest: your games belong to this browser. Clearing its data or switching devices loses them; later you can register an account to take them to other devices.",
   "奇异棋盘在线大厅": "Unusual Board Online Lobby",
   "创建竹筒、甜甜圈或莫比乌斯棋局；好友、人机、AI 自对弈和同机双人都可实时同步并开放观战。":
     "Create Cylinder, Torus, or Möbius games. Friend matches, human vs AI, AI vs AI, and same-device games can all sync live and allow spectators.",

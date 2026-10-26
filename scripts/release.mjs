@@ -297,6 +297,25 @@ function githubRelease(tag) {
   throw new ReleaseError(`Unable to verify GitHub Release '${tag}': ${detail.trim()}`, "GITHUB_CHECK_FAILED");
 }
 
+// Secrets the Worker needs before it can serve accounts (worker/auth.js).
+const REQUIRED_SECRETS = ["BETTER_AUTH_SECRET"];
+
+/** Refuse to deploy a Worker whose required secrets are not set yet. */
+function assertWorkerSecrets() {
+  const listed = parseJsonOutput(
+    captured(BIN.wrangler, ["secret", "list", "--format", "json"], { env: NETWORK_ENV }),
+    "wrangler secret list",
+  );
+  const names = new Set((Array.isArray(listed) ? listed : []).map((entry) => entry?.name));
+  const missing = REQUIRED_SECRETS.filter((name) => !names.has(name));
+  if (missing.length > 0) {
+    throw new ReleaseError(
+      `Set the Worker secret(s) ${missing.join(", ")} first (see docs/RELEASES.md).`,
+      "MISSING_SECRET",
+    );
+  }
+}
+
 function deployRelease(context) {
   const message = releaseMessage(context.release, context.head);
   let snapshot = cloudflareSnapshot();
@@ -307,6 +326,10 @@ function deployRelease(context) {
     : null;
 
   if (!version) {
+    assertWorkerSecrets();
+    // D1 schema changes are additive: apply them before the code that uses
+    // them. Wrangler skips migrations already applied.
+    execute(BIN.npm, ["run", "db:migrate:remote"], { env: NETWORK_ENV });
     execute(
       BIN.npm,
       ["run", "deploy", "--", "--strict", "--tag", context.release.tag, "--message", message],
@@ -530,9 +553,10 @@ function printPlan(context) {
     "  3. npm run build",
     "  4. npm run deploy -- --dry-run --strict (preflight only)",
     `  5. create and push annotated tag ${context.release.tag}`,
-    "  6. npm run deploy -- --strict --tag <tag> --message <tag+sha>",
-    "  7. verify Cloudflare Worker Version ID and Deployment ID via Wrangler JSON",
-    "  8. create a verified-tag GitHub Release containing both Cloudflare IDs",
+    "  6. check the Worker secrets (BETTER_AUTH_SECRET) and apply D1 migrations (npm run db:migrate:remote)",
+    "  7. npm run deploy -- --strict --tag <tag> --message <tag+sha>",
+    "  8. verify Cloudflare Worker Version ID and Deployment ID via Wrangler JSON",
+    "  9. create a verified-tag GitHub Release containing both Cloudflare IDs",
     "No tag, push, deployment, or GitHub Release was created by this plan command.",
   ].join("\n"));
 }

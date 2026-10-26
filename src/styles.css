@@ -174,6 +174,26 @@ summary:focus-visible {
   gap: 9px;
 }
 
+.topbar-link {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(16, 24, 22, 0.76);
+  font-size: 11px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+
+.topbar-link:hover,
+.topbar-link:focus-visible,
+.topbar-link[aria-current="page"] {
+  color: var(--accent-strong);
+  border-color: rgba(215, 169, 91, 0.55);
+}
+
 .language-switch {
   display: grid;
   grid-template-columns: repeat(2, auto);
@@ -380,6 +400,121 @@ summary:focus-visible {
   margin: 8px 0 14px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.records-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.record-item {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.record-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 0;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.record-title > span:not(.record-badge) + span:not(.record-badge)::before {
+  content: " · ";
+  color: var(--muted);
+}
+
+.record-badge {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: rgba(215, 169, 91, 0.12);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.record-players {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.record-player {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.record-player strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 550;
+}
+
+.record-side {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.record-you {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: #17130d;
+  background: var(--accent);
+  font-size: 9px;
+}
+
+.record-result {
+  margin: 0;
+  color: var(--accent-strong);
+  font-size: 11px;
+}
+
+.record-meta {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.record-meta span + span::before {
+  content: " · ";
+}
+
+.record-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.record-actions a,
+.record-actions button {
+  min-height: 32px;
+  padding: 6px 12px;
+  font-size: 10px;
+}
+
+.records-more {
+  justify-self: center;
+  margin-top: 12px;
+}
+
+.records-guest-note {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .lobby-my-room-list {
@@ -3209,6 +3344,11 @@ select:disabled {
 
   .topbar-actions {
     gap: 5px;
+  }
+
+  .topbar-link {
+    padding: 6px 9px;
+    font-size: 10px;
   }
 
   .topology-switch button {

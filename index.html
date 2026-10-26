@@ -46,6 +46,7 @@
           </span>
         </a>
         <div class="topbar-actions">
+          <a id="records-link" class="topbar-link" href="/records">我的棋谱</a>
           <div class="topology-switch" role="group" aria-label="棋盘形状">
             <button type="button" data-board-topology="cylinder" class="active" aria-pressed="true">竹筒</button>
             <button type="button" data-board-topology="torus" aria-pressed="false">甜甜圈</button>
@@ -57,6 +58,40 @@
           </div>
         </div>
       </header>
+
+      <main id="records-screen" class="online-lobby records-screen" aria-labelledby="records-title" hidden>
+        <section class="lobby-hero">
+          <div>
+            <span class="eyebrow">我的棋谱</span>
+            <h1 id="records-title">下过的棋</h1>
+            <p>每盘棋下完都会自动存在这里：人机对战、同机双人、AI 自对弈和联机对局。只有对局双方能打开。</p>
+          </div>
+          <div class="lobby-primary-actions">
+            <a class="secondary-button" href="/single">返回单人模式</a>
+            <a class="secondary-button" href="/lobby">在线大厅</a>
+          </div>
+        </section>
+
+        <section class="lobby-browser" aria-labelledby="records-list-title">
+          <div class="lobby-browser-heading">
+            <div>
+              <span class="eyebrow">棋谱</span>
+              <h2 id="records-list-title">按时间排列，最新的在前</h2>
+            </div>
+            <button id="records-refresh" class="secondary-button" type="button">刷新</button>
+          </div>
+          <div class="lobby-status-tabs" role="group" aria-label="棋类">
+            <button type="button" data-records-game="all" class="active" aria-pressed="true">全部</button>
+            <button type="button" data-records-game="go" aria-pressed="false">围棋</button>
+            <button type="button" data-records-game="gomoku" aria-pressed="false">五子棋</button>
+            <button type="button" data-records-game="othello" aria-pressed="false">黑白棋</button>
+          </div>
+          <p id="records-status" class="lobby-status" role="status" aria-live="polite"></p>
+          <ol id="records-list" class="records-list"></ol>
+          <button id="records-more" class="secondary-button records-more" type="button" hidden>加载更多</button>
+          <p class="records-guest-note">你现在是游客：棋谱跟着这个浏览器。清除浏览器数据或换设备后就找不回来了；之后可以注册账号，把它们带到别的设备。</p>
+        </section>
+      </main>
 
       <main id="lobby-screen" class="online-lobby" aria-labelledby="lobby-title" hidden>
         <section class="lobby-hero">

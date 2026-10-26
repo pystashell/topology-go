@@ -6,7 +6,7 @@
 
 | 项目 | 状态 |
 | --- | --- |
-| `main` | 围棋、五子棋（自由/连珠）、黑白棋，三种拓扑（圆柱/环面/莫比乌斯），本地对弈、联机、大厅、复盘、三种棋的 AI 和 SGF 棋谱；房间可以不公开、移出成员、判对方弃局、访客执白对 AI；对 AI 时有提示，AI 至少停 1 秒，黑白棋按距离逐圈翻子；大厅有我的房间、快速加入、搜索、排序、在线状态 |
+| `main` | 围棋、五子棋（自由/连珠）、黑白棋，三种拓扑（圆柱/环面/莫比乌斯），本地对弈、联机、大厅、复盘、三种棋的 AI 和 SGF 棋谱；房间可以不公开、移出成员、判对方弃局、访客执白对 AI；对 AI 时有提示，AI 至少停 1 秒，黑白棋按距离逐圈翻子；大厅有我的房间、快速加入、搜索、排序、在线状态；游客身份和“我的棋谱”（每盘下完自动保存，`/records` 列表，`/game/编号` 回放，只有对局双方能看） |
 | 测试 | `npm test` 全过（约 990 项，含真实 workerd/SQLite 运行时测试和规则跑量快速档）；`npm run test:soak` 全量档约 6,000 盘随机对局；`npm run test:coverage` 规则代码覆盖率门槛；PR 检查（`.github/workflows/ci.yml`）全绿 |
 | 线上 | <https://topology-go.pystashell.workers.dev/>，`/version.json` 给出当前版本。`0.3.0-rc.1` 于 2026-10-24 上线（多棋种首次上线），`0.3.0-rc.2`（PR #5）于 2026-10-25 上线；点目超时自动确认在 `0.3.0-rc.3`；提示、AI 停顿、翻子动画、规则跑量测试、大厅补全和连接心跳在 `0.3.0-rc.4`（PR #7、#8、#9，2026-10-25）；棋盘的读屏标签按棋种命名在 `0.3.0-rc.5`（PR #10）；棋盘尺寸 3–30 和任意大小的连珠禁手在 `0.3.0-rc.6`（PR #11，2026-10-26）；掉线检查只在对局中每分钟一次、冒烟测试建不公开房间在 `0.3.0-rc.7`（PR #12，2026-10-26）；大厅只列等待和进行中的对局在 `0.3.0-rc.8`（PR #13，2026-10-26）|
 | 发布方式 | GitHub `production` 环境仍缺 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`，所以在负责人的电脑上执行发布脚本。那台机器的 Wrangler 已登录负责人的 Cloudflare 账户，见 §3 |
@@ -30,6 +30,7 @@
 - **棋盘尺寸**（2026-10-26）：可设置范围 3–30。围棋 3–30；五子棋 5–30（至少要能连成五）；黑白棋 4–30 的偶数（开局 4 子要居中）。快捷尺寸：围棋 9、13、19；五子棋 7、11、15；黑白棋 6、8、10。禁手是同一套通用规则：不足 11 格的首尾相接线按环判断（`src/game/renju.js`），负责人明确要求禁手不能和棋盘大小挂钩。
 - 五子棋 AI 用 **Rapfi**，负责人接受 GPL-3：代码是 GPL-3，权重是 CC0。黑白棋 AI 是**自研纯 JS 引擎**，原因是没有开源引擎能正确处理环面、圆柱和莫比乌斯。
 - 围棋行为必须保持**一手不差**，由黄金样本测试守护（§5）。
+- **账号与棋谱**（2026-10-26，详见 `docs/design/accounts-and-game-records.md` 第 9 节）：参考 OGS 把邀约、对局、棋谱分开。登录用开源库 Better Auth（账号存我们自己的 D1），支持用户名或邮箱 + 密码（用户名必填，2–20 字；邮箱选填）和 Google 一键登录；不登录就以浏览器为临时身份（游客），功能齐全，同一浏览器注册后数据自动继承。棋谱只有对局双方能看；本机对局（人机、同机双人、AI 自对弈）下完也自动存，只在下完时上传一次；双方都掉线 30 分钟的联机对局存成“中断”。免费计划下密码用两万次 PBKDF2 + 服务器密钥。
 
 ## 3. 发布
 
@@ -46,6 +47,7 @@ npm.cmd run release:publish -- x.y.z      # 跑测试、构建、部署、打 ta
 - 发布前先问负责人。负责人同意后，开发会话可以在那台机器上直接执行（`npx wrangler whoami` 能看到账户）。
 - 验证：`/version.json` 显示新版本；再运行 `node scripts/live-room-smoke.mjs https://topology-go.pystashell.workers.dev/`（会在线上建两个临时房间，下完一局围棋和一局五子棋）。
 - 发布脚本拒绝在 `main`/`master` 上运行，要求工作区干净，且版本号与 `public/version.json` 一致。
+- 部署前发布脚本会检查 Worker 密钥 `BETTER_AUTH_SECRET` 已设置（没有就停下），再用 `npm run db:migrate:remote` 把 `migrations/` 里新的 D1 表结构应用到线上库 `topology-go`（只加不改，Wrangler 会跳过已应用的）。密钥只需负责人设置一次，命令见 `docs/RELEASES.md` 的 0.3.0-rc.9 一节。
 - A 方案（在 GitHub 配好两个 secret 之后）：用 GitHub Actions 的 “Release candidate” 工作流 `workflow_dispatch`，参数为 `ref=release/x.y.z`、`version=x.y.z`、`confirm=RELEASE`。细节和回滚见 `docs/RELEASES.md`。每版的回滚边界也写在那里，本轮的见“0.3.0-rc.2 的兼容边界”。
 - `release/0.2.0-rc.9` 已作废，可以删除。
 
@@ -61,11 +63,15 @@ src/game/sgf.js          SGF：围棋 GM[1]，五子棋 GM[4]（RU[Freestyle|Ren
 src/multiplayer/roomEngine.js  房间状态机：schema 2（全围棋）/3（含其他棋）双写；不公开房间、移出成员、判弃局、访客对 AI
 src/multiplayer/lobby*.js 大厅摘要/筛选/预览
 worker/                  Cloudflare Worker + Durable Objects（BadukRoom, BadukLobby）；roomStorage.js 负责大房间分块存储
+  auth.js                身份：Better Auth（MIT）跑在 Worker 里，账号在 D1；第 1 阶段只有游客（匿名插件）
+  records.js             棋谱：建行、校验、保存（按 client_key 幂等）、分页列表、只给对局双方读、移除
+migrations/              D1 表结构（Better Auth 的 user/session/account/verification，加 game_record、game_record_owner）
 src/view/                5 种视图；pointerGestures.js 管触摸策略（能上下动的棋盘接管竖向拖动，“竖滑滚动页面”可选）
 src/ui/gameUi.js         各棋种的文案、结果、控件可见性（纯函数，有测试）
 src/main.js              页面主文件（约 7300 行），拥有页面状态
 src/app/                 从 main.js 拆出的页面部分：lobbyScreen（大厅）、chatPanel（聊天）、recordFiles（SGF 文件）、
-                         roomManagement（公开开关、成员列表、判弃局）。各自持有自己的状态，通过 main.js 末尾的导出列表读页面状态
+                         roomManagement（公开开关、成员列表、判弃局）、myGames（我的棋谱：本机对局上传、列表页、打开棋谱）。
+                         各自持有自己的状态，通过 main.js 末尾的导出列表读页面状态
 src/ai/                  围棋：KataGo；其他棋：gameAiRegistry.js + gameAiClient.js
   gomoku/                Rapfi：flatView.js（拓扑 → ≤22 路平面视窗）、tactics.js（跨接缝必胜/必挡/VCF）、worker
   othello/               自研：射线表、PVS + 置换表、按拓扑拟合的评估、终局精确求解、worker
@@ -91,6 +97,15 @@ public/_headers          CSP 等安全头；只有 katagoWorker-* 和 gomokuAiWo
 - **点目超时自动确认**（负责人 2026-10-25 决定）：点目阶段 2 分钟内没有双方确认，就按当前死子标记结束本局。每次修改标记都重新计 2 分钟，但从进入点目起最多 10 分钟，防止靠反复改标记拖延。截止时间存在房间状态里，由 Durable Object 闹钟触发；页面显示倒计时。
 - **访客执白对 AI**：`request_game` 带 `mode: "human-ai"` 和 `aiOpponent: "guest"`，走和好友对局一样的邀请流程。AI 执黑，在房主浏览器里运行。座位锁定规则同好友对局，访客悔棋会撤回自己和 AI 各一手，谁离开谁判负。
 - **大房间分块存储**：房间超过 1.5 MiB 时，`room` 下存清单，`room:chunk:N` 存分段，一次原子写入。
+
+账号与棋谱（第 1 阶段，`docs/design/accounts-and-game-records.md`）：
+
+- **游客**：浏览器第一次以棋手身份建房或加入房间、或上传一盘下完的棋时，Worker 用 Better Auth 的匿名插件建一个游客，回一个 HttpOnly 的会话 Cookie（`topology-go.session_token`，HTTPS 上带 `__Secure-` 前缀，有效 400 天，每天使用会续期；签名的会话副本 Cookie 让大多数请求不用读库）。观战不建游客。身份是可选的基础设施：没有 D1、没有密钥或数据库出错时，房间照常工作，只是不存棋谱。
+- **房间记住席位是谁**：Worker 把用户编号随 `/internal/init`、`/internal/join` 传给房间，存在成员记录的 `userId` 上（不出现在任何发给页面的快照里）；同一浏览器重新加入时更新。
+- **联机对局的棋谱**：房间每次持久化后看本局是否刚结束（`RoomEngine#finishedRoundRecord`），结束就在 `waitUntil` 里写 D1（`worker/records.js` 的 `onlineRoundRecord` + `saveRecord`），按 `room:<房间码>:<房间实例>:<局号>` 幂等，失败下次持久化再试。双方各得一份归属；对 AI 的只给人；AI 自对弈给运行 AI 的人。
+- **本机对局的棋谱**：`updateUI` 每次调用 `maybeSaveFinishedLocalGame`，对局一结束就把复盘数据 POST 到 `/api/records`（每盘一个 `local:<UUID>` 键，离线快照里也带着）；网络或服务器错误时存进 localStorage（最多 10 盘），下次打开页面或棋谱列表再传。
+- **接口**：`GET /api/records?game=&before=`（分页，游标是“结束时间.编号”），`POST /api/records`，`GET|DELETE /api/records/编号`（只有归属者；别人 403），`/api/auth/*` 交给 Better Auth。各有限流绑定（`AUTH_RATE_LIMITER`、`RECORD_RATE_LIMITER`）。
+- **本地开发**：`npm run dev` 会先 `npm run db:migrate:local`，并给 `wrangler dev` 一个仅供本地的密钥。单元测试用 `test/helpers/d1.js`（node:sqlite 上的 D1 替身，自动套用 `migrations/`）。
 
 设计文档在 `docs/design/`，其中的行号是当时的快照，以现有代码为准。产品规格见 `docs/PRODUCT_REQUIREMENTS.md`（正文以围棋为主）。
 
@@ -142,6 +157,7 @@ npm audit --audit-level=moderate
 
 剩余问题（按优先级大致排列）：
 
+0. **账号与棋谱的后续阶段**（`docs/design/accounts-and-game-records.md` 第 7 节）：第 2 阶段注册登录（用户名或邮箱 + 密码，密码换成 PBKDF2 + 服务器密钥；游客升级与合并用匿名插件的 `onLinkAccount` 把 `game_record_owner` 转过去；Google 登录要负责人先建 OAuth 客户端）；第 3 阶段房间快速关闭、旁观者不续期、双方掉线 30 分钟存“中断”。注意：游客合并时匿名用户会被删，房间成员上记的旧 `userId` 要能映射到新账号（例如存一张别名表），否则之后结束的对局存不进新账号。
 1. **GitHub 发布 secret**：配好 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` 后，发布就不必依赖负责人的电脑（A 方案）。这需要负责人在 Cloudflare 创建 token。
 2. **iOS 真机**：WebKit 模拟不能代替真机，至少应在一台 iPhone 上试一次触摸手势、对话框和下拉框。WebKit 会把 `<select>` 内部的样式算到页面 CSP 头上（`style-src-attr`），不影响功能；检查脚本已单独忽略这一种。
 3. **黑白棋 8×8 环面执黑**：困难级（每步 50 ms）对随机对手 100 局，执黑 64 胜 28 负 8 和。棋盘完全对称时通常是白方最后落子，黑方只能靠逼出奇数次停着翻盘。权重调参试过：固定深度 3、配对种子各 600 局，基线 80.2%，调奇偶、子数、稀缺度等单项都没有更好（76–78.5%）。要提升，得在中盘做更深的精确求解，或者换成结合评估的 MCTS，属于引擎层面的工作。实验脚本：`scripts/othello-weight-experiments.mjs`。
