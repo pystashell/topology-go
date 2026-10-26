@@ -8,10 +8,23 @@ import {
   stripUnsafeNameCharacters,
 } from "../src/multiplayer/protocol.js";
 import { hashRoomToken } from "../src/multiplayer/roomEngine.js";
+import { authFor, sessionUser, userOrNewGuest, withCookies } from "./auth.js";
+import {
+  MAX_RECORD_DATA_BYTES,
+  RecordError,
+  isRecordId,
+  listRecords,
+  localRecordUpload,
+  readRecord,
+  removeRecord,
+  saveRecord,
+} from "./records.js";
 
 export { BadukLobby, BadukRoom };
 
 const MAX_BODY_BYTES = 4 * 1024;
+// An uploaded game: its replay plus a little metadata.
+const MAX_RECORD_BODY_BYTES = MAX_RECORD_DATA_BYTES + 8 * 1024;
 const JOIN_TOKEN_PATTERN = /^[0-9a-f]{64}$/u;
 const JOIN_PLAYER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
@@ -65,9 +78,9 @@ function normalizeName(value) {
   return name && [...name].length <= 20 ? name : null;
 }
 
-async function readJsonBody(request) {
+async function readJsonBody(request, maxBytes = MAX_BODY_BYTES) {
   const declaredLength = Number(request.headers.get("Content-Length") ?? 0);
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     throw jsonResponse({ error: "请求内容过长。" }, 413);
   }
   const reader = request.body?.getReader();
@@ -79,7 +92,7 @@ async function readJsonBody(request) {
         const { value, done } = await reader.read();
         if (done) break;
         length += value.byteLength;
-        if (length > MAX_BODY_BYTES) {
+        if (length > maxBytes) {
           // Do not drain or decode a body after it exceeds the byte budget.
           void reader.cancel().catch(() => {});
           throw jsonResponse({ error: "请求内容过长。" }, 413);
@@ -142,7 +155,26 @@ function sessionBody(identity, token, room) {
   };
 }
 
-async function createRoom(request, env) {
+/**
+ * Room creation and joins learn who the caller is after the request checks
+ * out: a player becomes a guest if the browser is not one yet (the room then
+ * saves finished games for them); a spectator is only looked up. The
+ * cookies a new guest needs ride on the response.
+ */
+function identityStep(env, request) {
+  const step = {
+    setCookie: [],
+    async user({ create }) {
+      if (!create) return (await sessionUser(env, request))?.id ?? null;
+      const { user, setCookie } = await userOrNewGuest(env, request);
+      step.setCookie = setCookie;
+      return user?.id ?? null;
+    },
+  };
+  return step;
+}
+
+async function createRoom(request, env, caller = identityStep(env, request)) {
   const body = await readJsonBody(request);
   if (!isRecord(body)) return jsonResponse({ error: "无法识别建房请求。" }, 400);
   if (body.v !== BADUK_PROTOCOL_VERSION) {
@@ -169,6 +201,7 @@ async function createRoom(request, env) {
 
   const { roomCode, playerId, token } = body;
   const tokenHash = await hashRoomToken(token);
+  const userId = await caller.user({ create: true });
   const stub = env.BADUK_ROOMS.getByName(roomCode);
   let result;
   try {
@@ -195,6 +228,7 @@ async function createRoom(request, env) {
         listed: body.listed !== false,
         playerId,
         tokenHash,
+        ...(userId ? { userId } : {}),
         // Online rooms open in reusable setup state until an invitation starts a round.
         startImmediately: false,
       }),
@@ -239,7 +273,7 @@ async function createRoom(request, env) {
   return jsonResponse(sessionBody(identity, token, result.payload.room), 201);
 }
 
-async function joinRoom(request, env, roomCode) {
+async function joinRoom(request, env, roomCode, caller = identityStep(env, request)) {
   const body = await readJsonBody(request);
   if (!isRecord(body)) return jsonResponse({ error: "无法识别加入请求。" }, 400);
   if (body.v !== BADUK_PROTOCOL_VERSION) {
@@ -272,6 +306,7 @@ async function joinRoom(request, env, roomCode) {
   const token = body.token;
   const playerId = body.playerId;
   const tokenHash = await hashRoomToken(token);
+  const userId = await caller.user({ create: role === "player" });
   const stub = env.BADUK_ROOMS.getByName(roomCode);
   let result;
   try {
@@ -282,6 +317,7 @@ async function joinRoom(request, env, roomCode) {
       // older pages away from a round of another game.
       body: JSON.stringify({
         name, role, playerId, tokenHash, multiGame: body.multiGame === true,
+        ...(userId ? { userId } : {}),
       }),
     }));
   } catch (error) {
@@ -314,6 +350,83 @@ async function joinRoom(request, env, roomCode) {
     sessionBody(result.payload.identity, token, result.payload.room),
     201,
   );
+}
+
+function recordsUnavailable() {
+  return jsonResponse({
+    error: "棋谱服务暂时不可用，请稍后再试。",
+    code: "RECORDS_UNAVAILABLE",
+    retryable: true,
+  }, 503);
+}
+
+function recordErrorResponse(error) {
+  if (error instanceof RecordError) {
+    return jsonResponse({ error: error.message, code: error.code }, error.status);
+  }
+  console.error("Game record request failed", error);
+  return recordsUnavailable();
+}
+
+/** "My games": the caller's records, newest first; empty without a session. */
+async function listMyRecords(request, env) {
+  const url = new URL(request.url);
+  const user = await sessionUser(env, request);
+  if (!user) return jsonResponse({ records: [], next: null });
+  try {
+    return jsonResponse(await listRecords(env.DB, user.id, {
+      gameType: url.searchParams.get("game"),
+      before: url.searchParams.get("before"),
+    }));
+  } catch (error) {
+    return recordErrorResponse(error);
+  }
+}
+
+/** A game played on one page, uploaded once when it finished. */
+async function uploadRecord(request, env) {
+  if (!env.DB) return recordsUnavailable();
+  let upload;
+  try {
+    upload = localRecordUpload(await readJsonBody(request, MAX_RECORD_BODY_BYTES));
+  } catch (error) {
+    if (error instanceof Response) {
+      if (error.status !== 413) return error;
+      return jsonResponse({ error: "棋谱过长，无法保存。", code: "RECORD_TOO_LARGE" }, 413);
+    }
+    return recordErrorResponse(error);
+  }
+  const { user, setCookie } = await userOrNewGuest(env, request);
+  if (!user) return recordsUnavailable();
+  try {
+    const id = await saveRecord(env.DB, upload.row, [{ userId: user.id, color: upload.ownerColor }]);
+    return withCookies(jsonResponse({ id }, 201), setCookie);
+  } catch (error) {
+    return withCookies(recordErrorResponse(error), setCookie);
+  }
+}
+
+async function recordById(request, env, id) {
+  const user = await sessionUser(env, request);
+  try {
+    if (request.method === "DELETE") {
+      if (!user) return jsonResponse({ error: "没有找到这盘棋谱。", code: "RECORD_NOT_FOUND" }, 404);
+      const removed = await removeRecord(env.DB, id, user.id);
+      return removed
+        ? jsonResponse({ ok: true })
+        : jsonResponse({ error: "没有找到这盘棋谱。", code: "RECORD_NOT_FOUND" }, 404);
+    }
+    const found = await readRecord(env.DB, id, user?.id ?? null);
+    if (found.status === "missing") {
+      return jsonResponse({ error: "没有找到这盘棋谱。", code: "RECORD_NOT_FOUND" }, 404);
+    }
+    if (found.status === "forbidden") {
+      return jsonResponse({ error: "这盘棋只有对局双方能看。", code: "RECORD_FORBIDDEN" }, 403);
+    }
+    return jsonResponse({ record: found.record });
+  } catch (error) {
+    return recordErrorResponse(error);
+  }
 }
 
 async function listLobbyRooms(env) {
@@ -356,7 +469,8 @@ const worker = {
         if (!(await withinRateLimit(env.ROOM_CREATE_RATE_LIMITER, request))) {
           return rateLimitedResponse();
         }
-        return await createRoom(request, env);
+        const identity = identityStep(env, request);
+        return withCookies(await createRoom(request, env, identity), identity.setCookie);
       }
 
       const socketMatch = /^\/api\/rooms\/([A-HJ-NP-Z2-9]{6})\/(?:socket|ws)$/.exec(url.pathname);
@@ -381,11 +495,54 @@ const worker = {
         if (!(await withinRateLimit(env.ROOM_JOIN_RATE_LIMITER, request))) {
           return rateLimitedResponse();
         }
-        return await joinRoom(request, env, joinMatch[1]);
+        const identity = identityStep(env, request);
+        return withCookies(await joinRoom(request, env, joinMatch[1], identity), identity.setCookie);
       }
 
       if (url.pathname.startsWith("/api/rooms/")) {
         return jsonResponse({ error: "房间地址不正确。" }, 404);
+      }
+
+      // Sign-in and sessions (Better Auth). Phase 1 has guests only.
+      if (url.pathname.startsWith("/api/auth/")) {
+        if (!(await withinRateLimit(env.AUTH_RATE_LIMITER, request))) {
+          return rateLimitedResponse();
+        }
+        const auth = authFor(env, request);
+        if (!auth) {
+          return jsonResponse({ error: "账号服务暂时不可用。", code: "AUTH_UNAVAILABLE" }, 503);
+        }
+        return await auth.handler(request);
+      }
+
+      if (url.pathname === "/api/records") {
+        if (request.method !== "GET" && request.method !== "POST") {
+          return new Response(null, { status: 405, headers: { Allow: "GET, POST" } });
+        }
+        if (!hasAllowedOrigin(request)) return jsonResponse({ error: "请求来源不允许。" }, 403);
+        if (!(await withinRateLimit(env.RECORD_RATE_LIMITER, request))) {
+          return rateLimitedResponse();
+        }
+        if (!env.DB) return recordsUnavailable();
+        return request.method === "POST"
+          ? await uploadRecord(request, env)
+          : await listMyRecords(request, env);
+      }
+
+      const recordMatch = /^\/api\/records\/([^/]+)$/u.exec(url.pathname);
+      if (recordMatch) {
+        if (request.method !== "GET" && request.method !== "DELETE") {
+          return new Response(null, { status: 405, headers: { Allow: "GET, DELETE" } });
+        }
+        if (!hasAllowedOrigin(request)) return jsonResponse({ error: "请求来源不允许。" }, 403);
+        if (!(await withinRateLimit(env.RECORD_RATE_LIMITER, request))) {
+          return rateLimitedResponse();
+        }
+        if (!isRecordId(recordMatch[1])) {
+          return jsonResponse({ error: "没有找到这盘棋谱。", code: "RECORD_NOT_FOUND" }, 404);
+        }
+        if (!env.DB) return recordsUnavailable();
+        return await recordById(request, env, recordMatch[1]);
       }
 
       if (env.ASSETS) return await env.ASSETS.fetch(request);

@@ -3,6 +3,9 @@
   "name": "topology-go",
   "main": "./worker/index.js",
   "compatibility_date": "2026-07-01",
+  // Better Auth (worker/auth.js) needs AsyncLocalStorage, and one of its
+  // modules imports node:crypto.
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "assets": {
     "directory": "./dist",
@@ -22,6 +25,17 @@
       }
     ]
   },
+  // Accounts and game records (worker/auth.js, worker/records.js). Schema
+  // changes are SQL files in migrations/, applied with
+  // `wrangler d1 migrations apply topology-go --remote` before deploying.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "topology-go",
+      "database_id": "df8b9f1f-93f6-4af5-977b-0c8c212d3f7a",
+      "migrations_dir": "migrations"
+    }
+  ],
   "migrations": [
     {
       "tag": "v1",
@@ -59,6 +73,18 @@
       "name": "LOBBY_RATE_LIMITER",
       "namespace_id": "71004",
       "simple": { "limit": 120, "period": 60 }
+    },
+    // Sign-in and session calls; a guest is created once per browser.
+    {
+      "name": "AUTH_RATE_LIMITER",
+      "namespace_id": "71005",
+      "simple": { "limit": 30, "period": 60 }
+    },
+    // My games: listing pages, opening, removing and uploading records.
+    {
+      "name": "RECORD_RATE_LIMITER",
+      "namespace_id": "71006",
+      "simple": { "limit": 60, "period": 60 }
     }
   ],
   "observability": {

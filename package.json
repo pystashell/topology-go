@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "npm run dev:online",
     "dev:ui": "vite",
-    "dev:online": "npm run build && wrangler dev --port 8787",
+    "dev:online": "npm run build && npm run db:migrate:local && wrangler dev --port 8787 --var BETTER_AUTH_SECRET:local-development-only-secret-0123456789abcdef",
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test",
@@ -23,7 +23,9 @@
     "release:check": "node scripts/release.mjs check",
     "release:publish": "node scripts/release.mjs publish",
     "release:list": "node scripts/release.mjs list",
-    "release:rollback": "node scripts/release.mjs rollback"
+    "release:rollback": "node scripts/release.mjs rollback",
+    "db:migrate:local": "wrangler d1 migrations apply topology-go --local",
+    "db:migrate:remote": "wrangler d1 migrations apply topology-go --remote"
   },
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",

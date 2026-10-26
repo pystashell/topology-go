@@ -97,4 +97,5 @@ CREATE TABLE game_record_owner (
   primary key (record_id, user_id)
 );
 
-CREATE INDEX game_record_owner_list on game_record_owner (user_id, finished_at desc);
+CREATE INDEX game_record_owner_list on game_record_owner (user_id, finished_at desc, record_id desc);
+CREATE INDEX game_record_owner_game on game_record_owner (user_id, game_type, finished_at desc, record_id desc);

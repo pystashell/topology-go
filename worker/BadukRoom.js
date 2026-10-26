@@ -19,6 +19,7 @@ import { CHAT_CHANNEL_SPECTATORS } from "../src/multiplayer/chat.js";
 import { GAME_GO } from "../src/game/gameTypes.js";
 import { lobbySummaryFromRoom } from "../src/multiplayer/lobby.js";
 import { STORAGE_KEY, loadRoomSnapshot, saveRoomSnapshot } from "./roomStorage.js";
+import { onlineRoundRecord, saveRecord } from "./records.js";
 
 // The lobby mirrors the room's expiry. Refresh an otherwise unchanged entry
 // once the room's TTL has slid this far past the last published one.
@@ -92,6 +93,8 @@ export class BadukRoom {
     this.connectionWrites = new Map();
     // Chunks the stored snapshot uses (see roomStorage.js); 0 when inline.
     this.storedChunks = 0;
+    // Finished rounds this instance saved (or is saving) as game records.
+    this.savedRecords = new Set();
 
     if (typeof ctx.setWebSocketAutoResponse === "function") {
       ctx.setWebSocketAutoResponse(
@@ -847,6 +850,37 @@ export class BadukRoom {
       throw this.unavailableError;
     }
     this.queueIndexPublish();
+    this.queueRecordSave();
+  }
+
+  /**
+   * Save a finished round to its players' game records in D1, once per
+   * round. Optional like the lobby: without a database, or when saving
+   * fails, the round stays in the room as before. Saving is idempotent (by
+   * room incarnation and round), so a restarted instance may try again.
+   */
+  queueRecordSave() {
+    if (!this.engine || !this.env?.DB) return;
+    let key;
+    let record;
+    try {
+      const round = this.engine.finishedRoundRecord(Date.now());
+      if (!round) return;
+      key = `${round.incarnationId}:${round.roundId}`;
+      if (this.savedRecords.has(key)) return;
+      this.savedRecords.add(key);
+      record = onlineRoundRecord(round, this.engine.state.code);
+    } catch (error) {
+      console.error("Unable to build a game record", error);
+      return;
+    }
+    // Nobody to give it to (players from before accounts existed).
+    if (record.owners.length === 0) return;
+    const saving = saveRecord(this.env.DB, record.row, record.owners).catch((error) => {
+      console.error("Unable to save a game record", error);
+      this.savedRecords.delete(key);
+    });
+    this.ctx.waitUntil?.(saving);
   }
 
   lobbyJoinable() {

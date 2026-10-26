@@ -264,6 +264,17 @@ function normalizePlayerId(value) {
   return value;
 }
 
+const USER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u;
+
+/**
+ * The account (a guest for now) behind a member, when the server knows it:
+ * the room saves a finished game to its players' records with it. Never
+ * part of any snapshot a page sees.
+ */
+function memberUserId(value) {
+  return typeof value === "string" && USER_ID_PATTERN.test(value) ? value : null;
+}
+
 function normalizeTokenHash(value) {
   if (
     typeof value !== "string" ||
@@ -1342,6 +1353,7 @@ export class RoomEngine {
     ruleSet,
     playerId,
     tokenHash,
+    userId,
     startImmediately = true,
     listed = true,
     now: nowInput,
@@ -1441,6 +1453,7 @@ export class RoomEngine {
           lastSeenAt: now,
           lastSequence: 0,
           chatBucket: freshChatBucket(CHAT_MEMBER_BURST, now),
+          ...(memberUserId(userId) ? { userId: memberUserId(userId) } : {}),
         },
       ],
       receipts: [],
@@ -1819,13 +1832,14 @@ export class RoomEngine {
     };
   }
 
-  join({ name, role, playerId, tokenHash, now: nowInput }) {
+  join({ name, role, playerId, tokenHash, userId, now: nowInput }) {
     const now = readNow(nowInput);
     this.prepare(now);
     const normalizedName = normalizeName(name);
     const normalizedRole = normalizeRole(role);
     const normalizedPlayerId = normalizePlayerId(playerId);
     const normalizedTokenHash = normalizeTokenHash(tokenHash);
+    const knownUserId = memberUserId(userId);
 
     const existing = this.member(normalizedPlayerId);
     if (existing) {
@@ -1836,8 +1850,12 @@ export class RoomEngine {
           "CONFLICT",
         );
       }
+      // The same browser rejoining: remember who it is now (a member who
+      // joined before accounts existed, or since signed in).
+      const userChanged = knownUserId !== null && existing.userId !== knownUserId;
+      if (userChanged) existing.userId = knownUserId;
       return {
-        changed: false,
+        changed: userChanged,
         revision: this.state.revision,
         identity: this.identityFor(existing),
         room: this.snapshotFor(existing.playerId, now),
@@ -1901,6 +1919,7 @@ export class RoomEngine {
           : {}),
       lastSequence: 0,
       chatBucket: freshChatBucket(CHAT_MEMBER_BURST, now),
+      ...(knownUserId ? { userId: knownUserId } : {}),
     };
     this.state.members.push(member);
     if (effectiveRole === "player" && color === BLACK) {
@@ -3860,13 +3879,20 @@ export class RoomEngine {
     if (this.state.roundArchive.some((round) => round.roundId === match.roundId)) {
       return;
     }
+    this.state.roundArchive.push(this.roundEntry(now));
+    this.state.roundArchive = trimRoundArchive(this.state.roundArchive);
+  }
+
+  /** The current round as the archive keeps it: settings, result and replay. */
+  roundEntry(now) {
+    const match = this.state.match;
     const result = this.currentRoundResult();
     const replay = publicReplay(
       this.game,
       snapshotTimeControl(this.state.timeControl, now),
       this.state.resignationOutcome,
     );
-    this.state.roundArchive.push({
+    return {
       roundId: match.roundId,
       startedAt: match.startedAt,
       finishedAt: match.finishedAt ?? result?.finishedAt ?? now,
@@ -3876,8 +3902,33 @@ export class RoomEngine {
       controllers: clone(match.controllers),
       moveCount: this.state.moveCount,
       replay,
-    });
-    this.state.roundArchive = trimRoundArchive(this.state.roundArchive);
+    };
+  }
+
+  /**
+   * The finished round for saving as a game record, with the game type and
+   * each seat's name, kind and operator; null unless a round has finished.
+   */
+  finishedRoundRecord(now) {
+    const match = this.state.match;
+    if (match?.status !== MATCH_STATUS_FINISHED || !(match.roundId >= 1) || match.startedAt === null) {
+      return null;
+    }
+    const seat = (color) => {
+      const controller = match.controllers?.[color] ?? null;
+      const operatorId = typeof controller?.operatorId === "string" ? controller.operatorId : null;
+      const userId = (operatorId && this.member(operatorId)?.userId) || null;
+      if (controller?.kind === "ai") {
+        return { kind: "ai", name: aiSeatName(controller.modelId ?? "b10"), operatorId, userId };
+      }
+      return { kind: "human", name: (operatorId && this.member(operatorId)?.name) || null, operatorId, userId };
+    };
+    return {
+      ...this.roundEntry(now),
+      gameType: gameTypeOf(this.game),
+      incarnationId: this.state.incarnationId,
+      players: { [BLACK]: seat(BLACK), [WHITE]: seat(WHITE) },
+    };
   }
 
   startRound({ settings, mode, controllers, now }) {
