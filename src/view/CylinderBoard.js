@@ -27,6 +27,7 @@ import {
   createFeltTexture,
   normalizeBoardStyle,
   starPointsFor,
+  boardViewLabel,
 } from "./boardStyle.js";
 import {
   EMPTY_GAME_MARKERS,
@@ -138,9 +139,7 @@ export class CylinderBoard {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.setAttribute(
       "aria-label",
-      translateText(
-        "左右相接的三维竹筒围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
-      ),
+      translateText(boardViewLabel("3d-cylinder", this.boardStyle)),
     );
     this.container.appendChild(this.renderer.domElement);
 
@@ -207,9 +206,7 @@ export class CylinderBoard {
   refreshLanguage() {
     this.renderer.domElement.setAttribute(
       "aria-label",
-      translateText(
-        "左右相接的三维竹筒围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
-      ),
+      translateText(boardViewLabel("3d-cylinder", this.boardStyle)),
     );
   }
 
@@ -486,6 +483,8 @@ export class CylinderBoard {
     ) {
       this.boardStyle = nextStyle;
       this.rebuild(nextWidth, nextHeight);
+      // The label names the game shown.
+      this.refreshLanguage();
     }
     this.board = board;
     this.currentPlayer = currentPlayer;

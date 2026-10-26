@@ -28,6 +28,7 @@ import {
   boardUsesFelt,
   normalizeBoardStyle,
   starPointsFor,
+  boardViewLabel,
 } from "./boardStyle.js";
 import {
   EMPTY_GAME_MARKERS,
@@ -110,12 +111,7 @@ export class FlatBoard {
     this.destroyed = false;
 
     this.canvas = document.createElement("canvas");
-    this.canvas.setAttribute(
-      "aria-label",
-      translateText(
-        "竹筒围棋的平面展开视图。左键点击落子；右键或触屏单指横向拖动改变展开起点。",
-      ),
-    );
+    this.canvas.setAttribute("aria-label", translateText(boardViewLabel("flat-cylinder", this.boardStyle)));
     this.context = this.canvas.getContext("2d");
     this.container.appendChild(this.canvas);
 
@@ -181,13 +177,10 @@ export class FlatBoard {
   updateAriaLabel() {
     this.canvas.setAttribute(
       "aria-label",
-      translateText(
-        this.wrapRows
-          ? "甜甜圈围棋的平面展开视图。左键点击落子；右键或触屏单指向任意方向拖动改变展开起点。"
-          : this.isMobius
-            ? "莫比乌斯围棋的平面展开视图。左键点击落子；右键或触屏单指横向滑过一圈后棋盘会上下翻转。"
-            : "竹筒围棋的平面展开视图。左键点击落子；右键或触屏单指横向拖动改变展开起点。",
-      ),
+      translateText(boardViewLabel(
+        this.wrapRows ? "flat-torus" : this.isMobius ? "flat-mobius" : "flat-cylinder",
+        this.boardStyle,
+      )),
     );
   }
 
@@ -253,7 +246,11 @@ export class FlatBoard {
       board,
       deadStones,
     });
-    this.boardStyle = normalizeBoardStyle(boardStyle);
+    const nextStyle = normalizeBoardStyle(boardStyle);
+    const gameChanged = nextStyle.gameType !== this.boardStyle.gameType;
+    this.boardStyle = nextStyle;
+    // The label names the game shown.
+    if (gameChanged) this.updateAriaLabel();
     this.setGameMarkers(gameMarkers, board);
     this.draw();
   }

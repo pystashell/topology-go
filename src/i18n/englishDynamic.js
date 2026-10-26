@@ -726,9 +726,6 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "可横向滑动的竹筒表面平面展开棋盘": "Flat cylinder board; pan horizontally",
   "可向任意方向循环滑动的甜甜圈平面展开棋盘": "Flat torus board; pan and wrap in any direction",
   "可横向滑动、跨一圈后上下翻转的莫比乌斯平面展开棋盘": "Flat Möbius board; pan horizontally and flip after one loop",
-  "左右相连的竹筒围棋棋盘区域": "Cylinder Go board with left and right joined",
-  "上下左右相连的甜甜圈围棋棋盘区域": "Torus Go board joined in both directions",
-  "左右反向相连、上下保留边界的莫比乌斯围棋棋盘区域": "Möbius Go board with a reversed horizontal seam and vertical boundary",
   "A列与末列相邻": "Column A joins the last column",
   "A列与末列倒序相邻": "Column A joins the last column in reverse order",
   "📍 点击一个棋点引用到聊天（不会落子）": "📍 Select a point to reference in chat (no move played)",
@@ -833,6 +830,40 @@ function analysisPrefixCopy(prefix) {
   return `Full-game analysis ${match[3]} / ${match[4]} · move ${match[5]}`;
 }
 
+const BOARD_GAMES = Object.freeze({ 围棋: "Go", 五子棋: "Gomoku", 黑白棋: "Othello" });
+
+/** English for the board labels, one pattern per label with the game captured. */
+function boardLabelPatterns() {
+  const game = "(围棋|五子棋|黑白棋)";
+  return [
+    [`竹筒${game}的平面展开视图。左键点击落子；右键或触屏单指横向拖动改变展开起点。`,
+      (name) => `Flat view of the cylinder ${name} board. Left-click to play; right-drag or drag horizontally with one finger to change the starting seam.`],
+    [`甜甜圈${game}的平面展开视图。左键点击落子；右键或触屏单指向任意方向拖动改变展开起点。`,
+      (name) => `Flat view of the torus ${name} board. Left-click to play; right-drag or drag in any direction with one finger to change the starting point.`],
+    [`莫比乌斯${game}的平面展开视图。左键点击落子；右键或触屏单指横向滑过一圈后棋盘会上下翻转。`,
+      (name) => `Flat view of the Möbius ${name} board. Left-click to play; right-drag or drag horizontally with one finger, and the board flips vertically after one lap.`],
+    [`竹筒${game}的弧面视图。左键点击落子；右键或触屏单指横向拖动棋盘，滚轮或双指缩放。`,
+      (name) => `Curved view of the cylinder ${name} board. Left-click to play; right-drag or drag horizontally with one finger to move the board, and use the wheel or pinch to zoom.`],
+    [`左右相接的三维竹筒${game}棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。`,
+      (name) => `3D cylinder ${name} board with connected left and right edges. Left-click to play, right-drag to rotate, and use the wheel or pinch to zoom.`],
+    [`上下左右均首尾相接的三维甜甜圈${game}棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。`,
+      (name) => `3D torus ${name} board with all four edges connected. Left-click to play, right-drag to rotate, and use the wheel or pinch to zoom.`],
+    [`左右反向相接、上下保留一圈边界的三维莫比乌斯${game}棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。`,
+      (name) => `3D Möbius ${name} board with reversed left-right connection and one open boundary. Left-click to play, right-drag to rotate, and use the wheel or pinch to zoom.`],
+    [`左右相连的竹筒${game}棋盘区域`, (name) => `Cylinder ${name} board with left and right joined`],
+    [`上下左右相连的甜甜圈${game}棋盘区域`, (name) => `Torus ${name} board joined in both directions`],
+    [`左右反向相连、上下保留边界的莫比乌斯${game}棋盘区域`,
+      (name) => `Möbius ${name} board with a reversed horizontal seam and vertical boundary`],
+    [`可旋转的3D竹筒${game}棋盘`, (name) => `Rotatable 3D cylinder ${name} board`],
+    [`可旋转的3D甜甜圈${game}棋盘`, (name) => `Rotatable 3D torus ${name} board`],
+    [`可旋转的3D莫比乌斯${game}棋盘`, (name) => `Rotatable 3D Möbius ${name} board`],
+  ].map(([source, english]) => ({
+    // The labels hold no regular-expression characters besides the game group.
+    pattern: new RegExp(`^${source}$`, "u"),
+    replace: (_, name) => english(BOARD_GAMES[name]),
+  }));
+}
+
 export const ENGLISH_PATTERNS = Object.freeze([
   {
     pattern: /^(.+) 后按当前死子标记自动确认；修改标记会重新计时，点目最长 10 分钟。$/u,
@@ -907,6 +938,8 @@ export const ENGLISH_PATTERNS = Object.freeze([
     // A KataGo model ("b10") or a Gomoku/Othello difficulty ("普通").
     replace: (_, color, model) => `AI · ${capturedPhrase(color)} · ${capturedPhrase(model)}`,
   },
+  // Board labels name the game shown (src/view/boardStyle.js, main.js).
+  ...boardLabelPatterns(),
   {
     pattern: /^可加入 (\d+) · 正在进行 (\d+) · 等待开局 (\d+) · (\d+) 人观战 · (\d+) 位棋手在线$/u,
     replace: (_, joinable, playing, waiting, spectators, online) =>

@@ -42,6 +42,7 @@ import {
   createFeltTexture,
   normalizeBoardStyle,
   starPointsFor,
+  boardViewLabel,
 } from "./boardStyle.js";
 import {
   EMPTY_GAME_MARKERS,
@@ -182,9 +183,7 @@ export class TorusBoard {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.setAttribute(
       "aria-label",
-      translateText(
-        "上下左右均首尾相接的三维甜甜圈围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
-      ),
+      translateText(boardViewLabel("3d-torus", this.boardStyle)),
     );
     this.container.appendChild(this.renderer.domElement);
 
@@ -241,9 +240,7 @@ export class TorusBoard {
   refreshLanguage() {
     this.renderer.domElement.setAttribute(
       "aria-label",
-      translateText(
-        "上下左右均首尾相接的三维甜甜圈围棋棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。",
-      ),
+      translateText(boardViewLabel("3d-torus", this.boardStyle)),
     );
   }
 
@@ -545,6 +542,8 @@ export class TorusBoard {
     ) {
       this.boardStyle = nextStyle;
       this.rebuild(nextWidth, nextHeight);
+      // The label names the game shown.
+      this.refreshLanguage();
     }
     this.board = board;
     this.currentPlayer = currentPlayer;

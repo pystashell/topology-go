@@ -13,6 +13,35 @@ export function normalizeBoardStyle(boardStyle = null) {
   return { gameType: isGameType(gameType) ? gameType : GAME_GO };
 }
 
+const BOARD_GAME_NAMES = Object.freeze({
+  [GAME_GO]: "围棋",
+  [GAME_GOMOKU]: "五子棋",
+  [GAME_OTHELLO]: "黑白棋",
+});
+
+/** The game a board shows, in Chinese source copy (the dictionary renders English). */
+export function boardGameName(boardStyle) {
+  return BOARD_GAME_NAMES[normalizeBoardStyle(boardStyle).gameType];
+}
+
+/**
+ * The accessible label of a board view, naming the game it shows (Chinese
+ * source copy; views pass it through translateText). Kinds: "flat-cylinder",
+ * "flat-torus", "flat-mobius", "arc", "3d-cylinder", "3d-torus", "3d-mobius".
+ */
+export function boardViewLabel(kind, boardStyle) {
+  const game = boardGameName(boardStyle);
+  return {
+    "flat-cylinder": `竹筒${game}的平面展开视图。左键点击落子；右键或触屏单指横向拖动改变展开起点。`,
+    "flat-torus": `甜甜圈${game}的平面展开视图。左键点击落子；右键或触屏单指向任意方向拖动改变展开起点。`,
+    "flat-mobius": `莫比乌斯${game}的平面展开视图。左键点击落子；右键或触屏单指横向滑过一圈后棋盘会上下翻转。`,
+    arc: `竹筒${game}的弧面视图。左键点击落子；右键或触屏单指横向拖动棋盘，滚轮或双指缩放。`,
+    "3d-cylinder": `左右相接的三维竹筒${game}棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。`,
+    "3d-torus": `上下左右均首尾相接的三维甜甜圈${game}棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。`,
+    "3d-mobius": `左右反向相接、上下保留一圈边界的三维莫比乌斯${game}棋盘。左键单击落子，右键拖动旋转，滚轮或双指缩放。`,
+  }[kind];
+}
+
 /** Othello is played on green felt; Go and Gomoku keep the wooden board. */
 export function boardUsesFelt(boardStyle) {
   return boardStyle?.gameType === GAME_OTHELLO;
