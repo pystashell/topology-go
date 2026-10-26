@@ -25,7 +25,7 @@ async function settled(action, client, payload = {}) {
   await Promise.all(clients.map(c => waitFor(c, room => room?.revision >= revision, action)));
 }
 try {
-  const created = await black.createRoom({ name: "Scoring Black", size: 5 });
+  const created = await black.createRoom({ name: "Scoring Black", size: 5, listed: false });
   await white.joinRoom(created.roomCode, { name: "Scoring White" });
   await settled("request_game", black, { mode: "friend" });
   await settled("respond_game", white, { accept: true, requestRevision: white.room.match.request.requestRevision });
