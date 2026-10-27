@@ -12,11 +12,13 @@ import { FakeD1 } from "./helpers/d1.js";
  * One identity per person in a room. Spectator chat is hidden from the
  * players, so someone who plays in a room must never also be in it as a
  * spectator, through the page or straight through the API. The room knows
- * a person by the account (a guest for now) behind each request.
+ * a person by the account (or guest) behind each request: whoever is
+ * already in the room and comes in again, from any browser, gets their own
+ * identity back.
  */
 
 const NOW = 1_800_000_000_000;
-const refusedAs = (code) => (error) => error instanceof RoomEngineError && error.code === code && error.status === 409;
+const conflict = (error) => error instanceof RoomEngineError && error.code === "CONFLICT" && error.status === 409;
 
 async function room({ hostUser = "user-host" } = {}) {
   const engine = RoomEngine.create({
@@ -26,17 +28,22 @@ async function room({ hostUser = "user-host" } = {}) {
   return engine;
 }
 
-const join = async (engine, { playerId, role, userId, token = `${playerId}-secret` }) => engine.join({
-  name: playerId, role, playerId, tokenHash: await hashRoomToken(token), userId, now: NOW + 10,
+const join = async (engine, { playerId, role, userId, formerUserIds, token = `${playerId}-secret` }) => engine.join({
+  name: playerId, role, playerId, tokenHash: await hashRoomToken(token), userId, formerUserIds, now: NOW + 10,
 });
 
-test("a player cannot also come in as a spectator or with a second identity", async () => {
+test("a player coming in again as a spectator, or as a new player, gets their seat back", async () => {
   const engine = await room();
-  await assert.rejects(join(engine, { playerId: "host-watch", role: "spectator", userId: "user-host" }),
-    refusedAs("ALREADY_PLAYING_HERE"));
-  await assert.rejects(join(engine, { playerId: "host-white", role: "player", userId: "user-host" }),
-    refusedAs("ALREADY_PLAYING_HERE"));
-  assert.equal(engine.state.members.length, 1, "nothing was added");
+  const watch = await join(engine, { playerId: "host-watch", role: "spectator", userId: "user-host" });
+  assert.equal(watch.rejoined, true);
+  assert.deepEqual([watch.identity.playerId, watch.identity.role, watch.identity.color], ["host", "player", "black"]);
+  const seat = await join(engine, { playerId: "host-white", role: "player", userId: "user-host" });
+  assert.deepEqual([seat.identity.playerId, seat.identity.color], ["host", "black"]);
+  assert.equal(engine.state.members.length, 1, "no second identity");
+  // Each of those browsers can now open the seat; the first one still can.
+  for (const token of ["host-secret", "host-watch-secret", "host-white-secret"]) {
+    assert.equal((await engine.authenticateToken(token, NOW + 20)).playerId, "host", token);
+  }
   // The same identity coming back is not a second one.
   const again = await join(engine, { playerId: "host", role: "player", userId: "user-host", token: "host-secret" });
   assert.equal(again.identity.color, "black");
@@ -44,18 +51,77 @@ test("a player cannot also come in as a spectator or with a second identity", as
   await join(engine, { playerId: "viewer", role: "spectator", userId: "user-viewer" });
   await join(engine, { playerId: "anon", role: "spectator", userId: undefined });
   assert.equal(engine.state.members.length, 3);
+  // The account never reaches what pages see, nor do the tokens.
+  const seen = JSON.stringify(engine.snapshotFor("host", NOW + 30));
+  assert.doesNotMatch(seen, /user-host|deviceTokenHashes/u);
 });
 
-test("a spectator takes a free seat from inside the room, not with a new identity", async () => {
+test("a spectator coming in again stays the same spectator, and takes a seat from inside", async () => {
   const engine = await room();
   await join(engine, { playerId: "viewer", role: "spectator", userId: "user-viewer" });
-  await assert.rejects(join(engine, { playerId: "viewer-seat", role: "player", userId: "user-viewer" }),
-    refusedAs("ALREADY_WATCHING_HERE"));
-  await assert.rejects(join(engine, { playerId: "viewer-2", role: "spectator", userId: "user-viewer" }),
-    refusedAs("ALREADY_WATCHING_HERE"));
+  const asPlayer = await join(engine, { playerId: "viewer-seat", role: "player", userId: "user-viewer" });
+  assert.deepEqual([asPlayer.rejoined, asPlayer.identity.playerId, asPlayer.identity.role], [true, "viewer", "spectator"]);
+  const again = await join(engine, { playerId: "viewer-2", role: "spectator", userId: "user-viewer" });
+  assert.equal(again.identity.playerId, "viewer");
+  assert.equal(engine.state.members.length, 2);
   const claimed = engine.applyAction({ playerId: "viewer", action: "claim_seat", now: NOW + 20 });
   assert.equal(claimed.identity.color, "white", "the same identity becomes the player");
   assert.equal(engine.state.members.length, 2);
+});
+
+test("entering again is idempotent, keeps the newest browsers and survives a restart", async () => {
+  const engine = await room();
+  const first = await join(engine, { playerId: "phone", role: "spectator", userId: "user-host" });
+  assert.equal(first.changed, true, "a new browser is stored");
+  const retry = await join(engine, { playerId: "phone", role: "spectator", userId: "user-host" });
+  assert.equal(retry.changed, false, "the same request again changes nothing");
+  for (const device of ["tablet", "laptop", "office", "library"]) {
+    await join(engine, { playerId: device, role: "player", userId: "user-host" });
+  }
+  assert.equal(engine.member("host").deviceTokenHashes.length, 4, "at most four more browsers");
+  await assert.rejects(engine.authenticateToken("phone-secret", NOW + 20), /重新加入/u, "the oldest one dropped");
+  assert.equal((await engine.authenticateToken("library-secret", NOW + 20)).playerId, "host");
+  assert.equal((await engine.authenticateToken("host-secret", NOW + 20)).playerId, "host", "the first browser stays");
+  // Stored and restored with the room.
+  const restored = RoomEngine.restore(engine.serialize());
+  assert.equal((await restored.authenticateToken("office-secret", NOW + 30)).playerId, "host");
+  const broken = engine.serialize();
+  broken.members[0].deviceTokenHashes = ["not-a-hash"];
+  assert.throws(() => RoomEngine.restore(broken), /凭据无效/u);
+});
+
+test("someone else's token is still refused, whoever sends it", async () => {
+  const engine = await room();
+  await join(engine, { playerId: "viewer", role: "spectator", userId: "user-viewer" });
+  await assert.rejects(join(engine, { playerId: "thief", role: "player", userId: "user-thief", token: "viewer-secret" }), conflict);
+  await assert.rejects(join(engine, { playerId: "host-2", role: "player", userId: "user-host", token: "viewer-secret" }), conflict);
+  assert.equal(engine.state.members.length, 2);
+});
+
+test("a seat taken as a guest belongs to the account that guest became", async () => {
+  // The host played as guest-1, then registered in that browser: the
+  // server now knows them as account-1 and remembers guest-1 as before.
+  const engine = await room({ hostUser: "guest-1" });
+  await join(engine, { playerId: "viewer", role: "spectator", userId: "user-viewer" });
+  const back = await join(engine, { playerId: "laptop", role: "spectator", userId: "account-1", formerUserIds: ["guest-1"] });
+  assert.deepEqual([back.rejoined, back.identity.playerId, back.identity.color], [true, "host", "black"]);
+  assert.equal(engine.member("host").userId, "account-1", "games now go to the account");
+  assert.equal(engine.state.members.length, 2);
+  // On a connection the same way.
+  const other = await room({ hostUser: "guest-2" });
+  assert.deepEqual(other.checkSessionUser("host", "account-2", NOW + 30, ["guest-2"]), { changed: true, refused: false, removed: [] });
+  assert.equal(other.member("host").userId, "account-2");
+  // Someone else's former guests mean nothing.
+  const third = await room({ hostUser: "guest-3" });
+  assert.deepEqual(third.checkSessionUser("host", "account-9", NOW + 30, ["guest-8"]), { changed: false, refused: false, removed: [] });
+  assert.equal(third.member("host").userId, "guest-3");
+  const watcher = await join(third, { playerId: "watcher", role: "spectator", userId: "account-9", formerUserIds: ["guest-8"] });
+  assert.equal(watcher.identity.playerId, "watcher", "a new spectator");
+  // A spectator identity of the same person, known by the former guest, goes.
+  const fourth = await room({ hostUser: null });
+  await join(fourth, { playerId: "host-watch", role: "spectator", userId: "guest-4" });
+  const seat = fourth.checkSessionUser("host", "account-4", NOW + 30, ["guest-4"]);
+  assert.deepEqual(seat.removed, ["host-watch"]);
 });
 
 test("a player's browser on an old spectator identity: the room drops that identity", async () => {

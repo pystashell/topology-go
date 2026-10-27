@@ -15,8 +15,33 @@ export const ENGLISH_STATIC = Object.freeze({
   "棋谱": "Records",
   "按时间排列，最新的在前": "Newest first",
   "加载更多": "Load more",
-  "你现在是游客：棋谱跟着这个浏览器。清除浏览器数据或换设备后就找不回来了；之后可以注册账号，把它们带到别的设备。":
-    "You are a guest: your games belong to this browser. Clearing its data or switching devices loses them; later you can register an account to take them to other devices.",
+  "你现在是游客：棋谱跟着这个浏览器，清除浏览器数据或换设备后就找不回来了。注册账号后可以在别的设备登录查看，现有的棋谱会一起转到账号下。":
+    "You are a guest: your games belong to this browser, and clearing its data or switching devices loses them. Register an account to see them on other devices; the games you have now move to the account.",
+  "注册账号": "Register",
+  // The account dialog.
+  "登录": "Sign in",
+  "账号": "Account",
+  "登录或注册": "Sign in or register",
+  "已登录：": "Signed in as ",
+  "你下完的棋都存在这个账号的“我的棋谱”里，在别的设备登录同一个账号也能看到；进过的联机房间，在别的设备打开房间链接也能回到原来的席位。":
+    "Every game you finish is kept in this account's My games, on any device you sign in on. Opening a room link on another device takes you back to your seat in that room.",
+  "退出登录": "Sign out",
+  "好": "OK",
+  "注册": "Register",
+  "你现在是游客。登录或注册后，这个浏览器里的棋谱会转到账号下。":
+    "You are a guest. Sign in or register and the games in this browser move to the account.",
+  "用户名或邮箱": "Username or email",
+  "密码": "Password",
+  "用户名": "Username",
+  "再输一次密码": "Password again",
+  "邮箱（选填）": "Email (optional)",
+  "2–20 个字：中文、英文字母、数字或下划线": "2–20 characters: Chinese, English letters, digits or underscores",
+  "至少 8 个字符": "At least 8 characters",
+  "填了也可以用邮箱登录": "You can also sign in with it",
+  "暂时还不能找回密码，请记好它。": "Passwords cannot be recovered yet, so keep yours safe.",
+  "注册并登录": "Register and sign in",
+  "或者": "or",
+  "用 Google 登录": "Sign in with Google",
   "奇异棋盘在线大厅": "Unusual Board Online Lobby",
   "创建竹筒、甜甜圈或莫比乌斯棋局；好友、人机、AI 自对弈和同机双人都可实时同步并开放观战。":
     "Create Cylinder, Torus, or Möbius games. Friend matches, human vs AI, AI vs AI, and same-device games can all sync live and allow spectators.",

@@ -1125,7 +1125,10 @@ export class RoomClient {
       });
       signal?.throwIfAborted();
       const session = responseSession(response, code, name);
-      if (session.code !== code || session.playerId !== pending.playerId ||
+      // Someone already in the room (from another browser, or signed in
+      // since) gets their own identity back, opened by this token.
+      const rejoined = response?.rejoined === true;
+      if (session.code !== code || (session.playerId !== pending.playerId && !rejoined) ||
           session.token !== pending.token) {
         throw new RoomClientError("服务器返回的加入身份与请求不一致。", {
           code: "INVALID_SESSION_RESPONSE",

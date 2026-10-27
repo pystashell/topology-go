@@ -14,6 +14,7 @@ import {
   MATCH_STATUS_PLAYING,
   RoomEngine,
   RoomEngineError,
+  memberHasToken,
 } from "../src/multiplayer/roomEngine.js";
 import { CHAT_CHANNEL_SPECTATORS } from "../src/multiplayer/chat.js";
 import { GAME_GO } from "../src/game/gameTypes.js";
@@ -23,9 +24,12 @@ import { onlineRoundRecord, saveRecord } from "./records.js";
 
 /**
  * The account behind a WebSocket request, set by the Worker from the
- * caller's session (and removed from anything a client sends).
+ * caller's session (and removed from anything a client sends), and the
+ * guests that account was before (comma-separated): a seat taken as a
+ * guest is still theirs.
  */
 export const SESSION_USER_HEADER = "X-Topology-Session-User";
+export const SESSION_FORMER_USERS_HEADER = "X-Topology-Session-Former-Users";
 
 // The lobby mirrors the room's expiry. Refresh an otherwise unchanged entry
 // once the room's TTL has slid this far past the last published one.
@@ -411,7 +415,12 @@ export class BadukRoom {
         console.error("Unable to notify committed room join", error);
       }
     }
-    return jsonResponse({ room: result.room, identity: result.identity }, 201);
+    return jsonResponse({
+      room: result.room,
+      identity: result.identity,
+      // The caller already had an identity here (another browser of theirs).
+      ...(result.rejoined ? { rejoined: true } : {}),
+    }, 201);
   }
 
   async lookupCommittedJoin(request) {
@@ -456,7 +465,7 @@ export class BadukRoom {
         await this.scheduleAlarmAfterCommit();
       }
       const member = recovered.member(playerId);
-      if (!member || member.tokenHash !== tokenHash) {
+      if (!member || !memberHasToken(member, tokenHash)) {
         return jsonResponse({ error: "加入结果尚未确认。", code: "JOIN_NOT_COMMITTED" }, 404);
       }
       return jsonResponse({
@@ -533,6 +542,8 @@ export class BadukRoom {
       const seat = this.engine.checkSessionUser(
         connected.identity.playerId,
         request.headers.get(SESSION_USER_HEADER),
+        undefined,
+        (request.headers.get(SESSION_FORMER_USERS_HEADER) ?? "").split(",").filter(Boolean),
       );
       for (const removed of seat.removed) {
         this.closeDuplicateIdentity(removed, "ALREADY_PLAYING_HERE");

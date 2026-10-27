@@ -74,7 +74,7 @@
       "namespace_id": "71004",
       "simple": { "limit": 120, "period": 60 }
     },
-    // Sign-in and session calls; a guest is created once per browser.
+    // Account and session calls; a guest is created once per browser.
     {
       "name": "AUTH_RATE_LIMITER",
       "namespace_id": "71005",
@@ -85,6 +85,13 @@
       "name": "RECORD_RATE_LIMITER",
       "namespace_id": "71006",
       "simple": { "limit": 60, "period": 60 }
+    },
+    // Registering and signing in with a password, on top of the budget
+    // above: guessing passwords gets ten tries a minute per address.
+    {
+      "name": "SIGN_IN_RATE_LIMITER",
+      "namespace_id": "71007",
+      "simple": { "limit": 10, "period": 60 }
     }
   ],
   "observability": {

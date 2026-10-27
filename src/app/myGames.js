@@ -41,6 +41,7 @@ import {
   setMessage,
   topologyName,
 } from "../main.js";
+import { accountSeen } from "./account.js";
 
 const PENDING_STORAGE_KEY = "topology-go-pending-records-v1";
 // Games waiting in this browser for the site; the oldest go first.
@@ -349,6 +350,8 @@ async function loadRecords({ more = false } = {}) {
     if (!response.ok) throw Object.assign(new Error(payload?.error ?? ""), { code: payload?.code });
     recordsList = more ? [...recordsList, ...(payload.records ?? [])] : payload.records ?? [];
     recordsNext = payload.next ?? null;
+    // Whose list it is: the guest note shows only for guests.
+    if (!more) accountSeen(payload.account ?? null);
     recordsLoadedOnce = true;
     recordsLoading = false;
     renderRecords();
@@ -357,6 +360,14 @@ async function loadRecords({ more = false } = {}) {
     renderRecords();
     recordsStatus(localizedErrorMessage(error, "暂时无法读取棋谱，请稍后再试。"), true);
   }
+}
+
+/** Someone signed in or out: read the list again the next time it shows. */
+function forgetLoadedRecords() {
+  recordsLoadedOnce = false;
+  recordsList = [];
+  recordsNext = null;
+  armedRemoval = null;
 }
 
 /** Show the list; read it the first time and after a game was saved. */
@@ -446,6 +457,7 @@ async function openRecord(id) {
 export {
   adoptLocalRecordKey,
   flushPendingRecords,
+  forgetLoadedRecords,
   localRecordKey,
   maybeSaveFinishedLocalGame,
   openRecord,

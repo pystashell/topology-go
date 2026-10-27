@@ -265,29 +265,38 @@ function normalizePlayerId(value) {
 }
 
 const USER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u;
+// Guest ids a person had before registering or signing in, newest first.
+const MAX_FORMER_USER_IDS = 16;
+// Other browsers the same person entered a room from, besides the first.
+const MAX_DEVICE_TOKENS = 4;
 
 /**
- * The account (a guest for now) behind a member, when the server knows it:
- * the room saves a finished game to its players' records with it. Never
- * part of any snapshot a page sees.
+ * The account (or guest) behind a member, when the server knows it: the
+ * room saves a finished game to its players' records with it. Never part
+ * of any snapshot a page sees.
  */
 function memberUserId(value) {
   return typeof value === "string" && USER_ID_PATTERN.test(value) ? value : null;
 }
 
-/** The refusal for someone who already has an identity in the room. */
-function alreadyInRoomError(member) {
-  return member.role === "player"
-    ? new RoomEngineError(
-        "你是这盘棋的对局者，不能再以旁观者或新身份进入；请直接返回你的席位。",
-        409,
-        "ALREADY_PLAYING_HERE",
-      )
-    : new RoomEngineError(
-        "你已经在这个房间里观战，请直接返回房间；有空位时可以在房间里申请对手席位。",
-        409,
-        "ALREADY_WATCHING_HERE",
-      );
+/**
+ * Every id the server knows a person by: their user, then the guests they
+ * were before registering or signing in on a browser (a seat taken as a
+ * guest still belongs to them). Empty when the caller is unknown.
+ */
+function personIds(userId, formerUserIds) {
+  const known = memberUserId(userId);
+  if (!known) return [];
+  const formers = Array.isArray(formerUserIds)
+    ? formerUserIds.slice(0, MAX_FORMER_USER_IDS).map(memberUserId)
+    : [];
+  return [known, ...new Set(formers.filter((id) => id && id !== known))];
+}
+
+/** Whether a token (hashed) opens this member: the first browser's or a later one's. */
+export function memberHasToken(member, tokenHash) {
+  return constantTimeEqual(member.tokenHash, tokenHash) ||
+    (member.deviceTokenHashes ?? []).some((hash) => constantTimeEqual(hash, tokenHash));
 }
 
 function normalizeTokenHash(value) {
@@ -1214,6 +1223,13 @@ function validateSerializedState(state) {
     normalizePlayerId(member.playerId);
     validateStoredName(member.name);
     normalizeTokenHash(member.tokenHash);
+    if (member.deviceTokenHashes !== undefined) {
+      if (!Array.isArray(member.deviceTokenHashes) ||
+          member.deviceTokenHashes.length > MAX_DEVICE_TOKENS) {
+        throw new RoomEngineError("房间成员凭据无效。", 500, "BAD_ROOM_STATE");
+      }
+      member.deviceTokenHashes.forEach(normalizeTokenHash);
+    }
     if (member.role === "player") {
       if (!VALID_COLORS.has(member.color) || colors.has(member.color)) {
         throw new RoomEngineError(
@@ -1847,18 +1863,19 @@ export class RoomEngine {
     };
   }
 
-  join({ name, role, playerId, tokenHash, userId, now: nowInput }) {
+  join({ name, role, playerId, tokenHash, userId, formerUserIds, now: nowInput }) {
     const now = readNow(nowInput);
     this.prepare(now);
     const normalizedName = normalizeName(name);
     const normalizedRole = normalizeRole(role);
     const normalizedPlayerId = normalizePlayerId(playerId);
     const normalizedTokenHash = normalizeTokenHash(tokenHash);
-    const knownUserId = memberUserId(userId);
+    const person = personIds(userId, formerUserIds);
+    const knownUserId = person[0] ?? null;
 
     const existing = this.member(normalizedPlayerId);
     if (existing) {
-      if (!constantTimeEqual(existing.tokenHash, normalizedTokenHash)) {
+      if (!memberHasToken(existing, normalizedTokenHash)) {
         throw new RoomEngineError(
           "这个玩家身份已经被使用。",
           409,
@@ -1867,7 +1884,8 @@ export class RoomEngine {
       }
       // The same browser rejoining: remember who it is (a member who joined
       // before accounts existed).
-      const userChanged = this.bindMemberUser(existing, knownUserId);
+      const userChanged = this.bindMemberUser(existing, knownUserId) ||
+        this.adoptFormerUser(existing, person);
       return {
         changed: userChanged,
         revision: this.state.revision,
@@ -1876,9 +1894,14 @@ export class RoomEngine {
       };
     }
 
+    // One identity per person in a room. Spectator chat is hidden from the
+    // players, so a player must never also watch: someone already here, from
+    // this browser or another one they signed in on, returns to the identity
+    // they have (a watcher takes a free seat from inside the room).
+    const already = this.memberOfPerson(person);
     if (
       this.state.members.some((member) =>
-        constantTimeEqual(member.tokenHash, normalizedTokenHash),
+        member !== already && memberHasToken(member, normalizedTokenHash),
       )
     ) {
       throw new RoomEngineError(
@@ -1887,12 +1910,7 @@ export class RoomEngine {
         "CONFLICT",
       );
     }
-
-    // One identity per person in a room. Spectator chat is hidden from the
-    // players, so a player must never also watch; someone already watching
-    // takes a free seat from inside the room (claim_seat) instead.
-    const already = this.memberOfUser(knownUserId);
-    if (already) throw alreadyInRoomError(already);
+    if (already) return this.rejoin(already, normalizedTokenHash, person, now);
 
     let effectiveRole = normalizedRole;
     let color = null;
@@ -2046,7 +2064,7 @@ export class RoomEngine {
     this.prepare(now);
     const member = this.requireMember(normalizePlayerId(playerId));
     const suppliedHash = await hashRoomToken(token);
-    if (!constantTimeEqual(member.tokenHash, suppliedHash)) {
+    if (!memberHasToken(member, suppliedHash)) {
       throw new RoomEngineError(
         "房间身份已经失效，请重新加入。",
         401,
@@ -2062,7 +2080,7 @@ export class RoomEngine {
     this.prepare(now);
     const suppliedHash = await hashRoomToken(token);
     const member = this.state.members.find((candidate) =>
-      constantTimeEqual(candidate.tokenHash, suppliedHash),
+      memberHasToken(candidate, suppliedHash),
     );
     if (!member) {
       throw new RoomEngineError(
@@ -2110,6 +2128,51 @@ export class RoomEngine {
       member.userId === userId && member.playerId !== exceptPlayerId) ?? null;
   }
 
+  /** The member of a person known by any of their ids (see personIds). */
+  memberOfPerson(ids, exceptPlayerId = null) {
+    if (!ids?.length) return null;
+    return this.state.members.find((member) =>
+      member.userId && ids.includes(member.userId) &&
+      member.playerId !== exceptPlayerId) ?? null;
+  }
+
+  /**
+   * A member taken as a guest belongs to the account that guest became.
+   * Returns whether the member changed.
+   */
+  adoptFormerUser(member, ids) {
+    const [current] = ids;
+    if (!member?.userId || !current || member.userId === current ||
+        !ids.includes(member.userId) || this.memberOfUser(current, member.playerId)) {
+      return false;
+    }
+    member.userId = current;
+    return true;
+  }
+
+  /**
+   * Someone already in the room enters again, from another browser or
+   * after this one lost its room data: they get their own identity back,
+   * whatever role they asked for, and the new browser's token opens it too.
+   * The server vouched for the person (the session), so nothing else is
+   * needed; the identity keeps its name and seat.
+   */
+  rejoin(member, tokenHash, ids, now) {
+    let changed = this.adoptFormerUser(member, ids);
+    if (!memberHasToken(member, tokenHash)) {
+      member.deviceTokenHashes = [...(member.deviceTokenHashes ?? []), tokenHash]
+        .slice(-MAX_DEVICE_TOKENS);
+      changed = true;
+    }
+    return {
+      changed,
+      rejoined: true,
+      revision: this.state.revision,
+      identity: this.identityFor(member),
+      room: this.snapshotFor(member.playerId, now),
+    };
+  }
+
   /**
    * Remember the account behind a member that has none yet (members from
    * before accounts, or from a browser that had no session then). An
@@ -2130,15 +2193,18 @@ export class RoomEngine {
    * account still holds (removed). Spectator chat is hidden from players.
    * Returns { changed, refused, removed }.
    */
-  checkSessionUser(playerId, userId, nowInput) {
+  checkSessionUser(playerId, userId, nowInput, formerUserIds = []) {
     const now = readNow(nowInput);
     const result = { changed: false, refused: false, removed: [] };
-    const known = memberUserId(userId);
+    const ids = personIds(userId, formerUserIds);
+    const [known] = ids;
     const member = this.member(normalizePlayerId(playerId));
     if (!member || !known) return result;
-    const person = member.userId ?? known;
+    if (this.adoptFormerUser(member, ids)) result.changed = true;
+    // A member someone else holds (another person's browser) stays theirs.
+    const person = member.userId && !ids.includes(member.userId) ? [member.userId] : ids;
     const others = this.state.members.filter((other) =>
-      other.playerId !== member.playerId && other.userId === person);
+      other.playerId !== member.playerId && person.includes(other.userId));
     if (member.role === "spectator" && others.some((other) => other.role === "player")) {
       this.leave({ playerId: member.playerId, now });
       return { changed: true, refused: true, removed: [] };
@@ -2150,7 +2216,7 @@ export class RoomEngine {
         result.changed = true;
       }
     }
-    if (!member.userId && !this.memberOfUser(known, member.playerId)) {
+    if (!member.userId && !this.memberOfPerson(ids, member.playerId)) {
       member.userId = known;
       result.changed = true;
     }
