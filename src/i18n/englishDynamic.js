@@ -2,6 +2,18 @@
 // lets every local/online/AI renderer share one code path while the i18n layer
 // chooses what each browser displays.
 export const ENGLISH_DYNAMIC = Object.freeze({
+  // Accounts (src/app/account.js).
+  "你的账号": "Your account",
+  "没有填邮箱。": "No email.",
+  "两次输入的密码不一样。": "The two passwords differ.",
+  "请填写用户名（或邮箱）和密码。": "Enter your username (or email) and password.",
+  "暂时无法登录，请稍后再试。": "Signing in is not possible right now. Try again shortly.",
+  "暂时无法退出登录，请稍后再试。": "Signing out is not possible right now. Try again shortly.",
+  "已退出登录。这个浏览器不再保留你的账号和房间身份。":
+    "Signed out. This browser no longer keeps your account or your room identities.",
+  "这个 Google 邮箱已经属于一个用密码注册的账号；请用那个账号的用户名和密码登录。":
+    "This Google email belongs to an account registered with a password; sign in with that account's username and password.",
+  "Google 登录没有完成，请再试一次。": "Google sign-in did not finish. Please try again.",
   // Undo requests (src/main.js): the panel, and a request ended by a move.
   "已申请撤回你的上一手，等待对方回应。计时照走；轮到你时直接落子会撤回申请。":
     "You asked to take back your last move; waiting for your opponent. The clock keeps running; playing a move on your turn withdraws the request.",
@@ -929,6 +941,11 @@ export const ENGLISH_PATTERNS = Object.freeze([
     replace: (_, hours) => `${hours} hour${hours === "1" ? "" : "s"} ago`,
   },
   { pattern: /^房间 ([A-Z0-9]{6})$/u, replace: "Room $1" },
+  // Accounts (src/app/account.js): names and addresses are kept as typed.
+  { pattern: /^邮箱：(.+)$/u, replace: "Email: $1" },
+  { pattern: /^注册成功，已登录：(.+)。$/u, replace: "Registered and signed in as $1." },
+  { pattern: /^已用 Google 登录：(.+)。$/u, replace: "Signed in with Google as $1." },
+  { pattern: /^已登录：(.+)。$/u, replace: "Signed in as $1." },
   {
     // Opening a saved game: "<black> 对 <white> · <result> · <n> 手".
     pattern: /^(.+) 对 (.+) · (.+) · (\d+) 手$/u,
@@ -1338,6 +1355,7 @@ export const ENGLISH_PATTERNS = Object.freeze([
   { pattern: /^观战房间 ([A-Z0-9]{4,12})$/u, replace: "Watch room $1" },
   { pattern: /^加入房间 ([A-Z0-9]{4,12})$/u, replace: "Join room $1" },
   { pattern: /^已加入房间 ([A-Z0-9]{6})，你是(.+)。$/u, replace: (_, code, role) => `Joined room ${code} as ${capturedPhrase(role)}.` },
+  { pattern: /^你已经在房间 ([A-Z0-9]{6}) 里，已回到原来的身份：(.+)。$/u, replace: (_, code, role) => `You were already in room ${code}; you are back as ${capturedPhrase(role)}.` },
   { pattern: /^已进入房间 ([A-Z0-9]{6})。$/u, replace: "Entered room $1." },
   { pattern: /^正在恢复房间 ([A-Z0-9]{6})…$/u, replace: "Restoring room $1…" },
   { pattern: /^邀请链接：(.+)$/u, replace: "Invitation link: $1" },

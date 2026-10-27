@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "npm run dev:online",
     "dev:ui": "vite",
-    "dev:online": "npm run build && npm run db:migrate:local && wrangler dev --port 8787 --var BETTER_AUTH_SECRET:local-development-only-secret-0123456789abcdef",
+    "dev:online": "npm run build && npm run db:migrate:local && wrangler dev --port 8787 --var BETTER_AUTH_SECRET:local-development-only-secret-0123456789abcdef --var PASSWORD_PEPPER:local-development-only-pepper-0123456789abcdef",
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test",

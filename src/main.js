@@ -186,12 +186,14 @@ import {
 import {
   adoptLocalRecordKey,
   flushPendingRecords,
+  forgetLoadedRecords,
   localRecordKey,
   maybeSaveFinishedLocalGame,
   openRecord,
   showRecordsScreen,
   wireRecordsScreen,
 } from "./app/myGames.js";
+import { handleAccountReturn, wireAccount } from "./app/account.js";
 import {
   buildChatPickers,
   chatChannelView,
@@ -227,6 +229,32 @@ const elements = {
   recordsStatus: $("#records-status"),
   recordsList: $("#records-list"),
   recordsMore: $("#records-more"),
+  recordsGuestNote: $("#records-guest-note"),
+  recordsRegister: $("#records-register"),
+  accountButton: $("#account-button"),
+  accountDialog: $("#account-dialog"),
+  accountForm: $("#account-form"),
+  accountTitle: $("#account-title"),
+  accountSignedIn: $("#account-signed-in"),
+  accountName: $("#account-name"),
+  accountEmail: $("#account-email"),
+  accountSignOut: $("#account-sign-out"),
+  accountDone: $("#account-done"),
+  accountForms: $("#account-forms"),
+  accountTabButtons: [...document.querySelectorAll("[data-account-tab]")],
+  accountPanels: [...document.querySelectorAll("[data-account-panel]")],
+  accountGuestNote: $("#account-guest-note"),
+  signInLogin: $("#sign-in-login"),
+  signInPassword: $("#sign-in-password"),
+  registerUsername: $("#register-username"),
+  registerPassword: $("#register-password"),
+  registerPasswordAgain: $("#register-password-again"),
+  registerEmail: $("#register-email"),
+  accountGoogle: $("#account-google"),
+  accountGoogleButton: $("#account-google-button"),
+  accountError: $("#account-error"),
+  accountCancelRow: $("#account-cancel-row"),
+  accountCancel: $("#account-cancel"),
   headerTopologySwitch: $(".topology-switch"),
   lobbyCreateRoom: $("#lobby-create-room"),
   lobbyQuickJoin: $("#lobby-quick-join"),
@@ -7039,7 +7067,11 @@ async function joinOnlineRoom(role = "player", pendingPlayerId = "") {
       : identity?.color === WHITE
         ? "白方"
         : "旁观者";
-    setMessage(`已加入房间 ${result.roomCode}，你是${roleText}。`);
+    // Someone already in the room (another browser of theirs) is back in
+    // the identity they had, whatever they asked for.
+    setMessage(result.rejoined
+      ? `你已经在房间 ${result.roomCode} 里，已回到原来的身份：${roleText}。`
+      : `已加入房间 ${result.roomCode}，你是${roleText}。`);
     setSidebarTab(
       [ONLINE_MATCH_SETUP, ONLINE_MATCH_INVITED].includes(onlineMatchStatus())
         ? "settings"
@@ -7356,6 +7388,14 @@ elements.lobbyRefresh.addEventListener("click", () => void refreshLobby({ announ
 document.addEventListener("visibilitychange", resumeLobbyPolling);
 wireLobbyFilters();
 wireRecordsScreen();
+wireAccount({
+  // Games finished on this page go to the account before it signs out.
+  beforeSignOut: flushPendingRecords,
+  changed() {
+    forgetLoadedRecords();
+    if (appRouteMode === "records") showRecordsScreen();
+  },
+});
 elements.lobbyRoomList.addEventListener("click", (event) => {
   const target = event.target.closest("[data-lobby-room]");
   if (!target) return;
@@ -7625,6 +7665,8 @@ if (initialRoute.mode === "online" && initialRoute.roomCode.length === 6) {
 if (initialRoute.mode !== "online" && roomClient.listPendingCreates().length > 0) {
   setMessage("有待确认的建房请求；打开创建房间对话框可核对并恢复。");
 }
+// Back from Google sign-in, or just signed out.
+handleAccountReturn(initialUrl);
 
 const unlockGameSounds = () => void gameSounds.unlock();
 window.addEventListener("pointerdown", unlockGameSounds, { capture: true, once: true });
@@ -7687,6 +7729,7 @@ export {
   onlineRoom,
   onlineStateSynchronized,
   pendingTopology,
+  rememberPlayerName,
   replayEventCount,
   replaySession,
   replaySource,

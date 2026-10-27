@@ -512,9 +512,22 @@ summary:focus-visible {
 }
 
 .records-guest-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
   margin: 16px 0 0;
   color: var(--muted);
   font-size: 10px;
+}
+
+.records-guest-note p {
+  flex: 1 1 260px;
+  margin: 0;
+}
+
+.records-guest-note[hidden] {
+  display: none;
 }
 
 .lobby-my-room-list {
@@ -3235,6 +3248,48 @@ select:disabled {
 .dialog-error {
   margin: 0 !important;
   color: #f2b7ae !important;
+}
+
+/* The account dialog: sign in, register, or the signed-in account. */
+.account-dialog {
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+}
+
+.account-dialog form,
+.account-forms,
+.account-panel,
+.account-signed-in {
+  display: grid;
+  gap: 12px;
+}
+
+.account-dialog h2,
+.account-dialog p {
+  margin-bottom: 0;
+}
+
+.account-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.account-dialog .account-note {
+  font-size: 11px;
+}
+
+.account-signed-in strong {
+  color: var(--accent-strong);
+  overflow-wrap: anywhere;
+}
+
+.account-button {
+  max-width: 11em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
 }
 
 .online-dialog .dialog-actions {

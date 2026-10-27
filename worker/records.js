@@ -205,11 +205,14 @@ export async function saveRecord(db, row, owners, { now = Date.now(), id = newRe
   ];
   for (const owner of owners) {
     if (typeof owner?.userId !== "string" || !owner.userId) continue;
+    // A room may still know a player by the guest they were before they
+    // registered or signed in (user_alias): the game goes to the account.
     statements.push(db.prepare(
       `INSERT OR IGNORE INTO game_record_owner (record_id, user_id, color, game_type, finished_at)
-       SELECT r.id, ?, ?, r.game_type, r.finished_at FROM game_record r
-       WHERE r.client_key = ? AND EXISTS (SELECT 1 FROM "user" u WHERE u.id = ?)`,
-    ).bind(owner.userId, owner.color ?? null, row.client_key, owner.userId));
+       SELECT r.id, u.id, ?, r.game_type, r.finished_at FROM game_record r
+       JOIN "user" u ON u.id = COALESCE((SELECT new_id FROM user_alias WHERE old_id = ?), ?)
+       WHERE r.client_key = ?`,
+    ).bind(owner.color ?? null, owner.userId, owner.userId, row.client_key));
   }
   statements.push(db.prepare("SELECT id FROM game_record WHERE client_key = ?").bind(row.client_key));
   const results = await db.batch(statements);

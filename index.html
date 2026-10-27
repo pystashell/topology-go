@@ -47,6 +47,7 @@
         </a>
         <div class="topbar-actions">
           <a id="records-link" class="topbar-link" href="/records">我的棋谱</a>
+          <button id="account-button" class="topbar-link account-button" type="button" aria-haspopup="dialog">登录</button>
           <div class="topology-switch" role="group" aria-label="棋盘形状">
             <button type="button" data-board-topology="cylinder" class="active" aria-pressed="true">竹筒</button>
             <button type="button" data-board-topology="torus" aria-pressed="false">甜甜圈</button>
@@ -89,7 +90,10 @@
           <p id="records-status" class="lobby-status" role="status" aria-live="polite"></p>
           <ol id="records-list" class="records-list"></ol>
           <button id="records-more" class="secondary-button records-more" type="button" hidden>加载更多</button>
-          <p class="records-guest-note">你现在是游客：棋谱跟着这个浏览器。清除浏览器数据或换设备后就找不回来了；之后可以注册账号，把它们带到别的设备。</p>
+          <div id="records-guest-note" class="records-guest-note">
+            <p>你现在是游客：棋谱跟着这个浏览器，清除浏览器数据或换设备后就找不回来了。注册账号后可以在别的设备登录查看，现有的棋谱会一起转到账号下。</p>
+            <button id="records-register" class="secondary-button" type="button">注册账号</button>
+          </div>
         </section>
       </main>
 
@@ -1165,6 +1169,74 @@
         <div class="dialog-actions">
           <button value="cancel" class="secondary-button">取消</button>
           <button id="confirm-resign" value="confirm" class="secondary-button danger-button">确认认输</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="account-dialog" class="game-dialog account-dialog" aria-labelledby="account-title">
+      <form id="account-form" novalidate>
+        <span class="eyebrow">账号</span>
+        <h2 id="account-title">登录或注册</h2>
+
+        <section id="account-signed-in" class="account-signed-in" hidden>
+          <p>已登录：<strong id="account-name" data-i18n-ignore></strong></p>
+          <p id="account-email" class="account-note"></p>
+          <p class="account-note">你下完的棋都存在这个账号的“我的棋谱”里，在别的设备登录同一个账号也能看到；进过的联机房间，在别的设备打开房间链接也能回到原来的席位。</p>
+          <div class="dialog-actions">
+            <button id="account-sign-out" class="secondary-button" type="button">退出登录</button>
+            <button id="account-done" class="primary-button" type="button">好</button>
+          </div>
+        </section>
+
+        <section id="account-forms" class="account-forms">
+          <div class="size-buttons account-tabs" role="group" aria-label="登录或注册">
+            <button type="button" data-account-tab="sign-in" class="active" aria-pressed="true">登录</button>
+            <button type="button" data-account-tab="register" aria-pressed="false">注册</button>
+          </div>
+          <p id="account-guest-note" class="account-note" hidden>你现在是游客。登录或注册后，这个浏览器里的棋谱会转到账号下。</p>
+
+          <div class="account-panel" data-account-panel="sign-in">
+            <label class="dialog-field" for="sign-in-login">
+              <span>用户名或邮箱</span>
+              <input id="sign-in-login" type="text" maxlength="254" autocomplete="username" autocapitalize="off" spellcheck="false" />
+            </label>
+            <label class="dialog-field" for="sign-in-password">
+              <span>密码</span>
+              <input id="sign-in-password" type="password" maxlength="128" autocomplete="current-password" />
+            </label>
+            <button id="sign-in-submit" class="primary-button dialog-wide-button" type="submit">登录</button>
+          </div>
+
+          <div class="account-panel" data-account-panel="register" hidden>
+            <label class="dialog-field" for="register-username">
+              <span>用户名</span>
+              <input id="register-username" type="text" maxlength="20" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="2–20 个字：中文、英文字母、数字或下划线" />
+            </label>
+            <label class="dialog-field" for="register-password">
+              <span>密码</span>
+              <input id="register-password" type="password" maxlength="128" autocomplete="new-password" placeholder="至少 8 个字符" />
+            </label>
+            <label class="dialog-field" for="register-password-again">
+              <span>再输一次密码</span>
+              <input id="register-password-again" type="password" maxlength="128" autocomplete="new-password" />
+            </label>
+            <label class="dialog-field" for="register-email">
+              <span>邮箱（选填）</span>
+              <input id="register-email" type="email" maxlength="254" autocomplete="email" placeholder="填了也可以用邮箱登录" />
+            </label>
+            <p class="account-note">暂时还不能找回密码，请记好它。</p>
+            <button id="register-submit" class="primary-button dialog-wide-button" type="submit">注册并登录</button>
+          </div>
+
+          <div id="account-google" hidden>
+            <div class="dialog-divider"><span>或者</span></div>
+            <button id="account-google-button" class="secondary-button dialog-wide-button" type="button">用 Google 登录</button>
+          </div>
+        </section>
+
+        <p id="account-error" class="dialog-error" role="alert" hidden></p>
+        <div id="account-cancel-row" class="dialog-actions">
+          <button id="account-cancel" class="text-button" type="button">取消</button>
         </div>
       </form>
     </dialog>

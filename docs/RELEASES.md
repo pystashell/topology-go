@@ -27,6 +27,20 @@ GitHub Release 正文会记录 commit、来源分支和两个 Cloudflare ID。�
 
 `public/version.json` 是候选版本清单（版本号随发布分支更新）；正式发布后，tag、Worker Version、Deployment 与 GitHub prerelease 会共同组成可审计记录。已发布：`0.3.0-rc.1`（2026-10-24，多棋种首次上线）。
 
+### 0.3.0-rc.12 的兼容边界
+
+- **注册登录**（账号与棋谱第 2 阶段）：用户名（2–20 字）+ 密码注册，邮箱选填；用用户名或邮箱登录；退出登录。游客注册或登录后，这个浏览器的棋谱和房间席位跟到账号下。登录同一账号的另一台设备打开房间链接，回到原来的席位或旁观身份。新增 D1 表 `user_alias`（`migrations/0002_guest_aliases.sql`，发布脚本在部署前应用）、限流绑定 `SIGN_IN_RATE_LIMITER`（命名空间 71007）。
+- **新的必需密钥 `PASSWORD_PEPPER`**：第一次发布前设置一次（随机生成、直接交给 Wrangler，不显示也不进仓库）。**设置后永远不能更换**，否则所有密码都对不上。发布脚本会检查它：
+
+  ```powershell
+  node -e "process.stdout.write(require('crypto').randomBytes(32).toString('base64url'))" | npx wrangler secret put PASSWORD_PEPPER
+  ```
+
+- **Google 登录**：代码已就绪，没有 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET` 时不显示按钮。负责人的设置步骤见 `docs/google-sign-in.md`。
+- **加入房间的行为变化**：同一个人再次加入（另一个浏览器，或清了房间数据）时，房间不再拒绝（rc.10 的 `ALREADY_PLAYING_HERE`、`ALREADY_WATCHING_HERE`），而是把原来的身份还给他（应答带 `rejoined: true`）。rc.11 及以前的页面收到这种应答会提示“服务器返回的加入身份与请求不一致”，刷新即可。房间成员多了可选的 `deviceTokenHashes`（最多 4 个）。
+- **Better Auth 的路由**：只放行 `/api/auth/get-session` 和 `/api/auth/callback/google`，其余（包括匿名登录、注册等）返回 404；页面只用 `/api/account*`。
+- **回滚**：回到 rc.11 后，注册、登录接口消失，已注册的账号暂时不能再登录（已登录的会话 Cookie 仍有效），重新部署后恢复；已转到账号的棋谱不受影响。rc.11 读含 `deviceTokenHashes` 的房间时忽略这个字段，只有每个身份最初那个浏览器还能回去。`user_alias` 留在 D1 里无害，不需要回滚表结构。
+
 ### 0.3.0-rc.11 的兼容边界
 
 - **修复默认围棋棋盘**：rc.10 里页面启动时还有一处写死的 19×19，全新的浏览器打开围棋仍是 19×19（五子棋、黑白棋已经是 7×7、6×6）。现在三种棋都默认最小快捷尺寸。回归测试：`test/defaultBoards.test.js`，浏览器检查 `scripts/browser-checks/defaults.mjs`。

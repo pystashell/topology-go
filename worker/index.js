@@ -1,4 +1,4 @@
-import { BadukRoom, SESSION_USER_HEADER } from "./BadukRoom.js";
+import { BadukRoom, SESSION_FORMER_USERS_HEADER, SESSION_USER_HEADER } from "./BadukRoom.js";
 import { BadukLobby } from "./BadukLobby.js";
 import {
   BADUK_PROTOCOL_VERSION,
@@ -8,7 +8,9 @@ import {
   stripUnsafeNameCharacters,
 } from "../src/multiplayer/protocol.js";
 import { hashRoomToken } from "../src/multiplayer/roomEngine.js";
-import { authFor, sessionUser, userOrNewGuest, withCookies } from "./auth.js";
+import { SIGN_IN_PATHS, accountRoute, accountSummary, isAccountPath } from "./accounts.js";
+import { authFor, formerUserIds, sessionUser, userOrNewGuest, withCookies } from "./auth.js";
+import { jsonResponse, readJsonBody } from "./http.js";
 import {
   MAX_RECORD_DATA_BYTES,
   RecordError,
@@ -22,24 +24,12 @@ import {
 
 export { BadukLobby, BadukRoom };
 
-const MAX_BODY_BYTES = 4 * 1024;
 // An uploaded game: its replay plus a little metadata.
 const MAX_RECORD_BODY_BYTES = MAX_RECORD_DATA_BYTES + 8 * 1024;
 const JOIN_TOKEN_PATTERN = /^[0-9a-f]{64}$/u;
 const JOIN_PLAYER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
-
-function jsonResponse(body, status = 200, extraHeaders = {}) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      "Cache-Control": "no-store",
-      "Content-Type": "application/json; charset=utf-8",
-      "X-Content-Type-Options": "nosniff",
-      ...extraHeaders,
-    },
-  });
-}
+const BETTER_AUTH_PATHS = new Set(["/api/auth/get-session", "/api/auth/callback/google"]);
 
 /**
  * Per-client budget from a Workers Rate Limiting binding (see wrangler.jsonc).
@@ -76,44 +66,6 @@ function normalizeName(value) {
   if (typeof value !== "string") return null;
   const name = stripUnsafeNameCharacters(value).replace(/\s+/g, " ").trim();
   return name && [...name].length <= 20 ? name : null;
-}
-
-async function readJsonBody(request, maxBytes = MAX_BODY_BYTES) {
-  const declaredLength = Number(request.headers.get("Content-Length") ?? 0);
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    throw jsonResponse({ error: "请求内容过长。" }, 413);
-  }
-  const reader = request.body?.getReader();
-  const chunks = [];
-  let length = 0;
-  if (reader) {
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        length += value.byteLength;
-        if (length > maxBytes) {
-          // Do not drain or decode a body after it exceeds the byte budget.
-          void reader.cancel().catch(() => {});
-          throw jsonResponse({ error: "请求内容过长。" }, 413);
-        }
-        chunks.push(value);
-      }
-    } finally {
-      reader.releaseLock();
-    }
-  }
-  const bytes = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    throw jsonResponse({ error: "请求不是有效的 JSON。" }, 400);
-  }
 }
 
 async function callRoom(stub, request) {
@@ -165,10 +117,10 @@ function identityStep(env, request) {
   const step = {
     setCookie: [],
     async user({ create }) {
-      if (!create) return (await sessionUser(env, request))?.id ?? null;
+      if (!create) return await sessionUser(env, request);
       const { user, setCookie } = await userOrNewGuest(env, request);
       step.setCookie = setCookie;
-      return user?.id ?? null;
+      return user;
     },
   };
   return step;
@@ -201,7 +153,7 @@ async function createRoom(request, env, caller = identityStep(env, request)) {
 
   const { roomCode, playerId, token } = body;
   const tokenHash = await hashRoomToken(token);
-  const userId = await caller.user({ create: true });
+  const userId = (await caller.user({ create: true }))?.id ?? null;
   const stub = env.BADUK_ROOMS.getByName(roomCode);
   let result;
   try {
@@ -306,7 +258,11 @@ async function joinRoom(request, env, roomCode, caller = identityStep(env, reque
   const token = body.token;
   const playerId = body.playerId;
   const tokenHash = await hashRoomToken(token);
-  const userId = await caller.user({ create: role === "player" });
+  const user = await caller.user({ create: role === "player" });
+  const userId = user?.id ?? null;
+  // Someone already in the room, maybe under the guest they were before
+  // they registered, gets that identity back (roomEngine join).
+  const formers = await formerUserIds(env.DB, user);
   const stub = env.BADUK_ROOMS.getByName(roomCode);
   let result;
   try {
@@ -318,6 +274,7 @@ async function joinRoom(request, env, roomCode, caller = identityStep(env, reque
       body: JSON.stringify({
         name, role, playerId, tokenHash, multiGame: body.multiGame === true,
         ...(userId ? { userId } : {}),
+        ...(formers.length ? { formerUserIds: formers } : {}),
       }),
     }));
   } catch (error) {
@@ -346,10 +303,11 @@ async function joinRoom(request, env, roomCode, caller = identityStep(env, reque
     }
   }
   if (!result.ok) return result.response;
-  return jsonResponse(
-    sessionBody(result.payload.identity, token, result.payload.room),
-    201,
-  );
+  return jsonResponse({
+    ...sessionBody(result.payload.identity, token, result.payload.room),
+    // This browser's token now also opens the caller's existing identity.
+    ...(result.payload.rejoined === true ? { rejoined: true } : {}),
+  }, 201);
 }
 
 function recordsUnavailable() {
@@ -372,12 +330,16 @@ function recordErrorResponse(error) {
 async function listMyRecords(request, env) {
   const url = new URL(request.url);
   const user = await sessionUser(env, request);
-  if (!user) return jsonResponse({ records: [], next: null });
+  if (!user) return jsonResponse({ records: [], next: null, account: null });
   try {
-    return jsonResponse(await listRecords(env.DB, user.id, {
-      gameType: url.searchParams.get("game"),
-      before: url.searchParams.get("before"),
-    }));
+    return jsonResponse({
+      ...await listRecords(env.DB, user.id, {
+        gameType: url.searchParams.get("game"),
+        before: url.searchParams.get("before"),
+      }),
+      // Whose list this is: a guest's or an account's.
+      account: accountSummary(user),
+    });
   } catch (error) {
     return recordErrorResponse(error);
   }
@@ -486,8 +448,13 @@ const worker = {
         // person); a client cannot claim an account by sending the header.
         const headers = new Headers(request.headers);
         headers.delete(SESSION_USER_HEADER);
+        headers.delete(SESSION_FORMER_USERS_HEADER);
         const user = await sessionUser(env, request);
-        if (user?.id) headers.set(SESSION_USER_HEADER, user.id);
+        if (user?.id) {
+          headers.set(SESSION_USER_HEADER, user.id);
+          const formers = await formerUserIds(env.DB, user);
+          if (formers.length) headers.set(SESSION_FORMER_USERS_HEADER, formers.join(","));
+        }
         return await env.BADUK_ROOMS.getByName(socketMatch[1]).fetch(new Request(request, { headers }));
       }
 
@@ -509,8 +476,23 @@ const worker = {
         return jsonResponse({ error: "房间地址不正确。" }, 404);
       }
 
-      // Sign-in and sessions (Better Auth). Phase 1 has guests only.
+      // Registering, signing in and out (worker/accounts.js).
+      if (isAccountPath(url.pathname)) {
+        if (!hasAllowedOrigin(request)) return jsonResponse({ error: "请求来源不允许。" }, 403);
+        if (!(await withinRateLimit(env.AUTH_RATE_LIMITER, request)) ||
+            (SIGN_IN_PATHS.has(url.pathname) &&
+              !(await withinRateLimit(env.SIGN_IN_RATE_LIMITER, request)))) {
+          return rateLimitedResponse();
+        }
+        return await accountRoute(request, env, url.pathname);
+      }
+
+      // Better Auth itself answers only Google's return address and the
+      // session lookup; everything else goes through the routes above.
       if (url.pathname.startsWith("/api/auth/")) {
+        if (!BETTER_AUTH_PATHS.has(url.pathname)) {
+          return jsonResponse({ error: "没有这个地址。", code: "NOT_FOUND" }, 404);
+        }
         if (!(await withinRateLimit(env.AUTH_RATE_LIMITER, request))) {
           return rateLimitedResponse();
         }

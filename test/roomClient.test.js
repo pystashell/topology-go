@@ -1479,6 +1479,33 @@ test("a mismatched join response keeps the original pending credential", async (
   assert.equal(client.listPendingJoins("AB23CD").length, 1);
 });
 
+test("someone already in the room gets their own identity back under this browser's token", async () => {
+  const SEAT = "11111111-2222-4333-8444-555555555555";
+  MockWebSocket.instances = [];
+  const storage = createMemoryStorage();
+  let rejoined = true;
+  const client = new RoomClient({ storage, WebSocketImpl: MockWebSocket,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      // The room answers with the seat this person already has.
+      return jsonResponse({ roomCode: "AB23CD", ...(rejoined ? { rejoined: true } : {}), session: {
+        code: "AB23CD", playerId: SEAT, token: body.token, playerName: "Mia",
+        role: "player", color: "black",
+      }, room: { code: "AB23CD", revision: 3 } }, 201);
+    },
+  });
+  const joined = await client.joinRoom("AB23CD", { name: "Mia", role: "spectator" });
+  assert.equal(joined.session.playerId, SEAT);
+  assert.equal(client.session.role, "player");
+  assert.equal(client.storedSeat("AB23CD")?.playerId, SEAT, "kept for coming back");
+  assert.equal(client.listPendingJoins("AB23CD").length, 0);
+  client.disconnect({ preserveSession: true });
+  // Without the room saying so, another identity is still a mismatch.
+  rejoined = false;
+  const other = new RoomClient({ storage: createMemoryStorage(), WebSocketImpl: MockWebSocket, fetchImpl: client.fetchImpl });
+  await assert.rejects(other.joinRoom("AB23CD", { name: "Mia" }), { code: "INVALID_SESSION_RESPONSE" });
+});
+
 test("a failed sequence write never sends a command or advances its local sequence", async () => {
   MockWebSocket.instances = [];
   const storage = createMemoryStorage();

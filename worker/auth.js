@@ -1,17 +1,28 @@
 /**
  * Who is calling: Better Auth (MIT, https://better-auth.com) on our own D1
- * database. Phase 1 has guests only: a browser becomes a guest the first
- * time it takes a seat in a room or saves a finished game, through an
- * HttpOnly session cookie scripts cannot read. Accounts and Google sign-in
- * come later (docs/design/accounts-and-game-records.md).
+ * database. A browser becomes a guest the first time it takes a seat in a
+ * room or saves a finished game, through an HttpOnly session cookie
+ * scripts cannot read. A guest can register (username and password, email
+ * optional) or sign in, with a password or with Google; either way its
+ * games move to the account (adoptGuest). worker/accounts.js has the
+ * routes; docs/design/accounts-and-game-records.md the design.
  *
  * Identity is optional infrastructure, like the rate limiters: without a
  * database binding or a secret (unit tests, plain local tools), or while
  * the database is unavailable, rooms keep working and games are simply
- * not saved.
+ * not saved. Passwords also need PASSWORD_PEPPER, Google sign-in its
+ * client id and secret; each is off until its secrets are set.
  */
 import { betterAuth } from "better-auth";
-import { anonymous } from "better-auth/plugins";
+import { anonymous, username } from "better-auth/plugins";
+
+import {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  cleanUsername,
+  usernameKey,
+} from "../src/multiplayer/accountRules.js";
+import { MIN_PEPPER_LENGTH, hashPassword, verifyPassword } from "./passwords.js";
 
 // Browsers keep a cookie at most 400 days; each day of use renews it, so a
 // guest who plays now and then keeps their games.
@@ -21,6 +32,8 @@ const SESSION_RENEW_SECONDS = 24 * 60 * 60;
 // most requests.
 const SESSION_COOKIE_CACHE_SECONDS = 5 * 60;
 const MIN_SECRET_LENGTH = 32;
+// The guests a person was before, as rooms may still know them (newest first).
+const MAX_FORMER_USER_IDS = 16;
 
 export const GUEST_NAME = "Guest";
 
@@ -34,6 +47,121 @@ export function authConfigured(env) {
     env.BETTER_AUTH_SECRET.length >= MIN_SECRET_LENGTH;
 }
 
+export function passwordsConfigured(env) {
+  return authConfigured(env) &&
+    typeof env?.PASSWORD_PEPPER === "string" &&
+    env.PASSWORD_PEPPER.length >= MIN_PEPPER_LENGTH;
+}
+
+export function googleConfigured(env) {
+  return authConfigured(env) &&
+    typeof env?.GOOGLE_CLIENT_ID === "string" && env.GOOGLE_CLIENT_ID.length > 0 &&
+    typeof env?.GOOGLE_CLIENT_SECRET === "string" && env.GOOGLE_CLIENT_SECRET.length > 0;
+}
+
+/**
+ * A guest registered or signed in on its browser and is now `userId`: its
+ * records move to the account, the guest id is remembered for the rooms
+ * that still know the person by it (a seat taken as a guest, a game that
+ * ends later), and the guest goes. One D1 batch, so all or nothing; a
+ * failure leaves the guest and its games where they were.
+ */
+export async function adoptGuest(db, guestId, userId, now = Date.now()) {
+  if (!db || !guestId || !userId || guestId === userId) return false;
+  try {
+    await db.batch([
+      db.prepare(
+        `INSERT OR REPLACE INTO user_alias (old_id, new_id, created_at) VALUES (?, ?, ?)`,
+      ).bind(guestId, userId, now),
+      // A game both of them played (two browsers of one person) stays once.
+      db.prepare(`UPDATE OR IGNORE game_record_owner SET user_id = ? WHERE user_id = ?`)
+        .bind(userId, guestId),
+      // Its sessions and anything left go with it (foreign keys cascade).
+      db.prepare(`DELETE FROM "user" WHERE id = ? AND "isAnonymous" = 1`).bind(guestId),
+    ]);
+    return true;
+  } catch (error) {
+    console.error("Moving a guest's games to its account failed", error);
+    return false;
+  }
+}
+
+/** The guests an account was before (none for a guest), newest first. */
+export async function formerUserIds(db, user) {
+  if (!db || !user?.id || user.isAnonymous) return [];
+  try {
+    const { results } = await db.prepare(
+      `SELECT old_id FROM user_alias WHERE new_id = ? ORDER BY created_at DESC LIMIT ?`,
+    ).bind(user.id, MAX_FORMER_USER_IDS).all();
+    return results.map((row) => row.old_id).filter((id) => typeof id === "string" && id);
+  } catch (error) {
+    console.error("Reading former guests failed", error);
+    return [];
+  }
+}
+
+function authOptions(env, origin) {
+  const pepper = env.PASSWORD_PEPPER;
+  return {
+    database: env.DB,
+    secret: env.BETTER_AUTH_SECRET,
+    baseURL: origin,
+    basePath: "/api/auth",
+    trustedOrigins: [origin],
+    session: {
+      expiresIn: SESSION_SECONDS,
+      updateAge: SESSION_RENEW_SECONDS,
+      cookieCache: { enabled: true, maxAge: SESSION_COOKIE_CACHE_SECONDS },
+    },
+    emailAndPassword: {
+      enabled: passwordsConfigured(env),
+      minPasswordLength: PASSWORD_MIN_LENGTH,
+      maxPasswordLength: PASSWORD_MAX_LENGTH,
+      // Nothing sends email yet: a new account is signed in at once.
+      autoSignIn: true,
+      password: {
+        hash: (password) => hashPassword(password, pepper),
+        verify: ({ hash, password }) => verifyPassword(hash, password, pepper),
+      },
+    },
+    socialProviders: googleConfigured(env)
+      ? {
+          google: {
+            clientId: env.GOOGLE_CLIENT_ID,
+            clientSecret: env.GOOGLE_CLIENT_SECRET,
+            prompt: "select_account",
+          },
+        }
+      : {},
+    // A Google account is never joined to a password account by email
+    // alone: nothing verifies the emails people register with (Better
+    // Auth's default; spelled out so it stays).
+    account: { accountLinking: { requireLocalEmailVerified: true } },
+    plugins: [
+      anonymous({
+        emailDomainName: "guest.invalid",
+        generateName: () => GUEST_NAME,
+        // adoptGuest removes the guest itself, after its games moved.
+        disableDeleteAnonymousUser: true,
+        onLinkAccount: ({ anonymousUser, newUser }) =>
+          adoptGuest(env.DB, anonymousUser?.user?.id, newUser?.user?.id),
+      }),
+      username({
+        // worker/accounts.js checks names first (accountRules.js); these
+        // limits only keep the plugin from refusing what that allows.
+        minUsernameLength: 2,
+        maxUsernameLength: 64,
+        usernameValidator: (name) => cleanUsername(name) !== null,
+        usernameNormalization: usernameKey,
+      }),
+    ],
+    advanced: { cookiePrefix: "topology-go" },
+    // The Workers Rate Limiting bindings guard these routes (wrangler.jsonc).
+    rateLimit: { enabled: false },
+    telemetry: { enabled: false },
+  };
+}
+
 /** The auth instance for this request's origin, or null when not configured. */
 export function authFor(env, request) {
   if (!authConfigured(env)) return null;
@@ -45,32 +173,13 @@ export function authFor(env, request) {
   }
   let auth = byOrigin.get(origin);
   if (!auth) {
-    auth = betterAuth({
-      database: env.DB,
-      secret: env.BETTER_AUTH_SECRET,
-      baseURL: origin,
-      basePath: "/api/auth",
-      trustedOrigins: [origin],
-      session: {
-        expiresIn: SESSION_SECONDS,
-        updateAge: SESSION_RENEW_SECONDS,
-        cookieCache: { enabled: true, maxAge: SESSION_COOKIE_CACHE_SECONDS },
-      },
-      plugins: [anonymous({
-        emailDomainName: "guest.invalid",
-        generateName: () => GUEST_NAME,
-      })],
-      advanced: { cookiePrefix: "topology-go" },
-      // The Workers Rate Limiting binding guards /api/auth (wrangler.jsonc).
-      rateLimit: { enabled: false },
-      telemetry: { enabled: false },
-    });
+    auth = betterAuth(authOptions(env, origin));
     byOrigin.set(origin, auth);
   }
   return auth;
 }
 
-/** The signed-in user (a guest for now), or null. Never throws. */
+/** The signed-in user (a guest or an account), or null. Never throws. */
 export async function sessionUser(env, request) {
   const auth = authFor(env, request);
   if (!auth) return null;

@@ -298,7 +298,9 @@ function githubRelease(tag) {
 }
 
 // Secrets the Worker needs before it can serve accounts (worker/auth.js).
-const REQUIRED_SECRETS = ["BETTER_AUTH_SECRET"];
+// Google sign-in (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET) is optional: it
+// stays off until both are set.
+const REQUIRED_SECRETS = ["BETTER_AUTH_SECRET", "PASSWORD_PEPPER"];
 
 /** Refuse to deploy a Worker whose required secrets are not set yet. */
 function assertWorkerSecrets() {

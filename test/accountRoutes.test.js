@@ -1,109 +1,15 @@
 import assert from "node:assert/strict";
-import { randomBytes, randomUUID } from "node:crypto";
 import test from "node:test";
 
-import { BADUK_PROTOCOL_VERSION } from "../src/multiplayer/protocol.js";
 import { authConfigured, userOrNewGuest } from "../worker/auth.js";
-import worker from "../worker/index.js";
 import { FakeD1 } from "./helpers/d1.js";
+import { ORIGIN, SECRET, browser, createBody, environment, joinBody, upload } from "./helpers/site.js";
 
 /*
  * Guests (Better Auth on D1) and the game record routes of worker/index.js:
  * who becomes a guest and when, what the room learns, and who may list,
  * open, upload and remove records.
  */
-
-const ORIGIN = "https://baduk.test";
-const SECRET = "test-secret-0123456789abcdef0123456789abcdef";
-
-function rooms() {
-  const calls = [];
-  return {
-    calls,
-    getByName(code) {
-      return {
-        async fetch(request) {
-          const body = await request.json();
-          calls.push({ path: new URL(request.url).pathname, body });
-          return Response.json({
-            room: { code },
-            identity: {
-              code, playerId: body.playerId, playerName: body.name,
-              role: body.role ?? "player", color: body.role === "spectator" ? null : "black",
-            },
-          }, { status: 201 });
-        },
-      };
-    },
-  };
-}
-
-function environment(overrides = {}) {
-  return { DB: new FakeD1(), BETTER_AUTH_SECRET: SECRET, BADUK_ROOMS: rooms(), ...overrides };
-}
-
-/** A browser: keeps the cookies the site sets and sends them back. */
-function browser(env) {
-  const jar = new Map();
-  return {
-    jar,
-    async call(path, { method = "GET", body, origin = ORIGIN } = {}) {
-      const headers = new Headers({ Origin: origin });
-      if (body !== undefined) headers.set("Content-Type", "application/json");
-      if (jar.size) headers.set("Cookie", [...jar].map(([name, value]) => `${name}=${value}`).join("; "));
-      const response = await worker.fetch(new Request(ORIGIN + path, {
-        method, headers, body: body === undefined ? undefined : JSON.stringify(body),
-      }), env);
-      const set = response.headers.getSetCookie();
-      for (const cookie of set) {
-        const [pair] = cookie.split(";");
-        const index = pair.indexOf("=");
-        jar.set(pair.slice(0, index), pair.slice(index + 1));
-      }
-      const text = await response.text();
-      let json = null;
-      try { json = JSON.parse(text); } catch {}
-      return { status: response.status, json, setCookie: set };
-    },
-  };
-}
-
-function createBody() {
-  return {
-    v: BADUK_PROTOCOL_VERSION,
-    name: "Mia",
-    size: 9,
-    roomCode: "AB23CD",
-    playerId: randomUUID(),
-    token: randomBytes(32).toString("hex"),
-    multiGame: true,
-  };
-}
-
-function joinBody(role = "player") {
-  return { v: BADUK_PROTOCOL_VERSION, name: "Lee", role, playerId: randomUUID(), token: randomBytes(32).toString("hex"), multiGame: true };
-}
-
-function upload(overrides = {}) {
-  return {
-    v: 1,
-    clientKey: `local:${randomUUID()}`,
-    mode: "human-ai",
-    ownerColor: "white",
-    gameType: "gomoku",
-    width: 15,
-    height: 15,
-    topology: "torus",
-    players: { black: { name: "Rapfi AI", kind: "ai" }, white: { name: "Mia", kind: "human" } },
-    result: { winner: "white", reason: "five" },
-    moveCount: 2,
-    startedAt: Date.now() - 60_000,
-    finishedAt: Date.now(),
-    settings: { gameType: "gomoku", width: 15, height: 15 },
-    replay: { version: 1, base: { width: 15, height: 15 }, events: [{ type: "play", color: "black", row: 7, col: 7 }, { type: "play", color: "white", row: 7, col: 8 }] },
-    ...overrides,
-  };
-}
 
 test("identity needs both a database and a real secret", () => {
   assert.equal(authConfigured({}), false);
@@ -176,7 +82,7 @@ test("rooms keep working when identity is unavailable", async (t) => {
 test("a finished game uploads once, lists, opens for its owner only and can be removed", async () => {
   const env = environment();
   const mia = browser(env);
-  assert.deepEqual((await mia.call("/api/records")).json, { records: [], next: null }, "no session: an empty list");
+  assert.deepEqual((await mia.call("/api/records")).json, { records: [], next: null, account: null }, "no session: an empty list");
 
   const body = upload();
   const saved = await mia.call("/api/records", { method: "POST", body });
@@ -186,6 +92,7 @@ test("a finished game uploads once, lists, opens for its owner only and can be r
 
   const list = (await mia.call("/api/records")).json;
   assert.equal(list.records.length, 1);
+  assert.deepEqual(list.account, { guest: true, name: null, email: null }, "a guest's list");
   assert.deepEqual(list.records[0].players.white, { name: "Mia", kind: "human" });
   assert.equal(list.records[0].color, "white");
   assert.equal((await mia.call("/api/records?game=go")).json.records.length, 0);
