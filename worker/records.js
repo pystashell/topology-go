@@ -264,13 +264,20 @@ function parseCursor(value) {
  * A page of a user's records, newest first. `before` is the `next` cursor of
  * the previous page; `next` is null on the last page.
  */
-export async function listRecords(db, userId, { gameType = null, before = null, limit = RECORD_PAGE_SIZE } = {}) {
+export async function listRecords(db, userId, {
+  gameType = null, before = null, roomCode = null, limit = RECORD_PAGE_SIZE,
+} = {}) {
   const size = Math.min(Math.max(1, Math.trunc(Number(limit)) || RECORD_PAGE_SIZE), RECORD_PAGE_SIZE);
   const where = ["o.user_id = ?"];
   const values = [userId];
   if (GAME_TYPES.has(gameType)) {
     where.push("o.game_type = ?");
     values.push(gameType);
+  }
+  // The games played in one room (its link after it closed).
+  if (typeof roomCode === "string" && roomCode) {
+    where.push("r.room_code = ?");
+    values.push(roomCode);
   }
   const cursor = parseCursor(before);
   if (cursor) {

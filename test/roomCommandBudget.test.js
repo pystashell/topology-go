@@ -215,7 +215,8 @@ test("socket churn writes only reservations, stale connections and spectator gra
   assert.equal(storage.value.members.find(({ playerId }) => playerId === "friend").lastConnectedAt
     !== null, true);
 
-  // Quick player reconnects only change presence.
+  // Quick player reconnects only change presence (while another player is
+  // here the room's close countdown does not start).
   t.mock.timers.tick(5_000);
   await close("friend");
   await openSocket(room, tokens.friend);

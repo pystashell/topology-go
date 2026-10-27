@@ -190,6 +190,7 @@ import {
   localRecordKey,
   maybeSaveFinishedLocalGame,
   openRecord,
+  showClosedRoom,
   showRecordsScreen,
   wireRecordsScreen,
 } from "./app/myGames.js";
@@ -3952,7 +3953,10 @@ function updateRoomUI() {
     }
     if (connected && onlineReady && roomMatchStatus === ONLINE_MATCH_SETUP) {
       elements.roomHint.textContent = isOnlineHost()
-        ? "房间已经建立。请在棋盘设置中确认配置并发起对局。"
+        ? hasBothPlayers
+          ? "房间已经建立。请在棋盘设置中确认配置并发起对局。"
+          // The room closes 2 minutes after a host waiting alone left.
+          : "房间已经建立。请在棋盘设置中确认配置并发起对局；对手进来之前请留在这个页面，离开超过 2 分钟房间会关闭。"
         : "房主正在准备下一盘棋；你可以继续聊天或等待邀请。";
     } else if (connected && onlineReady && roomMatchStatus === ONLINE_MATCH_INVITED) {
       const request = onlineRoom?.match?.request;
@@ -7087,6 +7091,11 @@ async function joinOnlineRoom(role = "player", pendingPlayerId = "") {
         returnToStoredIdentity(code)) {
       return;
     }
+    // A closed room: its players find the last game they played there.
+    if (error?.code === "ROOM_NOT_FOUND" && await showClosedRoom(code)) {
+      closeOnlineDialog();
+      return;
+    }
     restoreOfflineGame();
     updateUI();
     maybeStartAITurn();
@@ -7511,12 +7520,15 @@ roomClient.on("connection", (event) => {
     }
   }
   if (event.terminal && [4401, 4404].includes(event.code) && !hasOnlineSession()) {
-    const reason = event.code === 4404
-      ? "房间已因长时间无活动而关闭。"
-      : "房间身份已经失效，请重新加入。";
+    const closed = event.code === 4404;
+    // What the page last saw of a room that closed: its final position.
+    const closedCode = closed ? onlineRoom?.code ?? sanitizeRoomCode(elements.roomCodeInput.value) : "";
+    const finalRoom = closed ? onlineRoom : null;
+    const reason = closed ? "房间已经关闭。" : "房间身份已经失效，请重新加入。";
     returnToOffline(roomClient.lastCredentialCleanupFailed
       ? `${reason}本地凭据未能删除，恢复入口可能再次出现；请检查浏览器存储设置。`
       : reason);
+    if (closed) void showClosedRoom(closedCode, finalRoom);
     return;
   }
   if (!roomClient.isConnected && aiWorkerContext?.kind === MATCH_TRANSPORT_ONLINE) {
@@ -7730,6 +7742,7 @@ export {
   onlineStateSynchronized,
   pendingTopology,
   rememberPlayerName,
+  replaceAppPath,
   replayEventCount,
   replaySession,
   replaySource,

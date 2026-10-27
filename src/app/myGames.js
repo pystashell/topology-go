@@ -35,6 +35,7 @@ import {
   hasOnlineSession,
   isAIMode,
   isReplaying,
+  replaceAppPath,
   replayEventCount,
   replaySource,
   savedPlayerName,
@@ -454,6 +455,45 @@ async function openRecord(id) {
   return true;
 }
 
+// --- A room that closed ------------------------------------------------------
+
+/** The newest of this browser's games played in a room, or null. */
+async function lastRecordInRoom(code) {
+  try {
+    const response = await fetch(`/api/records?room=${encodeURIComponent(code)}`, { credentials: "same-origin" });
+    if (!response.ok) return null;
+    return (await response.json())?.records?.[0]?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The page's room closed, or a link led to a closed one: its players open
+ * the last game they played there; anyone else keeps the final position
+ * the page last saw (`finalRoom`) to replay. Returns whether it showed one.
+ */
+async function showClosedRoom(code, finalRoom = null) {
+  const id = code ? await lastRecordInRoom(code) : null;
+  if (id && await openRecord(id)) {
+    replaceAppPath(`/game/${id}`);
+    setMessage(`房间 ${code} 已经关闭；这是你在里面下的最后一盘。`);
+    return true;
+  }
+  const replay = finalRoom?.replay;
+  if (replayEventCount(replay) === 0) return false;
+  const name = (color) => finalRoom.players?.find((player) => player.color === color)?.name ||
+    translateText(colorName(color));
+  enterReplay(replay, {
+    imported: true,
+    sourceName: `房间 ${code}`,
+    metadata: { blackPlayer: name(BLACK), whitePlayer: name(WHITE), result: finalRoom.game?.result ?? null },
+  });
+  if (!isReplaying()) return false;
+  setMessage("房间已经关闭；这盘棋可以接着回看。");
+  return true;
+}
+
 export {
   adoptLocalRecordKey,
   flushPendingRecords,
@@ -461,6 +501,7 @@ export {
   localRecordKey,
   maybeSaveFinishedLocalGame,
   openRecord,
+  showClosedRoom,
   showRecordsScreen,
   wireRecordsScreen,
 };

@@ -332,10 +332,12 @@ async function listMyRecords(request, env) {
   const user = await sessionUser(env, request);
   if (!user) return jsonResponse({ records: [], next: null, account: null });
   try {
+    const room = url.searchParams.get("room");
     return jsonResponse({
       ...await listRecords(env.DB, user.id, {
         gameType: url.searchParams.get("game"),
         before: url.searchParams.get("before"),
+        ...(isRoomCode(room) ? { roomCode: room, limit: 1 } : {}),
       }),
       // Whose list this is: a guest's or an account's.
       account: accountSummary(user),

@@ -39,7 +39,7 @@ export const SERVER_ERROR_COPY = Object.freeze({
   GOOGLE_UNAVAILABLE: "暂时不能用 Google 登录。",
   // Room durable object (worker/BadukRoom.js)
   ROOM_NOT_FOUND: "没有找到这个房间。",
-  ROOM_EXPIRED: "房间已因长时间无活动而关闭。",
+  ROOM_EXPIRED: "房间已经关闭。",
   ROOM_COMMIT_FAILED: "房间暂时无法保存，请稍后重试。",
   ROOM_RESTORE_FAILED: "房间暂时无法恢复或保存，请稍后重新连接。",
   SESSION_REPLACED: "这个席位已在另一个窗口打开，本页已停止重连。",
