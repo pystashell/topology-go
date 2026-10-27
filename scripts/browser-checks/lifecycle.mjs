@@ -44,6 +44,7 @@ try {
   // 1. A host creates a room and leaves before anyone comes.
   const lone = await page("lone");
   const loneCode = await createRoom(lone, "孤单房主");
+  await lone.waitForFunction(() => /离开超过 2 分钟/u.test(document.querySelector("#room-hint")?.textContent ?? ""), null, { timeout: 15_000 });
   record.loneHint = await text(lone, "#room-hint");
   await lone.waitForTimeout(1_000);
   await lone.close();
