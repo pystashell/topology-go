@@ -27,6 +27,11 @@ GitHub Release 正文会记录 commit、来源分支和两个 Cloudflare ID。�
 
 `public/version.json` 是候选版本清单（版本号随发布分支更新）；正式发布后，tag、Worker Version、Deployment 与 GitHub prerelease 会共同组成可审计记录。已发布：`0.3.0-rc.1`（2026-10-24，多棋种首次上线）。
 
+### 0.3.0-rc.11 的兼容边界
+
+- **修复默认围棋棋盘**：rc.10 里页面启动时还有一处写死的 19×19，全新的浏览器打开围棋仍是 19×19（五子棋、黑白棋已经是 7×7、6×6）。现在三种棋都默认最小快捷尺寸。回归测试：`test/defaultBoards.test.js`，浏览器检查 `scripts/browser-checks/defaults.mjs`。
+- **回滚**：回到 rc.10 只是围棋默认又变回 19×19，没有数据变化。
+
 ### 0.3.0-rc.10 的兼容边界
 
 - **一人一身份**：同一个人（同一个浏览器会话）在一个房间里只能有一个身份。对局者再以旁观者或新身份加入会被拒绝（`ALREADY_PLAYING_HERE`），旁观者用新身份加入也会被拒绝（`ALREADY_WATCHING_HERE`，上座请在房间里申请对手席位）。WebSocket 连接时房间补记成员的账号；对局者的浏览器连旁观身份时，房间删掉那个旁观身份并以 4401 关闭（旧页面也会停止重连）。

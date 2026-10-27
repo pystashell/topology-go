@@ -7509,7 +7509,8 @@ roomClient.on("error", (error) => {
 initializeSidebarPanels();
 syncTimeControlFields();
 void loadVersionLabel();
-setPendingDimensions(19, 19);
+// New players start on the smallest quick board (see defaultBoardSide).
+setPendingDimensions(defaultBoardSide(GAME_GO), defaultBoardSide(GAME_GO));
 setPendingTopology(TOPOLOGY_CYLINDER);
 elements.aiModel.value = preferredAIModelId;
 elements.aiBlackModel.value = preferredAIModelId;
