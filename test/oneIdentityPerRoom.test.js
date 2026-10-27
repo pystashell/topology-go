@@ -117,6 +117,13 @@ test("a seat taken as a guest belongs to the account that guest became", async (
   assert.equal(third.member("host").userId, "guest-3");
   const watcher = await join(third, { playerId: "watcher", role: "spectator", userId: "account-9", formerUserIds: ["guest-8"] });
   assert.equal(watcher.identity.playerId, "watcher", "a new spectator");
+  // Two identities of one person from before the merge: entering again
+  // returns the seat, and the spectator one goes on its next connection.
+  const merged = await room({ hostUser: "guest-5" });
+  await join(merged, { playerId: "watch-5", role: "spectator", userId: "account-5" });
+  const seatBack = await join(merged, { playerId: "tablet-5", role: "spectator", userId: "account-5", formerUserIds: ["guest-5"] });
+  assert.deepEqual([seatBack.identity.playerId, seatBack.identity.color], ["host", "black"]);
+  assert.equal(merged.checkSessionUser("watch-5", "account-5", NOW + 30, ["guest-5"]).refused, true);
   // A spectator identity of the same person, known by the former guest, goes.
   const fourth = await room({ hostUser: null });
   await join(fourth, { playerId: "host-watch", role: "spectator", userId: "guest-4" });

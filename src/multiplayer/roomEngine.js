@@ -2128,12 +2128,16 @@ export class RoomEngine {
       member.userId === userId && member.playerId !== exceptPlayerId) ?? null;
   }
 
-  /** The member of a person known by any of their ids (see personIds). */
+  /**
+   * The member of a person known by any of their ids (see personIds); their
+   * seat first, should older data hold a spectator identity of theirs too.
+   */
   memberOfPerson(ids, exceptPlayerId = null) {
     if (!ids?.length) return null;
-    return this.state.members.find((member) =>
+    const theirs = this.state.members.filter((member) =>
       member.userId && ids.includes(member.userId) &&
-      member.playerId !== exceptPlayerId) ?? null;
+      member.playerId !== exceptPlayerId);
+    return theirs.find((member) => member.role === "player") ?? theirs[0] ?? null;
   }
 
   /**
