@@ -12,6 +12,8 @@ import {
 } from "../src/multiplayer/protocol.js";
 import {
   MATCH_STATUS_PLAYING,
+  ROOM_CLOSED_INTERRUPTED,
+  ROOM_CLOSED_PLAYERS_GONE,
   RoomEngine,
   RoomEngineError,
   memberHasToken,
@@ -56,6 +58,13 @@ const POSITION_BOUND_ACTIONS = new Set([
   "resume_play",
   "request_undo",
 ]);
+
+// What the pages still connected (spectators) are told when a room closes.
+const CLOSED_MESSAGES = {
+  [ROOM_CLOSED_PLAYERS_GONE]: "棋手都离开了，房间已经关闭。",
+  [ROOM_CLOSED_INTERRUPTED]: "双方离开超过 30 分钟，这盘棋按中断保存，房间已经关闭。",
+};
+const EXPIRED_MESSAGE = "房间 24 小时没有活动，已经关闭。";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -105,6 +114,9 @@ export class BadukRoom {
     this.storedChunks = 0;
     // Finished rounds this instance saved (or is saving) as game records.
     this.savedRecords = new Set();
+    // When the room was left without its players, as last stored (null when
+    // someone was here); see RoomEngine#syncPlayersGone.
+    this.storedPlayersGone = null;
 
     if (typeof ctx.setWebSocketAutoResponse === "function") {
       ctx.setWebSocketAutoResponse(
@@ -123,6 +135,7 @@ export class BadukRoom {
         this.markUnavailable("ROOM_RESTORE_FAILED", error, stored);
         return;
       }
+      this.storedPlayersGone = this.engine.playersGoneSince;
 
       const now = Date.now();
       for (const socket of ctx.getWebSockets()) {
@@ -149,9 +162,12 @@ export class BadukRoom {
 
       const advanced = this.engine.advance(now, { includeRoom: false });
       if (advanced.expired) {
-        await this.retireRoom();
+        await this.retireRoom(advanced.reason);
         return;
       }
+      // Restarted with nobody connected yet (a deploy drops every
+      // connection), the close countdown starts now; it is stored only if
+      // nobody comes back before the alarm (see alarm()).
       if (advanced.changed) {
         await this.persist();
         this.broadcastState();
@@ -295,12 +311,16 @@ export class BadukRoom {
       await this.sweepSilentSockets(Date.now());
       const result = this.engine.advance(Date.now(), { includeRoom: false });
       if (result.expired) {
-        await this.retireRoom();
+        await this.retireRoom(result.reason);
         return;
       }
       if (result.changed) {
         await this.persist();
         this.broadcastState();
+      } else if (this.engine.playersGoneSince !== this.storedPlayersGone) {
+        // A countdown only this instance knew (it started after a restart):
+        // stored, so a room that sleeps again still closes on time.
+        await this.persist();
       }
       await this.scheduleAlarm();
     });
@@ -460,6 +480,7 @@ export class BadukRoom {
       if (this.unavailableError?.code === "ROOM_COMMIT_FAILED") {
         this.engine = recovered;
         this.storedChunks = chunks;
+        this.storedPlayersGone = recovered.playersGoneSince;
         this.unavailableError = null;
         this.queueIndexPublish();
         await this.scheduleAlarmAfterCommit();
@@ -485,6 +506,10 @@ export class BadukRoom {
   async openSocket(request) {
     if (this.unavailableError) return this.errorResponse(this.unavailableError);
     if (!this.engine || this.retiring) {
+      // A page coming back to a room that closed learns it for good (4404)
+      // instead of reconnecting.
+      const closed = this.closedRoomSocket(request);
+      if (closed) return closed;
       return jsonResponse(
         { error: "没有找到这个房间。", code: "ROOM_NOT_FOUND" },
         404,
@@ -581,7 +606,8 @@ export class BadukRoom {
       const connectedAt = Date.now();
       const playerId = connected.identity.playerId;
       const lastWrite = this.connectionWrites?.get(playerId);
-      if (seat.changed || connected.firstConnection !== false || lastWrite === undefined ||
+      if (seat.changed || this.engine.playersGoneSince !== this.storedPlayersGone ||
+          connected.firstConnection !== false || lastWrite === undefined ||
           connectedAt - lastWrite >= CONNECTION_WRITE_INTERVAL_MS ||
           this.lobbyVisibleKey() !== visibleBefore) {
         await this.persist();
@@ -856,11 +882,13 @@ export class BadukRoom {
       if (disconnected?.playerOffline) {
         this.rememberPlayerOffline(disconnected.playerId, Date.now(), socket);
       }
-      // Only a spectator's reconnect grace starts here and must survive a
-      // restart, and the lobby must learn what it shows (a seat opening or
-      // closing, a player going offline, fewer spectators); other presence is
-      // not worth a rewrite.
+      // A spectator's reconnect grace and the last player leaving (the room
+      // closes some time after its players are gone) start here and must
+      // survive a restart, and the lobby must learn what it shows (a seat
+      // opening or closing, a player going offline, fewer spectators); other
+      // presence is not worth a rewrite.
       if (disconnected?.spectatorOffline !== false ||
+          this.engine.playersGoneSince !== this.storedPlayersGone ||
           this.lobbyVisibleKey() !== visibleBefore) {
         await this.persist();
       }
@@ -898,8 +926,15 @@ export class BadukRoom {
       // Presence and TTL can change without a game revision. Give every
       // persisted directory projection its own strictly ordered version.
       this.engine.bumpDirectoryRevision();
-      const snapshot = this.engine.serialize();
+      // When the room was left without its players is stored next to the
+      // state (RoomEngine.restore takes it back out).
+      const playersGoneSince = this.engine.playersGoneSince;
+      const snapshot = {
+        ...this.engine.serialize(),
+        ...(Number.isFinite(playersGoneSince) ? { playersGoneSince } : {}),
+      };
       this.storedChunks = await saveRoomSnapshot(this.ctx.storage, snapshot, this.storedChunks);
+      this.storedPlayersGone = Number.isFinite(playersGoneSince) ? playersGoneSince : null;
     } catch (error) {
       // Includes serialization/validation failures before a write and writes
       // whose outcome is unknown. Never reuse their in-memory success receipts.
@@ -938,6 +973,44 @@ export class BadukRoom {
     const saving = saveRecord(this.env.DB, record.row, record.owners).catch((error) => {
       console.error("Unable to save a game record", error);
       this.savedRecords.delete(key);
+    });
+    this.ctx.waitUntil?.(saving);
+  }
+
+  /** Accept, say the room is closed and close with 4404; null for a non-socket request. */
+  closedRoomSocket(request) {
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return null;
+    const { protocol } = parseWebSocketProtocols(request.headers.get("Sec-WebSocket-Protocol"));
+    if (protocol !== BADUK_WS_PROTOCOL) return null;
+    const [client, server] = Object.values(new WebSocketPair());
+    server.accept();
+    this.sendError(server, { code: "ROOM_EXPIRED", message: "这个房间已经关闭。" });
+    this.closeSocket(server, 4404, "Room closed");
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      headers: { "Sec-WebSocket-Protocol": protocol },
+    });
+  }
+
+  /**
+   * The game the players left in the middle: saved to both players' records
+   * without a result before the room goes (idempotent like any round).
+   */
+  saveInterruptedRound() {
+    if (!this.engine || !this.env?.DB) return;
+    let record;
+    try {
+      const round = this.engine.interruptedRoundRecord();
+      if (!round) return;
+      record = onlineRoundRecord(round, this.engine.state.code);
+    } catch (error) {
+      console.error("Unable to build an interrupted game record", error);
+      return;
+    }
+    if (record.owners.length === 0) return;
+    const saving = saveRecord(this.env.DB, record.row, record.owners).catch((error) => {
+      console.error("Unable to save an interrupted game record", error);
     });
     this.ctx.waitUntil?.(saving);
   }
@@ -1123,18 +1196,19 @@ export class BadukRoom {
     }
   }
 
-  async retireRoom() {
+  async retireRoom(reason = null) {
     if (this.retiring) return;
     this.retiring = true;
     const roomCode = this.engine?.state?.code ?? null;
     const incarnationId = this.engine?.state?.incarnationId ?? null;
+    if (reason === ROOM_CLOSED_INTERRUPTED) this.saveInterruptedRound();
     this.engine = null;
     for (const socket of this.ctx.getWebSockets()) {
       this.sendError(socket, {
         code: "ROOM_EXPIRED",
-        message: "房间 24 小时没有活动，已经关闭。",
+        message: CLOSED_MESSAGES[reason] ?? EXPIRED_MESSAGE,
       });
-      this.closeSocket(socket, 4404, "Room expired");
+      this.closeSocket(socket, 4404, "Room closed");
     }
     try {
       if ((await this.ctx.storage.getAlarm()) !== null) {

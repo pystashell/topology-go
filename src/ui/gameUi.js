@@ -207,6 +207,7 @@ export function formatGameResult(result) {
       ? `${colorName(result.winner)}以 ${result.length} 子长连获胜`
       : `${colorName(result.winner)}连成五子获胜`;
   }
+  if (result.reason === "interrupted") return "对局中断，不计胜负";
   if (result.reason === "board_full") return "棋盘已满，和棋";
   if (result.reason === "no_legal_moves") return "黑方已无可下之处，和棋";
   if (result.reason === "discs") {

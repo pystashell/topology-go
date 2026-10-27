@@ -153,6 +153,9 @@ test("results read naturally for every game and end", () => {
   assert.equal(formatGameResult({ winner: "black", loser: "white", reason: "timeout" }), "黑方胜 · 白方超时");
   assert.equal(formatGameResult({ winner: "draw", margin: 0 }), "双方和棋");
   assert.equal(formatGameResult({ winner: "white", margin: 6.5 }), "白方胜 6.5 目");
+  // Both players left a game for 30 minutes (the room saved it and closed).
+  assert.equal(formatGameResult({ winner: null, reason: "interrupted" }), "对局中断，不计胜负");
+  assert.equal(english("对局中断，不计胜负"), "Interrupted: no result");
 
   // A freestyle five across the cylinder seam.
   const five = play(new GomokuEngine({ width: 15, height: 15 }), [

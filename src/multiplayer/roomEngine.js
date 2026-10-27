@@ -57,6 +57,18 @@ import {
 } from "./protocol.js";
 
 export const ROOM_TTL_MS = 24 * 60 * 60 * 1_000;
+// A room closes by itself once its players are gone (owner's decision,
+// 2026-10-26; docs/design/accounts-and-game-records.md section 5).
+// Spectators never keep it open; the 24-hour TTL is only a backstop.
+// A host waiting alone for an opponent:
+export const HOST_GONE_CLOSE_MS = 2 * 60 * 1_000;
+// Between games, or after one:
+export const PLAYERS_GONE_CLOSE_MS = 5 * 60 * 1_000;
+// A game being played: it is saved as interrupted (no result) first.
+export const ROUND_ABANDONED_CLOSE_MS = 30 * 60 * 1_000;
+export const ROOM_CLOSED_EXPIRED = "expired";
+export const ROOM_CLOSED_PLAYERS_GONE = "players-gone";
+export const ROOM_CLOSED_INTERRUPTED = "interrupted";
 export const MAX_SPECTATORS = 32;
 export const PLAYER_RESERVATION_TTL_MS = 60 * 1_000;
 // How long the other side of a round must be offline before a player may
@@ -1346,6 +1358,10 @@ export class RoomEngine {
     // When this instance first ran. A player already offline then counts as
     // offline from that moment: a restart only ever delays a claim.
     this.startedAt = null;
+    // When the room was last left with none of its players connected (null
+    // while one is). The room object stores it next to the state, not in
+    // it: a room's serialized state stays exactly as before.
+    this.playersGoneSince = null;
   }
 
   /**
@@ -1616,7 +1632,11 @@ export class RoomEngine {
       // the browser-side controller after the room is upgraded again.
       automatedPlayer.controllerId = blackController.playerId;
     }
+    // The room object stores it next to the state; it is never part of it.
+    const playersGoneSince = state.playersGoneSince;
+    delete state.playersGoneSince;
     const room = new RoomEngine(state, restoreGame(state.game));
+    if (Number.isFinite(playersGoneSince)) room.playersGoneSince = playersGoneSince;
     assertResignationPersistence(state, room.game);
     // Older builds paused the clock while an undo request was pending. Undo
     // requests are now non-blocking, so resume that persisted clock from the
@@ -1640,6 +1660,7 @@ export class RoomEngine {
       game: serializeGame(this.game),
     });
   }
+
 
   /** 2 while the room has only ever held Go (see GO_SCHEMA_VERSION), else 3. */
   serializedSchemaVersion() {
@@ -2102,6 +2123,9 @@ export class RoomEngine {
     this.connections.set(normalizedConnectionId, identity.playerId);
     this.offlineSince.delete(identity.playerId);
     const member = this.requireMember(identity.playerId);
+    // A player back in a room nobody was in stops its close countdown; the
+    // caller stores that.
+    const presenceChanged = this.syncPlayersGone(now);
     // A null marker is a reservation that expires unless this connection is
     // recorded; the caller must persist it.
     const firstConnection = member.lastConnectedAt === null;
@@ -2117,6 +2141,7 @@ export class RoomEngine {
       connectionId: normalizedConnectionId,
       revision: this.state.revision,
       firstConnection,
+      presenceChanged,
       room: this.snapshotFor(member.playerId, now),
     };
   }
@@ -2261,17 +2286,21 @@ export class RoomEngine {
       // last command the observer happened to send while watching.
       member.lastSeenAt = now;
     }
-    // A seated player's last connection starts the abandonment grace. It is
-    // not stored, so socket churn writes nothing; the room object keeps it
-    // on the other sockets (see restoreOfflineSince).
+    // A seated player's last connection starts the abandonment grace, which
+    // the room object also keeps on the other sockets across hibernation
+    // (see restoreOfflineSince).
     const playerOffline = member?.role === "player" && member.automated !== true &&
       !this.isOnline(member.playerId);
     if (playerOffline) this.offlineSince.set(member.playerId, now);
+    // The last player leaving starts the room's close countdown, which the
+    // caller stores (it must survive the object sleeping until then).
+    const presenceChanged = this.syncPlayersGone(now);
     return {
       changed: false,
       revision: this.state.revision,
       // The grace start must be stored; nothing else here is durable.
       spectatorOffline,
+      presenceChanged,
       ...(playerOffline ? { playerOffline: true, playerId: member.playerId } : {}),
     };
   }
@@ -3538,29 +3567,24 @@ export class RoomEngine {
       return {
         changed: false,
         expired: true,
+        reason: this.state.closedReason ?? ROOM_CLOSED_EXPIRED,
         revision: this.state.revision,
         room: null,
         nextDueAt: null,
       };
     }
-    if (now >= this.state.expiresAt) {
-      this.state.expiredAt = now;
-      this.state.updatedAt = now;
-      this.incrementRevision();
-      return {
-        changed: true,
-        expired: true,
-        revision: this.state.revision,
-        room: null,
-        nextDueAt: null,
-      };
-    }
+    if (now >= this.state.expiresAt) return this.close(ROOM_CLOSED_EXPIRED, now);
     const evictedSpectators = this.evictExpiredSpectators(now);
     const evictedPlayers = this.evictExpiredPlayerReservations(now);
     if (evictedPlayers > 0) {
       this.refreshFriendControllers();
       this.syncTimeControlRunning(now);
     }
+    // After a restart (a deploy drops every connection) nobody is connected
+    // yet: the countdown then starts now, never earlier.
+    const presenceChanged = this.syncPlayersGone(now);
+    const gone = this.playersGone();
+    if (gone && now >= gone.at) return this.close(gone.reason, now);
     const advancedClock = advanceTimeControl(this.state.timeControl, now);
     if (
       advancedClock?.outcome &&
@@ -3623,6 +3647,8 @@ export class RoomEngine {
     }
     return {
       changed: false,
+      // Only the room object's stored copy needs it; pages see nothing new.
+      presenceChanged,
       expired: false,
       revision: this.state.revision,
       room: room(),
@@ -3686,6 +3712,7 @@ export class RoomEngine {
     const playerReservationDueAt = this.nextPlayerReservationCleanupDueAt();
     return Math.min(
       this.state.expiresAt,
+      this.playersGone()?.at ?? Number.POSITIVE_INFINITY,
       clockDueAt ?? Number.POSITIVE_INFINITY,
       this.state.scoringDeadline?.at ?? Number.POSITIVE_INFINITY,
       spectatorDueAt ?? Number.POSITIVE_INFINITY,
@@ -4052,6 +4079,30 @@ export class RoomEngine {
     if (match?.status !== MATCH_STATUS_FINISHED || !(match.roundId >= 1) || match.startedAt === null) {
       return null;
     }
+    return this.roundRecord(this.roundEntry(now));
+  }
+
+  /**
+   * The round being played when the room closed because both players were
+   * gone (ROOM_CLOSED_INTERRUPTED), as a game record without a result;
+   * null when no such round was under way.
+   */
+  interruptedRoundRecord() {
+    const match = this.state.match;
+    const at = this.state.expiredAt;
+    if (this.state.closedReason !== ROOM_CLOSED_INTERRUPTED || at === null ||
+        !(match?.roundId >= 1) || match.startedAt === null || !this.roundInProgress()) {
+      return null;
+    }
+    return this.roundRecord({
+      ...this.roundEntry(at),
+      finishedAt: at,
+      result: { winner: null, reason: "interrupted", finishedAt: at },
+    });
+  }
+
+  roundRecord(entry) {
+    const match = this.state.match;
     const seat = (color) => {
       const controller = match.controllers?.[color] ?? null;
       const operatorId = typeof controller?.operatorId === "string" ? controller.operatorId : null;
@@ -4062,7 +4113,7 @@ export class RoomEngine {
       return { kind: "human", name: (operatorId && this.member(operatorId)?.name) || null, operatorId, userId };
     };
     return {
-      ...this.roundEntry(now),
+      ...entry,
       gameType: gameTypeOf(this.game),
       incarnationId: this.state.incarnationId,
       players: { [BLACK]: seat(BLACK), [WHITE]: seat(WHITE) },
@@ -4559,7 +4610,79 @@ export class RoomEngine {
   touchMember(member, now) {
     member.lastSeenAt = now;
     this.state.updatedAt = now;
-    this.state.expiresAt = now + ROOM_TTL_MS;
+    // Watching never keeps a room open; a player acting is here.
+    if (member.role === "player") {
+      this.state.expiresAt = now + ROOM_TTL_MS;
+      if (Number.isFinite(this.playersGoneSince)) {
+        this.playersGoneSince = Math.max(this.playersGoneSince, now);
+      }
+    }
+  }
+
+  /**
+   * When the room closes because its players are gone, and why; null while
+   * one of them is here. Spectators do not count. A game being played waits
+   * ROUND_ABANDONED_CLOSE_MS and is saved as interrupted; a host alone
+   * waiting for an opponent, HOST_GONE_CLOSE_MS; otherwise (between games)
+   * PLAYERS_GONE_CLOSE_MS, all from when the last player left.
+   */
+  playersGone() {
+    if (this.state.expiredAt !== null) return null;
+    const people = this.people();
+    if (people.some((member) => this.isOnline(member.playerId))) return null;
+    // Until syncPlayersGone notices nobody is here, nothing is due.
+    const left = this.playersGoneSince;
+    if (!Number.isFinite(left)) return null;
+    if (this.roundInProgress()) {
+      return { at: left + ROUND_ABANDONED_CLOSE_MS, reason: ROOM_CLOSED_INTERRUPTED };
+    }
+    return {
+      at: left + (people.length <= 1 ? HOST_GONE_CLOSE_MS : PLAYERS_GONE_CLOSE_MS),
+      reason: ROOM_CLOSED_PLAYERS_GONE,
+    };
+  }
+
+  /** The seated people (not AI seats); spectators never count. */
+  people() {
+    return this.state.members.filter((member) =>
+      member.role === "player" && member.automated !== true);
+  }
+
+  /**
+   * Keep playersGoneSince (when the room was last left without any
+   * of its players) in step with who is connected. Returns whether it
+   * changed: the room object stores it, so a sleeping room still closes on
+   * time and a restarted one never closes early.
+   */
+  syncPlayersGone(now) {
+    if (this.state.expiredAt !== null) return false;
+    const here = this.people().some((member) => this.isOnline(member.playerId));
+    const since = Number.isFinite(this.playersGoneSince) ? this.playersGoneSince : null;
+    if (here && since !== null) {
+      this.playersGoneSince = null;
+      return true;
+    }
+    if (!here && since === null) {
+      this.playersGoneSince = now;
+      return true;
+    }
+    return false;
+  }
+
+  /** Close the room (the room object then saves what it must and retires it). */
+  close(reason, now) {
+    this.state.expiredAt = now;
+    this.state.closedReason = reason;
+    this.state.updatedAt = now;
+    this.incrementRevision();
+    return {
+      changed: true,
+      expired: true,
+      reason,
+      revision: this.state.revision,
+      room: null,
+      nextDueAt: null,
+    };
   }
 
   bumpPositionEpoch() {
@@ -4583,6 +4706,7 @@ export class RoomEngine {
 
   commit(now) {
     this.syncScoringDeadline(now);
+    this.syncPlayersGone(now);
     this.incrementRevision();
     this.state.updatedAt = now;
     this.state.expiresAt = now + ROOM_TTL_MS;

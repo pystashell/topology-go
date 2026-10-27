@@ -2214,11 +2214,15 @@ test("new games and player departures clear pending undo requests", () => {
 
 test("expires exactly 24 hours after the last meaningful room touch", () => {
   const room = createRoom(10_000);
+  // The host stays connected; a room its players left closes much sooner
+  // (test/roomLifecycle.test.js).
+  room.resumeConnection("black-player", "host-socket", 10_000);
   const before = room.advance(10_000 + ROOM_TTL_MS - 1);
   assert.equal(before.expired, false);
 
   const expired = room.advance(10_000 + ROOM_TTL_MS);
   assert.equal(expired.expired, true);
+  assert.equal(expired.reason, "expired");
   assert.equal(expired.room, null);
   assert.equal(room.nextDueAt(), null);
 });
@@ -2573,6 +2577,8 @@ test("legacy and default rooms remain untimed", () => {
   delete legacy.timeControl;
   const restored = RoomEngine.restore(legacy);
   assert.equal(restored.snapshot(1_002).timeControl, null);
+  // No clock is ever due; with the host here only the TTL is.
+  restored.resumeConnection("black-player", "host-socket", 1_002);
   assert.equal(restored.nextDueAt(), restored.state.expiresAt);
 });
 

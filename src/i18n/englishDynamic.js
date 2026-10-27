@@ -2,6 +2,16 @@
 // lets every local/online/AI renderer share one code path while the i18n layer
 // chooses what each browser displays.
 export const ENGLISH_DYNAMIC = Object.freeze({
+  // Rooms that close by themselves (worker/BadukRoom.js, src/main.js, src/app/myGames.js).
+  "对局中断，不计胜负": "Interrupted: no result",
+  "房间已经关闭。": "The room has closed.",
+  "这个房间已经关闭。": "This room has closed.",
+  "棋手都离开了，房间已经关闭。": "The players left, so the room has closed.",
+  "双方离开超过 30 分钟，这盘棋按中断保存，房间已经关闭。":
+    "Both players were away for over 30 minutes: the game was saved as interrupted and the room has closed.",
+  "房间已经关闭；这盘棋可以接着回看。": "The room has closed; you can keep replaying this game.",
+  "房间已经建立。请在棋盘设置中确认配置并发起对局；对手进来之前请留在这个页面，离开超过 2 分钟房间会关闭。":
+    "The room is ready. Confirm the setup under Board settings and start a game; stay on this page until your opponent arrives, as the room closes 2 minutes after you leave.",
   // Accounts (src/app/account.js).
   "你的账号": "Your account",
   "没有填邮箱。": "No email.",
@@ -941,6 +951,7 @@ export const ENGLISH_PATTERNS = Object.freeze([
     replace: (_, hours) => `${hours} hour${hours === "1" ? "" : "s"} ago`,
   },
   { pattern: /^房间 ([A-Z0-9]{6})$/u, replace: "Room $1" },
+  { pattern: /^房间 ([A-Z0-9]{6}) 已经关闭；这是你在里面下的最后一盘。$/u, replace: "Room $1 has closed; this is the last game you played there." },
   // Accounts (src/app/account.js): names and addresses are kept as typed.
   { pattern: /^邮箱：(.+)$/u, replace: "Email: $1" },
   { pattern: /^注册成功，已登录：(.+)。$/u, replace: "Registered and signed in as $1." },
