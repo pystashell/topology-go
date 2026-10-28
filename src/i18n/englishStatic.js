@@ -73,7 +73,11 @@ export const ENGLISH_STATIC = Object.freeze({
   "别人看到的名字和用密码登录时填的用户名都会变；已经下完的棋还显示当时的名字。":
     "This changes the name others see and the username you sign in with; finished games keep the name they were played under.",
   "保存用户名": "Save username",
-  "下面每一种方式都能登录这个账号，至少要保留一种。": "Each of these signs in to this account; at least one must stay.",
+  "删除账号": "Delete account",
+  "删除后不能恢复：这个账号的登录方式、邮箱和“我的棋谱”都会删掉，用户名别人可以再注册。和别人下过的棋，对方的棋谱里还在。":
+    "This cannot be undone: the account's ways to sign in, its email and My games are deleted, and someone else may register the username. Games you played with others stay in their records.",
+  "输入你的用户名确认": "Type your username to confirm",
+  "永久删除账号": "Delete the account for good",
   "绑定 Google 账号": "Bind a Google account",
   "奇异棋盘在线大厅": "Unusual Board Online Lobby",
   "创建竹筒、甜甜圈或莫比乌斯棋局；好友、人机、AI 自对弈和同机双人都可实时同步并开放观战。":

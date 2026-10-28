@@ -157,11 +157,26 @@
               <div class="settings-actions">
                 <button id="settings-sign-out" class="secondary-button danger-button" type="button">退出登录</button>
               </div>
+              <section class="settings-danger" aria-labelledby="settings-delete-title">
+                <h3 id="settings-delete-title">删除账号</h3>
+                <p class="settings-note">删除后不能恢复：这个账号的登录方式、邮箱和“我的棋谱”都会删掉，用户名别人可以再注册。和别人下过的棋，对方的棋谱里还在。</p>
+                <form id="settings-delete-form" class="settings-form" novalidate>
+                  <label class="dialog-field" for="settings-delete-username">
+                    <span>输入你的用户名确认</span>
+                    <input id="settings-delete-username" type="text" maxlength="128" autocomplete="off" autocapitalize="off" spellcheck="false" />
+                  </label>
+                  <label id="settings-delete-password-field" class="dialog-field" for="settings-delete-password" hidden>
+                    <span>当前密码</span>
+                    <input id="settings-delete-password" type="password" maxlength="128" autocomplete="current-password" />
+                  </label>
+                  <p id="settings-delete-note" class="settings-note" hidden></p>
+                  <button id="settings-delete-submit" class="secondary-button danger-button" type="submit">永久删除账号</button>
+                </form>
+              </section>
             </section>
 
             <section class="settings-panel" data-settings-panel="sign-in" aria-labelledby="settings-sign-in-title" hidden>
               <h2 id="settings-sign-in-title">登录方式</h2>
-              <p class="settings-note">下面每一种方式都能登录这个账号，至少要保留一种。</p>
               <ul id="settings-methods" class="settings-methods"></ul>
               <div id="settings-link-google-row" class="settings-actions" hidden>
                 <button id="settings-link-google" class="secondary-button google-button" type="button">

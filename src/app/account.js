@@ -6,7 +6,8 @@
  * settings page (/settings) changes the username, lists the ways to sign in
  * (password, email codes, each bound Google account, which can be unbound
  * or another one bound), adds, confirms and changes the email (by code:
- * registering takes no email) and sets a new password. A guest who registers or signs in keeps its games
+ * registering takes no email), sets a new password and deletes the account
+ * (its username typed to confirm). A guest who registers or signs in keeps its games
  * (worker/auth.js adoptGuest). Someone who forgot their password signs in
  * with an email code and lands on the new password (worker/accounts.js).
  * The session lives in an HttpOnly cookie scripts cannot read; this page
@@ -31,7 +32,8 @@ import {
 } from "../main.js";
 
 const HINT_STORAGE_KEY = "topology-go-account-v1";
-// Set before the page reloads after signing out, to say so afterwards.
+// Set before the page reloads after signing out ("1") or deleting the
+// account ("deleted"), to say so afterwards.
 const SIGNED_OUT_KEY = "topology-go-signed-out";
 // Set before going to the settings page after signing in with a code.
 const CODE_SIGNED_IN_KEY = "topology-go-code-signed-in";
@@ -309,7 +311,7 @@ function clearSecrets() {
   for (const input of [
     elements.signInPassword, elements.registerPassword, elements.registerPasswordAgain,
     elements.codeInput, elements.settingsEmailCode, elements.settingsCurrentPassword,
-    elements.settingsNewPassword, elements.settingsNewPasswordAgain,
+    elements.settingsNewPassword, elements.settingsNewPasswordAgain, elements.settingsDeletePassword,
   ]) {
     input.value = "";
   }
@@ -446,6 +448,24 @@ function submitAccountForm() {
 }
 
 /**
+ * Signed out (or the account deleted): this browser forgets the account and
+ * its seats in rooms, then starts over and says why (handleAccountReturn).
+ */
+function forgetThisBrowser(reason) {
+  writeHint(null);
+  roomClient.disconnect({ preserveSession: true });
+  for (const code of new Set(roomClient.listAllStoredSessions().map((entry) => entry.code))) {
+    roomClient.forgetStoredSessions(code);
+  }
+  try {
+    window.sessionStorage.setItem(SIGNED_OUT_KEY, reason);
+  } catch {
+    // The page still starts over; it just does not say why.
+  }
+  window.location.assign("/single");
+}
+
+/**
  * Sign out: this browser forgets the account and its seats in rooms (on a
  * shared computer nobody else can go on with your games), then starts over.
  * Signing in again, here or anywhere, brings the seats back.
@@ -463,17 +483,7 @@ async function signOut() {
     showSettingsError(message);
     return;
   }
-  writeHint(null);
-  roomClient.disconnect({ preserveSession: true });
-  for (const code of new Set(roomClient.listAllStoredSessions().map((entry) => entry.code))) {
-    roomClient.forgetStoredSessions(code);
-  }
-  try {
-    window.sessionStorage.setItem(SIGNED_OUT_KEY, "1");
-  } catch {
-    // The page still starts over; it just does not say why.
-  }
-  window.location.assign("/single");
+  forgetThisBrowser("1");
 }
 
 async function startGoogleSignIn() {
@@ -600,6 +610,15 @@ function renderSettings() {
     : needCurrent
       ? "需要当前密码。忘了的话，先退出，再用邮箱验证码登录：登录后 10 分钟内可以直接设新密码。"
       : "你刚登录，可以直接设新密码。改好后，其他设备上的登录会退出。";
+  renderDeleteForm();
+}
+
+/** Deleting the account: just signed in, or the current password, or sign in again. */
+function renderDeleteForm() {
+  const fresh = Date.now() <= (account?.freshUntil ?? 0);
+  elements.settingsDeletePasswordField.hidden = fresh || !account?.hasPassword;
+  elements.settingsDeleteNote.hidden = fresh || Boolean(account?.hasPassword);
+  elements.settingsDeleteNote.textContent = "为了安全，请先退出再重新登录，登录后 10 分钟内可以删除账号。";
 }
 
 function showSettingsSection(section, { focus = true } = {}) {
@@ -662,6 +681,21 @@ async function saveUsername() {
   elements.settingsUsernameInput.value = "";
   accountSeen(payload.account);
   showSettingsInfo(`用户名已改成 ${name}。`);
+}
+
+async function deleteOwnAccount() {
+  // The ten minutes after signing in may have run out since the page showed it.
+  renderDeleteForm();
+  const username = elements.settingsDeleteUsername.value.trim();
+  if (!username) {
+    showSettingsError("请输入你的用户名，确认要删除这个账号。");
+    elements.settingsDeleteUsername.focus();
+    return;
+  }
+  const body = { username };
+  if (!elements.settingsDeletePasswordField.hidden) body.currentPassword = elements.settingsDeletePassword.value;
+  await postAccount("/api/account/delete", body);
+  forgetThisBrowser("deleted");
 }
 
 async function linkGoogle() {
@@ -755,6 +789,10 @@ function wireSettings() {
     event.preventDefault();
     void settingsAction(saveUsername, "暂时无法修改用户名，请稍后再试。");
   });
+  elements.settingsDeleteForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void settingsAction(deleteOwnAccount, "暂时无法删除账号，请稍后再试。");
+  });
   elements.settingsLinkGoogle.addEventListener("click", () =>
     void settingsAction(linkGoogle, "暂时不能绑定 Google 账号。"));
   elements.settingsMethods.addEventListener("click", (event) => {
@@ -781,14 +819,15 @@ function wireSettings() {
  * the marker off the address. `url` is the address the page opened with.
  */
 function handleAccountReturn(url) {
-  let signedOut = false;
+  let signedOut = null;
   try {
-    signedOut = window.sessionStorage.getItem(SIGNED_OUT_KEY) === "1";
+    signedOut = window.sessionStorage.getItem(SIGNED_OUT_KEY);
     window.sessionStorage.removeItem(SIGNED_OUT_KEY);
   } catch {
     // Nothing to report.
   }
-  if (signedOut) setMessage("已退出登录。这个浏览器不再保留你的账号和房间身份。");
+  if (signedOut === "deleted") setMessage("账号已删除。");
+  else if (signedOut) setMessage("已退出登录。这个浏览器不再保留你的账号和房间身份。");
   const binding = url.searchParams.get("google");
   if (binding === "linked" || binding === "link-failed") {
     const current = new URL(window.location.href);

@@ -27,6 +27,9 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "解绑": "Unbind",
   "确认解绑": "Confirm unbind",
   "已解绑这个 Google 账号。": "That Google account was unbound.",
+  "请输入你的用户名，确认要删除这个账号。": "Type your username to confirm deleting this account.",
+  "暂时无法删除账号，请稍后再试。": "The account cannot be deleted right now. Try again shortly.",
+  "账号已删除。": "The account was deleted.",
   "Google 账号已绑定。": "The Google account is bound.",
   "这个 Google 账号已经绑定在另一个账号上了。先在那个账号里解绑，或者直接用它登录那个账号。":
     "That Google account is already bound to another account. Unbind it there first, or use it to sign in to that account.",

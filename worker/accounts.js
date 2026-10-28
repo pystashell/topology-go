@@ -15,6 +15,10 @@
  * decision, 2026-10-28): registering takes a username and a password, the
  * email is added in account settings, and Google's addresses come
  * confirmed. Only confirmed emails sign in or receive sign-in codes.
+ *
+ * Someone may delete their own account (its username typed to confirm),
+ * with the same guard as a new password: just signed in, or the current
+ * password.
  */
 import {
   PASSWORD_MAX_LENGTH,
@@ -27,6 +31,7 @@ import {
 import {
   authFor,
   currentSession,
+  deleteAccount,
   googleConfigured,
   passwordsConfigured,
   withCookies,
@@ -65,6 +70,8 @@ const FAILURES = {
   emailVerified: [409, "EMAIL_ALREADY_VERIFIED", "这个邮箱已经验证过了。"],
   googleNotLinked: [404, "GOOGLE_NOT_LINKED", "没有找到这个 Google 账号。"],
   lastSignInMethod: [409, "LAST_SIGN_IN_METHOD", "这是你现在唯一的登录方式。先设置密码或绑定邮箱，再解绑它。"],
+  usernameMismatch: [400, "USERNAME_MISMATCH", "输入的用户名和这个账号的不一样。"],
+  signInAgain: [403, "SIGN_IN_AGAIN", "为了安全，请先退出再重新登录，登录后 10 分钟内可以删除账号。"],
 };
 
 // Codes that were not sent, as worker/email.js names them.
@@ -189,6 +196,22 @@ async function whoAmI(request, env) {
   });
 }
 
+/** Whether this session began within FRESH_SIGN_IN_MS (no current password asked). */
+function freshlySignedIn(found) {
+  return Date.now() <= new Date(found.session.createdAt).getTime() + FRESH_SIGN_IN_MS;
+}
+
+/** The current password, when it is asked for: null when right, else the failure. */
+async function currentPasswordFailure(context, credential, given) {
+  const current = typeof given === "string" ? given : "";
+  if (!current) return "needCurrentPassword";
+  if (current.length > PASSWORD_MAX_LENGTH ||
+      !(await context.password.verify({ hash: credential.password, password: current }))) {
+    return "wrongPassword";
+  }
+  return null;
+}
+
 /** Signed in to an account (not a guest): { auth, found }, or a failure Response. */
 async function signedInAccount(request, env) {
   const auth = authFor(env, request);
@@ -263,14 +286,9 @@ async function setNewPassword(request, env) {
     const context = await auth.$context;
     const userId = found.user.id;
     const credential = await context.internalAdapter.findCredentialAccount(userId);
-    const fresh = Date.now() <= new Date(found.session.createdAt).getTime() + FRESH_SIGN_IN_MS;
-    if (credential?.password && !fresh) {
-      const current = typeof body?.currentPassword === "string" ? body.currentPassword : "";
-      if (!current) return failure("needCurrentPassword");
-      if (current.length > PASSWORD_MAX_LENGTH ||
-          !(await context.password.verify({ hash: credential.password, password: current }))) {
-        return failure("wrongPassword");
-      }
+    if (credential?.password && !freshlySignedIn(found)) {
+      const wrong = await currentPasswordFailure(context, credential, body?.currentPassword);
+      if (wrong) return failure(wrong);
     }
     const hash = await context.password.hash(body.password);
     if (credential) {
@@ -504,6 +522,47 @@ async function unlinkGoogle(request, env) {
   }
 }
 
+/**
+ * Whether `typed` is the account's name as the page shows it (case and
+ * width aside): its username, or the name Google gave an account made by
+ * signing in with Google, which has none until changed.
+ */
+function namesAccount(user, typed) {
+  const shown = accountSummary(user)?.name;
+  return typeof typed === "string" && Boolean(shown) && usernameKey(typed.trim()) === usernameKey(shown);
+}
+
+/**
+ * Delete the signed-in account for good, its username typed to confirm.
+ * Unless just signed in, the current password is asked for, or (an account
+ * without one) signing in again: a session left open on a shared computer
+ * cannot delete the account. This browser is signed out.
+ */
+async function deleteOwnAccount(request, env) {
+  const signedIn = await signedInAccount(request, env);
+  if (signedIn instanceof Response) return signedIn;
+  const { auth, found } = signedIn;
+  const body = await readJsonBody(request);
+  try {
+    const context = await auth.$context;
+    // The stored user, not the session's copy (cached for minutes).
+    const user = await context.internalAdapter.findUserById(found.user.id);
+    if (!user || !namesAccount(user, body?.username)) return failure("usernameMismatch");
+    if (!freshlySignedIn(found)) {
+      const credential = await context.internalAdapter.findCredentialAccount(user.id);
+      if (!credential?.password) return failure("signInAgain");
+      const wrong = await currentPasswordFailure(context, credential, body?.currentPassword);
+      if (wrong) return failure(wrong);
+    }
+    await deleteAccount(env.DB, user.id);
+    // Its session is gone already; this clears the cookies.
+    const { headers } = await auth.api.signOut({ headers: request.headers, returnHeaders: true });
+    return withCookies(jsonResponse({ ok: true }), cookiesOf(headers));
+  } catch (error) {
+    return authFailure(error);
+  }
+}
+
 const ROUTES = {
   "/api/account": { GET: whoAmI },
   "/api/account/register": { POST: register },
@@ -518,6 +577,7 @@ const ROUTES = {
   "/api/account/username": { POST: changeUsername },
   "/api/account/google/link": { POST: linkGoogle },
   "/api/account/google/unlink": { POST: unlinkGoogle },
+  "/api/account/delete": { POST: deleteOwnAccount },
 };
 
 // Routes that guess at secrets (passwords, codes) or send mail: their own,
@@ -530,6 +590,7 @@ export const SIGN_IN_PATHS = new Set([
   "/api/account/password",
   "/api/account/email",
   "/api/account/email/confirm",
+  "/api/account/delete",
 ]);
 
 export function isAccountPath(pathname) {
