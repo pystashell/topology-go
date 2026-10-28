@@ -7,6 +7,9 @@
  * address and the session lookup pass through (worker/index.js).
  *
  * A guest that registers or signs in brings its games along (adoptGuest).
+ * Someone who forgot their password signs in with a code sent to their
+ * email (worker/email.js) and sets a new one: within FRESH_SIGN_IN_MS of
+ * signing in no current password is asked for.
  */
 import {
   PASSWORD_MAX_LENGTH,
@@ -17,12 +20,25 @@ import {
 } from "../src/multiplayer/accountRules.js";
 import {
   authFor,
+  currentSession,
   googleConfigured,
   passwordsConfigured,
-  sessionUser,
   withCookies,
 } from "./auth.js";
+import {
+  EmailLimitError,
+  checkCodeAllowed,
+  collectingCodes,
+  emailCodesConfigured,
+  sendCodeEmail,
+} from "./email.js";
 import { jsonResponse, readJsonBody } from "./http.js";
+
+// Just after signing in (a code from one's email, Google or the password),
+// a new password needs no current one: how a forgotten password is replaced.
+const FRESH_SIGN_IN_MS = 10 * 60 * 1_000;
+// How soon a page may ask for another code (the same as worker/email.js).
+const CODE_RESEND_SECONDS = 60;
 
 const FAILURES = {
   unavailable: [503, "AUTH_UNAVAILABLE", "账号服务暂时不可用。"],
@@ -33,6 +49,23 @@ const FAILURES = {
   emailTaken: [409, "EMAIL_TAKEN", "这个邮箱已经注册过了，可以直接用它登录。"],
   wrongLogin: [401, "WRONG_LOGIN", "用户名（或邮箱）或密码不对。"],
   googleUnavailable: [404, "GOOGLE_UNAVAILABLE", "暂时不能用 Google 登录。"],
+  codesUnavailable: [404, "EMAIL_CODES_UNAVAILABLE", "暂时不能用邮箱验证码。"],
+  wrongCode: [400, "WRONG_CODE", "验证码不对，或者已经用过了。"],
+  codeExpired: [400, "CODE_EXPIRED", "验证码已经过期，请重新获取。"],
+  tooManyTries: [429, "TOO_MANY_TRIES", "验证码试错太多次，请重新获取。"],
+  notSignedIn: [401, "NOT_SIGNED_IN", "请先登录账号。"],
+  needCurrentPassword: [400, "NEED_CURRENT_PASSWORD", "请输入当前密码（刚登录的 10 分钟内可以不填）。"],
+  wrongPassword: [401, "WRONG_PASSWORD", "当前密码不对。"],
+  emailVerified: [409, "EMAIL_ALREADY_VERIFIED", "这个邮箱已经验证过了。"],
+};
+
+// Codes that were not sent, as worker/email.js names them.
+const EMAIL_FAILURES = {
+  EMAIL_COOLDOWN: [429, "请等一分钟再获取验证码。"],
+  EMAIL_ADDRESS_LIMIT: [429, "这个邮箱这一小时收到的验证码太多了，请稍后再试。"],
+  EMAIL_DAILY_LIMIT: [429, "今天的验证码已经发完了，请明天再试，或者用密码、Google 登录。"],
+  EMAIL_SEND_FAILED: [503, "邮件暂时发不出去，请稍后再试。"],
+  EMAIL_CODES_UNAVAILABLE: [404, "暂时不能用邮箱验证码。"],
 };
 
 // Better Auth's error codes, as the site explains them.
@@ -48,6 +81,9 @@ const BETTER_AUTH_FAILURES = {
   INVALID_EMAIL: "badEmail",
   PASSWORD_TOO_SHORT: "badPassword",
   PASSWORD_TOO_LONG: "badPassword",
+  INVALID_OTP: "wrongCode",
+  OTP_EXPIRED: "codeExpired",
+  TOO_MANY_ATTEMPTS: "tooManyTries",
 };
 
 // Where Google sign-in returns: a path of this site (the page it started on).
@@ -59,6 +95,16 @@ function failure(key) {
 }
 
 function authFailure(error) {
+  // A code not sent (thrown from inside Better Auth, possibly wrapped).
+  const limited = [error, error?.cause].find((value) => value instanceof EmailLimitError);
+  if (limited) {
+    const [status, message] = EMAIL_FAILURES[limited.code] ?? EMAIL_FAILURES.EMAIL_SEND_FAILED;
+    return jsonResponse(
+      { error: message, code: limited.code, ...(limited.retryAfterSeconds ? { retryAfter: limited.retryAfterSeconds } : {}) },
+      status,
+      limited.retryAfterSeconds ? { "Retry-After": String(limited.retryAfterSeconds) } : {},
+    );
+  }
   const key = BETTER_AUTH_FAILURES[error?.body?.code];
   if (key) return failure(key);
   console.error("Account request failed", error);
@@ -85,11 +131,193 @@ function madeUpEmail() {
   return `${crypto.randomUUID().replaceAll("-", "")}@account.invalid`;
 }
 
+/**
+ * The account dialog's details: whether the email is confirmed, whether
+ * there is a password, and until when a new one needs no current one.
+ */
+async function accountDetails(auth, found) {
+  const summary = accountSummary(found?.user);
+  if (!summary || summary.guest) return summary;
+  const context = await auth.$context;
+  const credential = await context.internalAdapter.findCredentialAccount(found.user.id);
+  return {
+    ...summary,
+    emailVerified: Boolean(summary.email && found.user.emailVerified),
+    hasPassword: Boolean(credential?.password),
+    freshUntil: new Date(found.session.createdAt).getTime() + FRESH_SIGN_IN_MS,
+  };
+}
+
 async function whoAmI(request, env) {
+  const auth = authFor(env, request);
+  const found = auth ? await currentSession(env, request) : null;
+  let account = accountSummary(found?.user);
+  if (account && !account.guest) {
+    try {
+      account = await accountDetails(auth, found);
+    } catch (error) {
+      console.error("Reading account details failed", error);
+    }
+  }
   return jsonResponse({
-    account: accountSummary(await sessionUser(env, request)),
-    signIn: { passwords: passwordsConfigured(env), google: googleConfigured(env) },
+    account,
+    signIn: {
+      passwords: passwordsConfigured(env),
+      google: googleConfigured(env),
+      emailCodes: passwordsConfigured(env) && emailCodesConfigured(env),
+    },
   });
+}
+
+/** Signed in to an account (not a guest): { auth, found }, or a failure Response. */
+async function signedInAccount(request, env) {
+  const auth = authFor(env, request);
+  if (!auth || !passwordsConfigured(env)) return failure("unavailable");
+  const found = await currentSession(env, request);
+  if (!found?.user || found.user.isAnonymous) return failure("notSignedIn");
+  return { auth, found };
+}
+
+/**
+ * A sign-in code for a registered email. The answer is the same whether
+ * or not the address belongs to an account (nothing is sent if not).
+ */
+async function sendSignInCode(request, env) {
+  const auth = authFor(env, request);
+  if (!auth || !passwordsConfigured(env) || !emailCodesConfigured(env)) return failure("codesUnavailable");
+  const body = await readJsonBody(request);
+  const email = cleanEmail(body?.email);
+  if (!email) return failure("badEmail");
+  try {
+    const context = await auth.$context;
+    if (await context.internalAdapter.findUserByEmail(email)) {
+      await mailCodes(env, () =>
+        auth.api.sendVerificationOTP({ headers: request.headers, body: { email, type: "sign-in" } }), email);
+    }
+    return jsonResponse({ ok: true, resendAfter: CODE_RESEND_SECONDS });
+  } catch (error) {
+    return authFailure(error);
+  }
+}
+
+/**
+ * Ask Better Auth for a code and mail it: the caps are checked first, so a
+ * refused request leaves the code someone already has working.
+ */
+async function mailCodes(env, makeCode, address) {
+  await checkCodeAllowed(env, address);
+  const { codes } = await collectingCodes(makeCode);
+  for (const code of codes) await sendCodeEmail(env, code);
+}
+
+async function signInWithCode(request, env) {
+  const auth = authFor(env, request);
+  if (!auth || !passwordsConfigured(env) || !emailCodesConfigured(env)) return failure("codesUnavailable");
+  const body = await readJsonBody(request);
+  const email = cleanEmail(body?.email);
+  const code = typeof body?.code === "string" ? body.code.trim() : "";
+  if (!email || !/^\d{6}$/u.test(code)) return failure("wrongCode");
+  try {
+    const { headers, response } = await auth.api.signInEmailOTP({
+      headers: request.headers, returnHeaders: true, body: { email, otp: code },
+    });
+    return withCookies(jsonResponse({ account: accountSummary(response?.user) }), cookiesOf(headers));
+  } catch (error) {
+    return authFailure(error);
+  }
+}
+
+/**
+ * Set a new password while signed in. Just after signing in none of the
+ * current one is asked for (how a forgotten password is replaced: sign in
+ * with a code first); later it is, so a session left open on a shared
+ * computer cannot take the account. Every other sign-in is then ended.
+ */
+async function setNewPassword(request, env) {
+  const signedIn = await signedInAccount(request, env);
+  if (signedIn instanceof Response) return signedIn;
+  const { auth, found } = signedIn;
+  const body = await readJsonBody(request);
+  if (!passwordAllowed(body?.password)) return failure("badPassword");
+  try {
+    const context = await auth.$context;
+    const userId = found.user.id;
+    const credential = await context.internalAdapter.findCredentialAccount(userId);
+    const fresh = Date.now() <= new Date(found.session.createdAt).getTime() + FRESH_SIGN_IN_MS;
+    if (credential?.password && !fresh) {
+      const current = typeof body?.currentPassword === "string" ? body.currentPassword : "";
+      if (!current) return failure("needCurrentPassword");
+      if (current.length > PASSWORD_MAX_LENGTH ||
+          !(await context.password.verify({ hash: credential.password, password: current }))) {
+        return failure("wrongPassword");
+      }
+    }
+    const hash = await context.password.hash(body.password);
+    if (credential) {
+      await context.internalAdapter.updatePassword(userId, hash);
+    } else {
+      await context.internalAdapter.linkAccount({ userId, providerId: "credential", accountId: userId, password: hash });
+    }
+    for (const other of await context.internalAdapter.listSessions(userId)) {
+      if (other.token !== found.session.token) await context.internalAdapter.deleteSession(other.token);
+    }
+    return jsonResponse({ ok: true, account: await accountDetails(auth, found) });
+  } catch (error) {
+    return authFailure(error);
+  }
+}
+
+/**
+ * A code to confirm an email for the signed-in account: the one it has
+ * (not yet confirmed), or a new one to add or change to.
+ */
+async function sendEmailCode(request, env) {
+  const signedIn = await signedInAccount(request, env);
+  if (signedIn instanceof Response) return signedIn;
+  if (!emailCodesConfigured(env)) return failure("codesUnavailable");
+  const { auth, found } = signedIn;
+  const body = await readJsonBody(request);
+  const email = cleanEmail(body?.email);
+  if (!email) return failure("badEmail");
+  try {
+    if (email === found.user.email) {
+      if (found.user.emailVerified) return failure("emailVerified");
+      await mailCodes(env, () =>
+        auth.api.sendVerificationOTP({ headers: request.headers, body: { email, type: "email-verification" } }), email);
+    } else {
+      // Better Auth says nothing when the address is taken; the page should.
+      const context = await auth.$context;
+      if (await context.internalAdapter.findUserByEmail(email)) return failure("emailTaken");
+      await mailCodes(env, () =>
+        auth.api.requestEmailChangeEmailOTP({ headers: request.headers, body: { newEmail: email } }), email);
+    }
+    return jsonResponse({ ok: true, resendAfter: CODE_RESEND_SECONDS });
+  } catch (error) {
+    return authFailure(error);
+  }
+}
+
+async function confirmEmail(request, env) {
+  const signedIn = await signedInAccount(request, env);
+  if (signedIn instanceof Response) return signedIn;
+  if (!emailCodesConfigured(env)) return failure("codesUnavailable");
+  const { auth, found } = signedIn;
+  const body = await readJsonBody(request);
+  const email = cleanEmail(body?.email);
+  const code = typeof body?.code === "string" ? body.code.trim() : "";
+  if (!email || !/^\d{6}$/u.test(code)) return failure("wrongCode");
+  try {
+    const { headers } = email === found.user.email
+      ? await auth.api.verifyEmailOTP({ headers: request.headers, returnHeaders: true, body: { email, otp: code } })
+      : await auth.api.changeEmailEmailOTP({ headers: request.headers, returnHeaders: true, body: { newEmail: email, otp: code } });
+    const user = { ...found.user, email, emailVerified: true };
+    return withCookies(
+      jsonResponse({ ok: true, account: await accountDetails(auth, { ...found, user }) }),
+      cookiesOf(headers),
+    );
+  } catch (error) {
+    return authFailure(error);
+  }
 }
 
 async function register(request, env) {
@@ -183,9 +411,24 @@ const ROUTES = {
   "/api/account/sign-in": { POST: signIn },
   "/api/account/sign-out": { POST: signOut },
   "/api/account/google": { POST: startGoogle },
+  "/api/account/email-code": { POST: sendSignInCode },
+  "/api/account/email-sign-in": { POST: signInWithCode },
+  "/api/account/password": { POST: setNewPassword },
+  "/api/account/email": { POST: sendEmailCode },
+  "/api/account/email/confirm": { POST: confirmEmail },
 };
 
-export const SIGN_IN_PATHS = new Set(["/api/account/register", "/api/account/sign-in"]);
+// Routes that guess at secrets (passwords, codes) or send mail: their own,
+// tighter budget per address.
+export const SIGN_IN_PATHS = new Set([
+  "/api/account/register",
+  "/api/account/sign-in",
+  "/api/account/email-code",
+  "/api/account/email-sign-in",
+  "/api/account/password",
+  "/api/account/email",
+  "/api/account/email/confirm",
+]);
 
 export function isAccountPath(pathname) {
   return Object.hasOwn(ROUTES, pathname);

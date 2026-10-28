@@ -10,6 +10,7 @@ import {
 import { hashRoomToken } from "../src/multiplayer/roomEngine.js";
 import { SIGN_IN_PATHS, accountRoute, accountSummary, isAccountPath } from "./accounts.js";
 import { authFor, formerUserIds, sessionUser, userOrNewGuest, withCookies } from "./auth.js";
+import { devOutboxFor } from "./email.js";
 import { jsonResponse, readJsonBody } from "./http.js";
 import {
   MAX_RECORD_DATA_BYTES,
@@ -487,6 +488,13 @@ const worker = {
           return rateLimitedResponse();
         }
         return await accountRoute(request, env, url.pathname);
+      }
+
+      // Local development only (EMAIL_DEV_OUTBOX=1, set by npm run dev): the
+      // newest code "sent" to an address, for the browser checks.
+      if (url.pathname === "/api/dev/outbox" && env.EMAIL_DEV_OUTBOX === "1") {
+        const sent = devOutboxFor(env, (url.searchParams.get("to") ?? "").toLowerCase());
+        return sent ? jsonResponse(sent) : jsonResponse({ error: "没有这封邮件。", code: "NOT_FOUND" }, 404);
       }
 
       // Better Auth itself answers only Google's return address and the

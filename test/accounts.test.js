@@ -71,12 +71,15 @@ test("registering: a username and a password, the email only if given", async ()
   const env = accounts();
   const mia = browser(env);
   assert.deepEqual((await mia.call("/api/account")).json,
-    { account: null, signIn: { passwords: true, google: false } });
+    { account: null, signIn: { passwords: true, google: false, emailCodes: false } });
   const made = await register(mia, { username: "棋手Mia", password: "secret-123" });
   assert.equal(made.status, 201);
   assert.deepEqual(made.json, { account: { guest: false, name: "棋手Mia", email: null } });
   assert.ok(made.setCookie.some((cookie) => /session_token=/u.test(cookie) && /HttpOnly/iu.test(cookie)));
-  assert.deepEqual((await mia.call("/api/account")).json.account, { guest: false, name: "棋手Mia", email: null });
+  const me = (await mia.call("/api/account")).json.account;
+  assert.deepEqual({ ...me, freshUntil: undefined },
+    { guest: false, name: "棋手Mia", email: null, emailVerified: false, hasPassword: true, freshUntil: undefined });
+  assert.ok(me.freshUntil > Date.now(), "just signed in: a new password needs no current one");
   const [user] = env.DB.rows("user");
   assert.equal(user.username, "棋手mia", "names compare without case");
   assert.match(user.email, /@account\.invalid$/u, "a made-up address that is never shown");
@@ -273,7 +276,7 @@ test("each sign-in method is off until its secrets are set", async (t) => {
   assert.equal(googleConfigured(accounts({ GOOGLE_CLIENT_ID: "id", GOOGLE_CLIENT_SECRET: "secret" })), true);
 
   const noPepper = browser(environment());
-  assert.deepEqual((await noPepper.call("/api/account")).json.signIn, { passwords: false, google: false });
+  assert.deepEqual((await noPepper.call("/api/account")).json.signIn, { passwords: false, google: false, emailCodes: false });
   assert.equal((await register(noPepper, { username: "Mia", password: "secret-123" })).json.code, "AUTH_UNAVAILABLE");
   assert.equal((await signIn(noPepper, "Mia", "secret-123")).json.code, "AUTH_UNAVAILABLE");
   const noAuth = browser(environment({ BETTER_AUTH_SECRET: undefined, PASSWORD_PEPPER: PEPPER }));
@@ -286,7 +289,7 @@ test("each sign-in method is off until its secrets are set", async (t) => {
 test("Google sign-in starts at Google and returns to the page it left", async () => {
   const env = accounts({ GOOGLE_CLIENT_ID: "client-id.apps.googleusercontent.com", GOOGLE_CLIENT_SECRET: "client-secret" });
   const mia = browser(env);
-  assert.deepEqual((await mia.call("/api/account")).json.signIn, { passwords: true, google: true });
+  assert.deepEqual((await mia.call("/api/account")).json.signIn, { passwords: true, google: true, emailCodes: false });
   const started = await mia.call("/api/account/google", { method: "POST", body: { returnTo: "/records" } });
   assert.equal(started.status, 200);
   const url = new URL(started.json.url);

@@ -1181,6 +1181,42 @@
         <section id="account-signed-in" class="account-signed-in" hidden>
           <p>已登录：<strong id="account-name" data-i18n-ignore></strong></p>
           <p id="account-email" class="account-note"></p>
+          <p id="account-password-state" class="account-note" hidden>你的账号还没有密码，现在只能用邮箱验证码或 Google 登录。</p>
+          <div class="account-links">
+            <button id="account-email-edit" class="text-button" type="button" hidden>添加邮箱</button>
+            <button id="account-password-edit" class="text-button" type="button">设置新密码</button>
+          </div>
+
+          <div id="account-email-form" class="account-subform" data-account-enter="email" hidden>
+            <label class="dialog-field" for="account-email-input">
+              <span>邮箱</span>
+              <input id="account-email-input" type="email" maxlength="254" autocomplete="email" />
+            </label>
+            <button id="account-email-send" class="secondary-button dialog-wide-button" type="button">发送验证码</button>
+            <label class="dialog-field" for="account-email-code">
+              <span>验证码</span>
+              <input id="account-email-code" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" />
+            </label>
+            <button id="account-email-confirm" class="primary-button dialog-wide-button" type="button">确认邮箱</button>
+          </div>
+
+          <div id="account-password-form" class="account-subform" data-account-enter="password" hidden>
+            <p id="account-password-note" class="account-note"></p>
+            <label id="account-current-password-field" class="dialog-field" for="account-current-password">
+              <span>当前密码</span>
+              <input id="account-current-password" type="password" maxlength="128" autocomplete="current-password" />
+            </label>
+            <label class="dialog-field" for="account-new-password">
+              <span>新密码</span>
+              <input id="account-new-password" type="password" maxlength="128" autocomplete="new-password" placeholder="至少 8 个字符" />
+            </label>
+            <label class="dialog-field" for="account-new-password-again">
+              <span>再输一次新密码</span>
+              <input id="account-new-password-again" type="password" maxlength="128" autocomplete="new-password" />
+            </label>
+            <button id="account-password-save" class="primary-button dialog-wide-button" type="button">保存新密码</button>
+          </div>
+
           <p class="account-note">你下完的棋都存在这个账号的“我的棋谱”里，在别的设备登录同一个账号也能看到；进过的联机房间，在别的设备打开房间链接也能回到原来的席位。</p>
           <div class="dialog-actions">
             <button id="account-sign-out" class="secondary-button" type="button">退出登录</button>
@@ -1205,6 +1241,22 @@
               <input id="sign-in-password" type="password" maxlength="128" autocomplete="current-password" />
             </label>
             <button id="sign-in-submit" class="primary-button dialog-wide-button" type="submit">登录</button>
+            <button id="account-use-code" class="text-button account-switch" type="button" hidden>忘了密码？用邮箱验证码登录</button>
+          </div>
+
+          <div class="account-panel" data-account-panel="code" data-account-enter="code" hidden>
+            <p class="account-note">输入账号的邮箱，我们发一个 6 位数验证码，10 分钟内有效。登录后可以在账号里设新密码。</p>
+            <label class="dialog-field" for="code-email">
+              <span>邮箱</span>
+              <input id="code-email" type="email" maxlength="254" autocomplete="email" />
+            </label>
+            <button id="code-send" class="secondary-button dialog-wide-button" type="button">发送验证码</button>
+            <label class="dialog-field" for="code-input">
+              <span>验证码</span>
+              <input id="code-input" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" />
+            </label>
+            <button id="code-sign-in" class="primary-button dialog-wide-button" type="button">登录</button>
+            <button class="text-button account-switch" type="button" data-account-go="sign-in">用密码登录</button>
           </div>
 
           <div class="account-panel" data-account-panel="register" hidden>
@@ -1224,7 +1276,7 @@
               <span>邮箱（选填）</span>
               <input id="register-email" type="email" maxlength="254" autocomplete="email" placeholder="填了也可以用邮箱登录" />
             </label>
-            <p class="account-note">暂时还不能找回密码，请记好它。</p>
+            <p id="account-register-note" class="account-note">暂时还不能找回密码，请记好它。</p>
             <button id="register-submit" class="primary-button dialog-wide-button" type="submit">注册并登录</button>
           </div>
 
@@ -1235,6 +1287,7 @@
         </section>
 
         <p id="account-error" class="dialog-error" role="alert" hidden></p>
+        <p id="account-info" class="account-note account-info" role="status" hidden></p>
         <div id="account-cancel-row" class="dialog-actions">
           <button id="account-cancel" class="text-button" type="button">取消</button>
         </div>

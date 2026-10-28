@@ -42,6 +42,23 @@ export const ENGLISH_STATIC = Object.freeze({
   "注册并登录": "Register and sign in",
   "或者": "or",
   "用 Google 登录": "Sign in with Google",
+  // Codes by email, a new password, an added email.
+  "你的账号还没有密码，现在只能用邮箱验证码或 Google 登录。":
+    "Your account has no password yet; for now you sign in with an email code or Google.",
+  "添加邮箱": "Add email",
+  "设置新密码": "Set a new password",
+  "邮箱": "Email",
+  "发送验证码": "Send code",
+  "验证码": "Code",
+  "确认邮箱": "Confirm email",
+  "当前密码": "Current password",
+  "新密码": "New password",
+  "再输一次新密码": "New password again",
+  "保存新密码": "Save new password",
+  "忘了密码？用邮箱验证码登录": "Forgot your password? Sign in with an email code",
+  "输入账号的邮箱，我们发一个 6 位数验证码，10 分钟内有效。登录后可以在账号里设新密码。":
+    "Enter your account's email and we send a 6-digit code, valid for 10 minutes. Once signed in you can set a new password.",
+  "用密码登录": "Sign in with a password",
   "奇异棋盘在线大厅": "Unusual Board Online Lobby",
   "创建竹筒、甜甜圈或莫比乌斯棋局；好友、人机、AI 自对弈和同机双人都可实时同步并开放观战。":
     "Create Cylinder, Torus, or Möbius games. Friend matches, human vs AI, AI vs AI, and same-device games can all sync live and allow spectators.",

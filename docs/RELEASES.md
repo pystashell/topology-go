@@ -27,6 +27,13 @@ GitHub Release 正文会记录 commit、来源分支和两个 Cloudflare ID。�
 
 `public/version.json` 是候选版本清单（版本号随发布分支更新）；正式发布后，tag、Worker Version、Deployment 与 GitHub prerelease 会共同组成可审计记录。已发布：`0.3.0-rc.1`（2026-10-24，多棋种首次上线）。
 
+### 0.3.0-rc.14 的兼容边界
+
+- **邮箱验证码登录**（代替找回密码）：登录框里“忘了密码？用邮箱验证码登录”，账号面板里添加、验证、更换邮箱和设置新密码（刚登录 10 分钟内不要旧密码）。新增 D1 表 `email_send`（`migrations/0003_email_sends.sql`，发布脚本在部署前应用）。
+- **可选密钥**：`RESEND_API_KEY`、`EMAIL_FROM`（步骤见 `docs/email-codes.md`），设好之前验证码入口不显示；可选变量 `EMAIL_DAILY_LIMIT`（全站每天上限，默认 80）。发布脚本不要求它们。
+- **账号接口**：`GET /api/account` 的账号多了 `emailVerified`、`hasPassword`、`freshUntil`，`signIn` 多了 `emailCodes`。
+- **回滚**：回到 rc.13 后验证码入口消失，已验证的邮箱、已改的密码都保留；`email_send` 留在 D1 里无害。
+
 ### 0.3.0-rc.13 的兼容边界
 
 - **房间自动关闭**（账号与棋谱第 3 阶段）：棋手都不在时，房主一人等人 2 分钟、两局之间或下完以后 5 分钟、正在下的棋 30 分钟后房间关闭；正在下的棋先按“中断”存进双方棋谱（不计胜负）。旁观者不再让房间续期。关闭时还连着的旁观者页面停在终局可以回看；之后打开房间链接，下过棋的人跳到自己在里面的最后一盘，其他人看到“房间已经关闭”。

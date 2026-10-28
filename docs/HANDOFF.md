@@ -117,6 +117,7 @@ public/_headers          CSP 等安全头；只有 katagoWorker-* 和 gomokuAiWo
 - **本机对局的棋谱**：`updateUI` 每次调用 `maybeSaveFinishedLocalGame`，对局一结束就把复盘数据 POST 到 `/api/records`（每盘一个 `local:<UUID>` 键，离线快照里也带着）；网络或服务器错误时存进 localStorage（最多 10 盘），下次打开页面或棋谱列表再传。
 - **接口**：`GET /api/records?game=&before=`（分页，游标是“结束时间.编号”，应答带 `account`：游客还是账号、名字），`POST /api/records`，`GET|DELETE /api/records/编号`（只有归属者；别人 403）。各有限流绑定（`AUTH_RATE_LIMITER`、`RECORD_RATE_LIMITER`）。
 - **账号**（第 2 阶段）：`GET /api/account`（当前用户和可用的登录方式），`POST /api/account/register`（用户名 2–20 字、密码 8–128 字符、邮箱选填；不填邮箱时存一个 `.invalid` 的假地址，从不显示）、`/sign-in`（用户名或邮箱）、`/sign-out`、`/google`（返回 Google 登录页地址）。注册和登录另有 `SIGN_IN_RATE_LIMITER`（每 IP 每分钟 10 次）。Better Auth 自己的路由只放行 `/api/auth/get-session` 和 Google 的回调 `/api/auth/callback/google`，其余 404。游客注册或登录时 `adoptGuest` 把棋谱转到账号、写 `user_alias`、删游客（一次批量写入）。Google 账号不会按邮箱自动并进用密码注册的账号（注册时的邮箱没验证过）。
+- **邮箱验证码**（`worker/email.js`，负责人 2026-10-27 决定：发邮件不花钱，只用 Resend 免费套餐）：`POST /api/account/email-code`、`/email-sign-in`（验证码登录，只限已注册的邮箱）、`/password`（登录后设新密码：刚登录 10 分钟内不要旧密码，之后要；改完退出其他设备）、`/email`、`/email/confirm`（添加、验证、更换邮箱）。用 Better Auth 的 email-OTP 插件（6 位、10 分钟、5 次、只存哈希）。Better Auth 发信时会吞掉错误，所以路由先查上限（`checkCodeAllowed`：同一邮箱每分钟 1 封、每小时 5 封，全站每天 `EMAIL_DAILY_LIMIT`，默认 80；记录在 D1 表 `email_send`），再用 `collectingCodes` 拿到 Better Auth 生成的验证码，自己发（`sendCodeEmail`，Resend API）；超限返回 429 和 `retryAfter`。没有 `RESEND_API_KEY` 和 `EMAIL_FROM` 时整个功能关闭；本地开发（`EMAIL_DEV_OUTBOX=1`）不发信，验证码留在内存里，`GET /api/dev/outbox?to=` 可读（浏览器检查用）。
 - **页面**（`src/app/account.js`）：顶栏按钮显示“登录”或账号名（名字存在 localStorage 只为先显示，真实状态问服务器）；对话框有登录、注册两页，登录后显示账号和“退出登录”。退出时先把没传完的本机棋谱传掉，再清掉这个浏览器的房间身份，回到 `/single`。从 Google 回来时地址带 `?signed-in=google` 或 `?sign-in-failed=google`，页面读完就去掉。
 - **本地开发**：`npm run dev` 会先 `npm run db:migrate:local`，并给 `wrangler dev` 一个仅供本地的密钥。单元测试用 `test/helpers/d1.js`（node:sqlite 上的 D1 替身，自动套用 `migrations/`）。
 
@@ -170,7 +171,7 @@ npm audit --audit-level=moderate
 
 剩余问题（按优先级大致排列）：
 
-0. **账号与棋谱的后续阶段**（`docs/design/accounts-and-game-records.md` 第 7 节）：第 2 阶段已完成（rc.12），只差负责人按 `docs/google-sign-in.md` 建 Google OAuth 客户端、设置 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`。第 3 阶段已完成（rc.13）。以后：邮箱验证码登录或找回密码（负责人不为发邮件付钱：只用免费方案，例如 Resend 免费套餐配负责人已有的域名；Google 登录不用发邮件）、按账号列出“我的房间”（现在只列本浏览器存的身份）、付费计划下提高密码哈希次数（存的格式带次数，可以在登录时重算）。
+0. **账号与棋谱的后续阶段**（`docs/design/accounts-and-game-records.md` 第 7 节）：第 2 阶段已完成（rc.12），只差负责人按 `docs/google-sign-in.md` 建 Google OAuth 客户端、设置 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`。第 3 阶段已完成（rc.13）。邮箱验证码登录（代替找回密码）已完成（rc.14），只差负责人按 `docs/email-codes.md` 注册 Resend 免费套餐、设置 `RESEND_API_KEY`、`EMAIL_FROM`。以后、按账号列出“我的房间”（现在只列本浏览器存的身份）、付费计划下提高密码哈希次数（存的格式带次数，可以在登录时重算）。
 1. **GitHub 发布 secret**：配好 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` 后，发布就不必依赖负责人的电脑（A 方案）。这需要负责人在 Cloudflare 创建 token。
 2. **iOS 真机**：WebKit 模拟不能代替真机，至少应在一台 iPhone 上试一次触摸手势、对话框和下拉框。WebKit 会把 `<select>` 内部的样式算到页面 CSP 头上（`style-src-attr`），不影响功能；检查脚本已单独忽略这一种。
 3. **黑白棋 8×8 环面执黑**：困难级（每步 50 ms）对随机对手 100 局，执黑 64 胜 28 负 8 和。棋盘完全对称时通常是白方最后落子，黑方只能靠逼出奇数次停着翻盘。权重调参试过：固定深度 3、配对种子各 600 局，基线 80.2%，调奇偶、子数、稀缺度等单项都没有更好（76–78.5%）。要提升，得在中盘做更深的精确求解，或者换成结合评估的 MCTS，属于引擎层面的工作。实验脚本：`scripts/othello-weight-experiments.mjs`。
