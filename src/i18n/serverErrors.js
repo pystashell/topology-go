@@ -50,6 +50,8 @@ export const SERVER_ERROR_COPY = Object.freeze({
   EMAIL_ADDRESS_LIMIT: "这个邮箱这一小时收到的验证码太多了，请稍后再试。",
   EMAIL_DAILY_LIMIT: "今天的验证码已经发完了，请明天再试，或者用密码、Google 登录。",
   EMAIL_SEND_FAILED: "邮件暂时发不出去，请稍后再试。",
+  GOOGLE_NOT_LINKED: "没有找到这个 Google 账号。",
+  LAST_SIGN_IN_METHOD: "这是你现在唯一的登录方式。先设置密码或绑定邮箱，再解绑它。",
   // Room durable object (worker/BadukRoom.js)
   ROOM_NOT_FOUND: "没有找到这个房间。",
   ROOM_EXPIRED: "房间已经关闭。",
@@ -161,6 +163,9 @@ export const ENGLISH_SERVER_ERRORS = Object.freeze({
   "这个邮箱这一小时收到的验证码太多了，请稍后再试。": "That address got too many codes this hour; try again later.",
   "今天的验证码已经发完了，请明天再试，或者用密码、Google 登录。": "Today's codes have run out. Try again tomorrow, or sign in with a password or Google.",
   "邮件暂时发不出去，请稍后再试。": "Email cannot be sent right now; try again later.",
+  "没有找到这个 Google 账号。": "That Google account was not found.",
+  "这是你现在唯一的登录方式。先设置密码或绑定邮箱，再解绑它。":
+    "This is your only way to sign in. Set a password or add an email before unbinding it.",
   "没有这封邮件。": "No such email.",
   "请求无效，请刷新页面后重试。": "The request was invalid. Refresh the page and try again.",
   "你没有权限执行这个操作。": "You are not allowed to do that.",

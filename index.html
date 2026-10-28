@@ -132,6 +132,7 @@
         <section id="settings-body" class="lobby-browser settings-layout" hidden>
           <nav class="settings-nav" aria-label="账号设置">
             <button type="button" data-settings-section="account" class="active" aria-current="true">账号</button>
+            <button type="button" data-settings-section="sign-in" aria-current="false">登录方式</button>
             <button type="button" data-settings-section="email" aria-current="false">邮箱</button>
             <button type="button" data-settings-section="password" aria-current="false">密码</button>
           </nav>
@@ -144,8 +145,34 @@
                 <div><dt>密码</dt><dd id="settings-password-fact"></dd></div>
               </dl>
               <p class="settings-note">你下完的棋都存在这个账号的“我的棋谱”里，在别的设备登录同一个账号也能看到；进过的联机房间，在别的设备打开房间链接也能回到原来的席位。</p>
+              <h3>修改用户名</h3>
+              <form id="settings-username-form" class="settings-form" novalidate>
+                <label class="dialog-field" for="settings-username-input">
+                  <span>新用户名</span>
+                  <input id="settings-username-input" type="text" maxlength="20" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="2–20 个字：中文、英文字母、数字或下划线" />
+                </label>
+                <p class="settings-note">别人看到的名字和用密码登录时填的用户名都会变；已经下完的棋还显示当时的名字。</p>
+                <button id="settings-username-save" class="primary-button" type="submit">保存用户名</button>
+              </form>
               <div class="settings-actions">
                 <button id="settings-sign-out" class="secondary-button danger-button" type="button">退出登录</button>
+              </div>
+            </section>
+
+            <section class="settings-panel" data-settings-panel="sign-in" aria-labelledby="settings-sign-in-title" hidden>
+              <h2 id="settings-sign-in-title">登录方式</h2>
+              <p class="settings-note">下面每一种方式都能登录这个账号，至少要保留一种。</p>
+              <ul id="settings-methods" class="settings-methods"></ul>
+              <div id="settings-link-google-row" class="settings-actions" hidden>
+                <button id="settings-link-google" class="secondary-button google-button" type="button">
+                <svg class="google-mark" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+                  <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.91c1.7-1.57 2.69-3.87 2.69-6.62z"/>
+                  <path fill="#34A853" d="M9 18c2.43 0 4.47-.81 5.96-2.18l-2.91-2.26c-.81.54-1.84.86-3.05.86-2.34 0-4.33-1.58-5.04-3.71H.96v2.33A9 9 0 0 0 9 18z"/>
+                  <path fill="#FBBC05" d="M3.96 10.71A5.41 5.41 0 0 1 3.68 9c0-.59.1-1.17.28-1.71V4.96H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.04l3-2.33z"/>
+                  <path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58A9 9 0 0 0 .96 4.96l3 2.33C4.67 5.16 6.66 3.58 9 3.58z"/>
+                </svg>
+                  <span>绑定 Google 账号</span>
+                </button>
               </div>
             </section>
 
@@ -1332,10 +1359,6 @@
           <label class="dialog-field" for="register-password-again">
             <span>再输一次密码</span>
             <input id="register-password-again" type="password" maxlength="128" autocomplete="new-password" />
-          </label>
-          <label class="dialog-field" for="register-email">
-            <span>邮箱（选填）</span>
-            <input id="register-email" type="email" maxlength="254" autocomplete="email" placeholder="填了也可以用邮箱登录" />
           </label>
           <p id="account-register-note" class="account-note">暂时还不能找回密码，请记好它。</p>
           <button id="register-submit" class="primary-button dialog-wide-button" type="submit">注册并登录</button>

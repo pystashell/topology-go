@@ -15,6 +15,25 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   // Accounts (src/app/account.js).
   "你的账号": "Your account",
   "没有填邮箱": "No email",
+  "注册后可以在账号设置里绑定邮箱：忘了密码时可以用它收验证码登录。":
+    "After registering you can add an email in account settings; if you forget your password, you can sign in with a code sent to it.",
+  "用户名和密码": "Username and password",
+  "修改密码": "Change password",
+  "还没有密码": "No password yet",
+  "邮箱验证码": "Email code",
+  "还没有绑定邮箱": "No email yet",
+  "绑定邮箱": "Add email",
+  "Google 账号": "Google account",
+  "解绑": "Unbind",
+  "确认解绑": "Confirm unbind",
+  "已解绑这个 Google 账号。": "That Google account was unbound.",
+  "Google 账号已绑定。": "The Google account is bound.",
+  "这个 Google 账号已经绑定在另一个账号上了。先在那个账号里解绑，或者直接用它登录那个账号。":
+    "That Google account is already bound to another account. Unbind it there first, or use it to sign in to that account.",
+  "绑定 Google 没有完成，请再试一次。": "Binding the Google account did not finish. Please try again.",
+  "暂时无法修改用户名，请稍后再试。": "The username cannot be changed right now. Try again shortly.",
+  "暂时不能绑定 Google 账号。": "A Google account cannot be bound right now.",
+  "暂时无法解绑，请稍后再试。": "It cannot be unbound right now. Try again shortly.",
   "已设置": "Set",
   "还没有密码（只能用邮箱验证码或 Google 登录）": "None yet (sign in with an email code or Google)",
   "还没有填邮箱。填一个并收验证码确认后，忘了密码时可以用它登录。":
@@ -982,6 +1001,7 @@ export const ENGLISH_PATTERNS = Object.freeze([
   { pattern: /^邮箱：(.+)（已验证）$/u, replace: "Email: $1 (confirmed)" },
   { pattern: /^邮箱：(.+)（未验证）$/u, replace: "Email: $1 (not confirmed)" },
   { pattern: /^重新发送（(\d+)）$/u, replace: "Resend ($1)" },
+  { pattern: /^用户名已改成 (.+)。$/u, replace: "Your username is now $1." },
   {
     pattern: /^现在的邮箱：(.+)（已验证）。要更换的话，填新邮箱并收验证码确认。$/u,
     replace: "Your email: $1 (confirmed). To change it, enter a new one and confirm it with a code.",

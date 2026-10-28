@@ -67,6 +67,14 @@ export const ENGLISH_STATIC = Object.freeze({
   "暂时不能用邮箱验证码，所以现在不能添加或更换邮箱。":
     "Email codes are not available right now, so the email cannot be added or changed.",
   "新邮箱": "New email",
+  "登录方式": "Sign-in methods",
+  "修改用户名": "Change username",
+  "新用户名": "New username",
+  "别人看到的名字和用密码登录时填的用户名都会变；已经下完的棋还显示当时的名字。":
+    "This changes the name others see and the username you sign in with; finished games keep the name they were played under.",
+  "保存用户名": "Save username",
+  "下面每一种方式都能登录这个账号，至少要保留一种。": "Each of these signs in to this account; at least one must stay.",
+  "绑定 Google 账号": "Bind a Google account",
   "奇异棋盘在线大厅": "Unusual Board Online Lobby",
   "创建竹筒、甜甜圈或莫比乌斯棋局；好友、人机、AI 自对弈和同机双人都可实时同步并开放观战。":
     "Create Cylinder, Torus, or Möbius games. Friend matches, human vs AI, AI vs AI, and same-device games can all sync live and allow spectators.",

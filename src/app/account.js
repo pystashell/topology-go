@@ -3,8 +3,10 @@
  * top bar says "登录" and opens the sign-in dialog (Google first, then a
  * username and password, or a code sent by email), or shows the account's
  * name and opens a menu (My games, account settings, sign out). The
- * settings page (/settings) adds, confirms and changes the email and sets a
- * new password. A guest who registers or signs in keeps its games
+ * settings page (/settings) changes the username, lists the ways to sign in
+ * (password, email codes, each bound Google account, which can be unbound
+ * or another one bound), adds, confirms and changes the email (by code:
+ * registering takes no email) and sets a new password. A guest who registers or signs in keeps its games
  * (worker/auth.js adoptGuest). Someone who forgot their password signs in
  * with an email code and lands on the new password (worker/accounts.js).
  * The session lives in an HttpOnly cookie scripts cannot read; this page
@@ -35,7 +37,7 @@ const SIGNED_OUT_KEY = "topology-go-signed-out";
 const CODE_SIGNED_IN_KEY = "topology-go-code-signed-in";
 const SEND_CODE_LABEL = "发送验证码";
 const CODE_PATTERN = /^\d{6}$/u;
-const SETTINGS_SECTIONS = ["account", "email", "password"];
+const SETTINGS_SECTIONS = ["account", "sign-in", "email", "password"];
 
 // What the server last said: { guest, name, email, emailVerified,
 // hasPassword, freshUntil }, or null for nobody.
@@ -45,6 +47,10 @@ let signInOptions = { passwords: true, google: false, emailCodes: false };
 // "sign-in", "register" or "code" (signing in with an email code).
 let accountTab = "sign-in";
 let settingsSection = "account";
+// A message for the settings page once it knows the account (after Google).
+let settingsNotice = null;
+// The Google account whose unbind button was pressed once (press again to confirm).
+let armedUnlink = null;
 let accountBusy = false;
 let accountHooks = { beforeSignOut: async () => {}, changed: () => {} };
 // The send-code buttons waiting before another code may be asked for.
@@ -118,6 +124,7 @@ function accountSeen(summary) {
       emailVerified: summary.emailVerified ?? known.emailVerified ?? false,
       hasPassword: summary.hasPassword ?? known.hasPassword ?? true,
       freshUntil: summary.freshUntil ?? known.freshUntil ?? 0,
+      google: Array.isArray(summary.google) ? summary.google : known.google ?? [],
     };
   }
   writeHint(account);
@@ -271,7 +278,7 @@ function renderAccountDialog() {
   elements.accountGoogle.hidden = !signInOptions.google;
   elements.accountUseCode.hidden = !signInOptions.emailCodes;
   elements.accountRegisterNote.textContent = signInOptions.emailCodes
-    ? "建议填邮箱：忘了密码时可以用它收验证码登录，登录后再设新密码。"
+    ? "注册后可以在账号设置里绑定邮箱：忘了密码时可以用它收验证码登录。"
     : "暂时还不能找回密码，请记好它。";
 }
 
@@ -335,7 +342,6 @@ function welcome(summary, message) {
 async function register() {
   const name = cleanUsername(elements.registerUsername.value);
   const password = elements.registerPassword.value;
-  const email = cleanEmail(elements.registerEmail.value);
   if (!name) {
     showAccountError("用户名要 2 到 20 个字，只能用中文、英文字母、数字和下划线。");
     elements.registerUsername.focus();
@@ -351,12 +357,7 @@ async function register() {
     elements.registerPasswordAgain.focus();
     return;
   }
-  if (email === null) {
-    showAccountError("邮箱格式不正确；不想填可以空着。");
-    elements.registerEmail.focus();
-    return;
-  }
-  const payload = await postAccount("/api/account/register", { username: name, password, email });
+  const payload = await postAccount("/api/account/register", { username: name, password });
   welcome(payload.account, `注册成功，已登录：${payload.account?.name ?? name}。`);
 }
 
@@ -511,6 +512,53 @@ function emailFact() {
   return account.emailVerified ? `${account.email}（已验证）` : `${account.email}（未验证）`;
 }
 
+/** One way to sign in: what it is, how it is set, and what can be done. */
+function methodRow(label, detail, action = null) {
+  const item = document.createElement("li");
+  item.className = "settings-method";
+  const text = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = label;
+  const value = document.createElement("span");
+  value.textContent = detail.text;
+  // Addresses are shown as they are, never translated.
+  if (detail.address) value.setAttribute("data-i18n-ignore", "");
+  text.append(title, value);
+  item.append(text);
+  if (action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = action.danger ? "secondary-button danger-button" : "secondary-button";
+    button.textContent = action.label;
+    Object.assign(button.dataset, action.data);
+    item.append(button);
+  }
+  return item;
+}
+
+function renderSignInMethods() {
+  const rows = [methodRow("用户名和密码", { text: account.hasPassword ? "已设置" : "还没有密码" }, {
+    label: account.hasPassword ? "修改密码" : "设置密码",
+    data: { settingsGo: "password" },
+  })];
+  if (signInOptions.emailCodes) {
+    const confirmed = account.email && account.emailVerified;
+    rows.push(methodRow("邮箱验证码", confirmed ? { text: account.email, address: true } : { text: "还没有绑定邮箱" }, {
+      label: confirmed ? "更换邮箱" : "绑定邮箱",
+      data: { settingsGo: "email" },
+    }));
+  }
+  for (const google of account.google ?? []) {
+    rows.push(methodRow("Google", google.email ? { text: google.email, address: true } : { text: "Google 账号" }, {
+      label: armedUnlink === google.id ? "确认解绑" : "解绑",
+      danger: true,
+      data: { unlinkGoogle: google.id },
+    }));
+  }
+  elements.settingsMethods.replaceChildren(...rows);
+  elements.settingsLinkGoogleRow.hidden = !signInOptions.google;
+}
+
 function renderSettings() {
   const known = signedIn();
   elements.settingsSignedOut.hidden = known || !accountKnown;
@@ -530,6 +578,7 @@ function renderSettings() {
   for (const panel of elements.settingsPanels) panel.hidden = panel.dataset.settingsPanel !== settingsSection;
 
   elements.settingsUsername.textContent = account.name ?? "";
+  renderSignInMethods();
   elements.settingsEmailFact.textContent = emailFact();
   elements.settingsPasswordFact.textContent = account.hasPassword
     ? "已设置"
@@ -589,7 +638,42 @@ function showSettingsScreen() {
   void refreshAccount().then(() => {
     showSettingsSection(settingsSection, { focus: codeSignedIn || settingsSection !== "account" });
     if (codeSignedIn && signedIn()) showSettingsInfo("已登录。忘了密码的话，现在就可以直接设一个新密码。");
+    showSettingsNotice();
   });
+}
+
+/** Say how binding a Google account went (back from Google). */
+function showSettingsNotice() {
+  if (!settingsNotice || !signedIn()) return;
+  const { text, error } = settingsNotice;
+  settingsNotice = null;
+  if (error) showSettingsError(text);
+  else showSettingsInfo(text);
+}
+
+async function saveUsername() {
+  const name = cleanUsername(elements.settingsUsernameInput.value);
+  if (!name) {
+    showSettingsError("用户名要 2 到 20 个字，只能用中文、英文字母、数字和下划线。");
+    elements.settingsUsernameInput.focus();
+    return;
+  }
+  const payload = await postAccount("/api/account/username", { username: name });
+  elements.settingsUsernameInput.value = "";
+  accountSeen(payload.account);
+  showSettingsInfo(`用户名已改成 ${name}。`);
+}
+
+async function linkGoogle() {
+  const { url } = await postAccount("/api/account/google/link");
+  window.location.assign(url);
+}
+
+async function unlinkGoogle(id) {
+  const payload = await postAccount("/api/account/google/unlink", { id });
+  armedUnlink = null;
+  accountSeen(payload.account);
+  showSettingsInfo("已解绑这个 Google 账号。");
 }
 
 async function sendEmailCode() {
@@ -667,6 +751,29 @@ function wireSettings() {
     event.preventDefault();
     void settingsAction(saveNewPassword, "暂时无法保存密码，请稍后再试。");
   });
+  elements.settingsUsernameForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void settingsAction(saveUsername, "暂时无法修改用户名，请稍后再试。");
+  });
+  elements.settingsLinkGoogle.addEventListener("click", () =>
+    void settingsAction(linkGoogle, "暂时不能绑定 Google 账号。"));
+  elements.settingsMethods.addEventListener("click", (event) => {
+    const go = event.target.closest?.("[data-settings-go]");
+    if (go) {
+      showSettingsSection(go.dataset.settingsGo);
+      return;
+    }
+    const unlink = event.target.closest?.("[data-unlink-google]");
+    if (!unlink) return;
+    // Two presses: the first asks to confirm.
+    const id = unlink.dataset.unlinkGoogle;
+    if (armedUnlink !== id) {
+      armedUnlink = id;
+      renderSignInMethods();
+      return;
+    }
+    void settingsAction(() => unlinkGoogle(id), "暂时无法解绑，请稍后再试。");
+  });
 }
 
 /**
@@ -682,6 +789,24 @@ function handleAccountReturn(url) {
     // Nothing to report.
   }
   if (signedOut) setMessage("已退出登录。这个浏览器不再保留你的账号和房间身份。");
+  const binding = url.searchParams.get("google");
+  if (binding === "linked" || binding === "link-failed") {
+    const current = new URL(window.location.href);
+    for (const key of ["google", "error", "error_description"]) current.searchParams.delete(key);
+    window.history.replaceState(window.history.state, "", `${current.pathname}${current.search}#sign-in`);
+    settingsSection = "sign-in";
+    settingsNotice = binding === "linked"
+      ? { text: "Google 账号已绑定。" }
+      : {
+          error: true,
+          text: url.searchParams.get("error") === "account_already_linked_to_different_user"
+            ? "这个 Google 账号已经绑定在另一个账号上了。先在那个账号里解绑，或者直接用它登录那个账号。"
+            : "绑定 Google 没有完成，请再试一次。",
+        };
+    // The settings page shows it once it knows the account.
+    if (accountKnown) showSettingsNotice();
+    return;
+  }
   const succeeded = url.searchParams.has("signed-in");
   const failed = url.searchParams.has("sign-in-failed");
   if (!succeeded && !failed) return;

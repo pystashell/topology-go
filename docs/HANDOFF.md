@@ -173,7 +173,7 @@ npm audit --audit-level=moderate
 
 剩余问题（按优先级大致排列）：
 
-0. **账号与棋谱的后续阶段**（`docs/design/accounts-and-game-records.md` 第 7 节）：第 2 阶段已完成（rc.12），只差负责人按 `docs/google-sign-in.md` 建 Google OAuth 客户端、设置 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`。第 3 阶段已完成（rc.13）。邮箱验证码登录（代替找回密码）已完成（rc.14），只差负责人按 `docs/email-codes.md` 注册 Resend 免费套餐、设置 `RESEND_API_KEY`、`EMAIL_FROM`。以后、按账号列出“我的房间”（现在只列本浏览器存的身份）、付费计划下提高密码哈希次数（存的格式带次数，可以在登录时重算）。
+0. **账号与棋谱的后续阶段**（`docs/design/accounts-and-game-records.md` 第 7 节）：第 2 阶段已完成（rc.12），只差负责人按 `docs/google-sign-in.md` 建 Google OAuth 客户端、设置 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`。第 3 阶段已完成（rc.13）。邮箱只认验证过的、改用户名、“登录方式”（解绑和手动绑定 Google）在 rc.16；邮箱验证码登录（代替找回密码）已完成（rc.14），只差负责人按 `docs/email-codes.md` 注册 Resend 免费套餐、设置 `RESEND_API_KEY`、`EMAIL_FROM`。以后、按账号列出“我的房间”（现在只列本浏览器存的身份）、付费计划下提高密码哈希次数（存的格式带次数，可以在登录时重算）。
 1. **GitHub 发布 secret**：配好 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` 后，发布就不必依赖负责人的电脑（A 方案）。这需要负责人在 Cloudflare 创建 token。
 2. **iOS 真机**：WebKit 模拟不能代替真机，至少应在一台 iPhone 上试一次触摸手势、对话框和下拉框。WebKit 会把 `<select>` 内部的样式算到页面 CSP 头上（`style-src-attr`），不影响功能；检查脚本已单独忽略这一种。
 3. **黑白棋 8×8 环面执黑**：困难级（每步 50 ms）对随机对手 100 局，执黑 64 胜 28 负 8 和。棋盘完全对称时通常是白方最后落子，黑方只能靠逼出奇数次停着翻盘。权重调参试过：固定深度 3、配对种子各 600 局，基线 80.2%，调奇偶、子数、稀缺度等单项都没有更好（76–78.5%）。要提升，得在中盘做更深的精确求解，或者换成结合评估的 MCTS，属于引擎层面的工作。实验脚本：`scripts/othello-weight-experiments.mjs`。

@@ -67,7 +67,7 @@ test("passwords: PBKDF2 over a peppered HMAC, salted, and useless without the pe
   await assert.rejects(hashPassword("x", "short"), /PASSWORD_PEPPER/u);
 });
 
-test("registering: a username and a password, the email only if given", async () => {
+test("registering: a username and a password; an email comes later, confirmed", async () => {
   const env = accounts();
   const mia = browser(env);
   assert.deepEqual((await mia.call("/api/account")).json,
@@ -78,7 +78,7 @@ test("registering: a username and a password, the email only if given", async ()
   assert.ok(made.setCookie.some((cookie) => /session_token=/u.test(cookie) && /HttpOnly/iu.test(cookie)));
   const me = (await mia.call("/api/account")).json.account;
   assert.deepEqual({ ...me, freshUntil: undefined },
-    { guest: false, name: "棋手Mia", email: null, emailVerified: false, hasPassword: true, freshUntil: undefined });
+    { guest: false, name: "棋手Mia", email: null, emailVerified: false, hasPassword: true, freshUntil: undefined, google: [] });
   assert.ok(me.freshUntil > Date.now(), "just signed in: a new password needs no current one");
   const [user] = env.DB.rows("user");
   assert.equal(user.username, "棋手mia", "names compare without case");
@@ -88,21 +88,19 @@ test("registering: a username and a password, the email only if given", async ()
   assert.match(account.password, /^pbkdf2-sha256\$/u);
   assert.equal(await verifyPassword(account.password, "secret-123", PEPPER), true);
 
+  // An email sent along is not kept: emails are added by code (settings).
   const lee = browser(env);
   const withEmail = await register(lee, { username: "Lee", password: "another-pass", email: "Lee@Example.com" });
-  assert.deepEqual(withEmail.json.account, { guest: false, name: "Lee", email: "lee@example.com" });
+  assert.deepEqual(withEmail.json.account, { guest: false, name: "Lee", email: null });
 
   // What is refused, and why.
   const other = browser(env);
   const refusals = [
     [{ username: "棋手mia", password: "secret-123" }, 409, "USERNAME_TAKEN"],
     [{ username: "ＬＥＥ", password: "secret-123" }, 409, "USERNAME_TAKEN"],
-    [{ username: "Zoe", password: "secret-123", email: "lee@example.com" }, 409, "EMAIL_TAKEN"],
     [{ username: "Z", password: "secret-123" }, 400, "BAD_USERNAME"],
     [{ username: "Guest", password: "secret-123" }, 400, "BAD_USERNAME"],
     [{ username: "Zoe", password: "short" }, 400, "BAD_PASSWORD"],
-    [{ username: "Zoe", password: "secret-123", email: "zoe@" }, 400, "BAD_EMAIL"],
-    [{ username: "Zoe", password: "secret-123", email: "zoe@x.invalid" }, 400, "BAD_EMAIL"],
   ];
   for (const [body, status, code] of refusals) {
     const refused = await register(other, body);
@@ -114,7 +112,9 @@ test("registering: a username and a password, the email only if given", async ()
 
 test("signing in with the username or the email; wrong ones read the same", async () => {
   const env = accounts();
-  await register(browser(env), { username: "Mia", password: "secret-123", email: "mia@example.com" });
+  await register(browser(env), { username: "Mia", password: "secret-123" });
+  // Confirmed (with a code, in account settings).
+  env.DB.database.prepare(`UPDATE "user" SET email = 'mia@example.com', "emailVerified" = 1 WHERE username = 'mia'`).run();
   for (const login of ["Mia", " mia ", "ＭＩＡ", "mia@example.com", "MIA@example.com"]) {
     const signedIn = await signIn(browser(env), login, "secret-123");
     assert.equal(signedIn.status, 200, login);

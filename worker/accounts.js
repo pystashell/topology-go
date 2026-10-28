@@ -10,6 +10,11 @@
  * Someone who forgot their password signs in with a code sent to their
  * email (worker/email.js) and sets a new one: within FRESH_SIGN_IN_MS of
  * signing in no current password is asked for.
+ *
+ * An email belongs to an account only once confirmed with a code (owner's
+ * decision, 2026-10-28): registering takes a username and a password, the
+ * email is added in account settings, and Google's addresses come
+ * confirmed. Only confirmed emails sign in or receive sign-in codes.
  */
 import {
   PASSWORD_MAX_LENGTH,
@@ -17,6 +22,7 @@ import {
   cleanUsername,
   isMadeUpEmail,
   passwordAllowed,
+  usernameKey,
 } from "../src/multiplayer/accountRules.js";
 import {
   authFor,
@@ -57,6 +63,8 @@ const FAILURES = {
   needCurrentPassword: [400, "NEED_CURRENT_PASSWORD", "请输入当前密码（刚登录的 10 分钟内可以不填）。"],
   wrongPassword: [401, "WRONG_PASSWORD", "当前密码不对。"],
   emailVerified: [409, "EMAIL_ALREADY_VERIFIED", "这个邮箱已经验证过了。"],
+  googleNotLinked: [404, "GOOGLE_NOT_LINKED", "没有找到这个 Google 账号。"],
+  lastSignInMethod: [409, "LAST_SIGN_IN_METHOD", "这是你现在唯一的登录方式。先设置密码或绑定邮箱，再解绑它。"],
 };
 
 // Codes that were not sent, as worker/email.js names them.
@@ -139,13 +147,25 @@ async function accountDetails(auth, found) {
   const summary = accountSummary(found?.user);
   if (!summary || summary.guest) return summary;
   const context = await auth.$context;
-  const credential = await context.internalAdapter.findCredentialAccount(found.user.id);
+  const accounts = await context.internalAdapter.findAccounts(found.user.id);
   return {
     ...summary,
     emailVerified: Boolean(summary.email && found.user.emailVerified),
-    hasPassword: Boolean(credential?.password),
+    hasPassword: accounts.some((account) => account.providerId === "credential" && account.password),
     freshUntil: new Date(found.session.createdAt).getTime() + FRESH_SIGN_IN_MS,
+    google: accounts.filter((account) => account.providerId === "google")
+      .map((account) => ({ id: account.id, email: googleAddress(account) })),
   };
+}
+
+/** The Gmail address a bound Google account signed in with, from its ID token. */
+function googleAddress(account) {
+  try {
+    const payload = JSON.parse(atob(account.idToken.split(".")[1].replace(/-/gu, "+").replace(/_/gu, "/")));
+    return typeof payload.email === "string" ? payload.email : null;
+  } catch {
+    return null;
+  }
 }
 
 async function whoAmI(request, env) {
@@ -190,7 +210,7 @@ async function sendSignInCode(request, env) {
   if (!email) return failure("badEmail");
   try {
     const context = await auth.$context;
-    if (await context.internalAdapter.findUserByEmail(email)) {
+    if ((await context.internalAdapter.findUserByEmail(email))?.user?.emailVerified) {
       await mailCodes(env, () =>
         auth.api.sendVerificationOTP({ headers: request.headers, body: { email, type: "sign-in" } }), email);
     }
@@ -327,13 +347,12 @@ async function register(request, env) {
   const name = cleanUsername(body?.username);
   if (!name) return failure("badUsername");
   if (!passwordAllowed(body?.password)) return failure("badPassword");
-  const email = cleanEmail(body?.email);
-  if (email === null) return failure("badEmail");
   try {
+    // An email comes later, confirmed with a code (account settings).
     const { headers, response } = await auth.api.signUpEmail({
       headers: request.headers,
       returnHeaders: true,
-      body: { name, username: name, displayUsername: name, email: email || madeUpEmail(), password: body.password },
+      body: { name, username: name, displayUsername: name, email: madeUpEmail(), password: body.password },
     });
     return withCookies(jsonResponse({ account: accountSummary(response?.user) }, 201), cookiesOf(headers));
   } catch (error) {
@@ -355,6 +374,13 @@ async function signIn(request, env) {
     if (login.includes("@")) {
       const email = cleanEmail(login);
       if (!email) return failure("wrongLogin");
+      const context = await auth.$context;
+      if (!(await context.internalAdapter.findUserByEmail(email))?.user?.emailVerified) {
+        // An address nobody confirmed reads like a wrong password (and
+        // takes as long).
+        await context.password.hash(password);
+        return failure("wrongLogin");
+      }
       result = await auth.api.signInEmail({ headers: request.headers, returnHeaders: true, body: { email, password } });
     } else {
       const name = cleanUsername(login);
@@ -405,6 +431,79 @@ async function startGoogle(request, env) {
   }
 }
 
+/** A new username (also the name shown): 2-20 characters, not taken. */
+async function changeUsername(request, env) {
+  const signedIn = await signedInAccount(request, env);
+  if (signedIn instanceof Response) return signedIn;
+  const { auth, found } = signedIn;
+  const body = await readJsonBody(request);
+  const name = cleanUsername(body?.username);
+  if (!name) return failure("badUsername");
+  try {
+    const { headers } = await auth.api.updateUser({
+      headers: request.headers,
+      returnHeaders: true,
+      body: { name, username: name, displayUsername: name },
+    });
+    const user = { ...found.user, name, username: usernameKey(name), displayUsername: name };
+    return withCookies(
+      jsonResponse({ ok: true, account: await accountDetails(auth, { ...found, user }) }),
+      cookiesOf(headers),
+    );
+  } catch (error) {
+    return authFailure(error);
+  }
+}
+
+/** Bind a Google account (any address) to the signed-in account: Google's page. */
+async function linkGoogle(request, env) {
+  const signedIn = await signedInAccount(request, env);
+  if (signedIn instanceof Response) return signedIn;
+  if (!googleConfigured(env)) return failure("googleUnavailable");
+  const { auth } = signedIn;
+  try {
+    const { headers, response } = await auth.api.linkSocialAccount({
+      headers: request.headers,
+      returnHeaders: true,
+      body: {
+        provider: "google",
+        callbackURL: "/settings?google=linked",
+        errorCallbackURL: "/settings?google=link-failed",
+        disableRedirect: true,
+      },
+    });
+    if (typeof response?.url !== "string") return failure("unavailable");
+    return withCookies(jsonResponse({ url: response.url }), cookiesOf(headers));
+  } catch (error) {
+    return authFailure(error);
+  }
+}
+
+/** Unbind a Google account; some way to sign in always stays. */
+async function unlinkGoogle(request, env) {
+  const signedIn = await signedInAccount(request, env);
+  if (signedIn instanceof Response) return signedIn;
+  const { auth, found } = signedIn;
+  const body = await readJsonBody(request);
+  try {
+    const context = await auth.$context;
+    const accounts = await context.internalAdapter.findAccounts(found.user.id);
+    const target = accounts.find((account) => account.providerId === "google" && account.id === body?.id);
+    if (!target) return failure("googleNotLinked");
+    const others = accounts.filter((account) => account !== target);
+    // The stored user, not the session's copy (cached for minutes).
+    const user = await context.internalAdapter.findUserById(found.user.id);
+    const stillSignsIn = others.some((account) => account.providerId === "google") ||
+      others.some((account) => account.providerId === "credential" && account.password) ||
+      (Boolean(user?.emailVerified) && !isMadeUpEmail(user?.email) && emailCodesConfigured(env));
+    if (!stillSignsIn) return failure("lastSignInMethod");
+    await context.internalAdapter.deleteAccount(target.id);
+    return jsonResponse({ ok: true, account: await accountDetails(auth, found) });
+  } catch (error) {
+    return authFailure(error);
+  }
+}
+
 const ROUTES = {
   "/api/account": { GET: whoAmI },
   "/api/account/register": { POST: register },
@@ -416,6 +515,9 @@ const ROUTES = {
   "/api/account/password": { POST: setNewPassword },
   "/api/account/email": { POST: sendEmailCode },
   "/api/account/email/confirm": { POST: confirmEmail },
+  "/api/account/username": { POST: changeUsername },
+  "/api/account/google/link": { POST: linkGoogle },
+  "/api/account/google/unlink": { POST: unlinkGoogle },
 };
 
 // Routes that guess at secrets (passwords, codes) or send mail: their own,

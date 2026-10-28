@@ -15,6 +15,13 @@ import { PEPPER, browser, environment, upload } from "./helpers/site.js";
 const withCodes = (overrides = {}) => environment({ PASSWORD_PEPPER: PEPPER, EMAIL_DEV_OUTBOX: "1", ...overrides });
 const post = (who, path, body = {}) => who.call(path, { method: "POST", body });
 const codeFor = (env, address) => devOutboxFor(env, address)?.code ?? null;
+
+/** Register with a username and password, then give the account a confirmed email. */
+async function registerWithEmail(env, who, username, password, address) {
+  await post(who, "/api/account/register", { username, password });
+  env.DB.database.prepare(`UPDATE "user" SET email = ?, "emailVerified" = 1 WHERE username = ?`)
+    .run(address, username.toLowerCase());
+}
 let serial = 0;
 const fresh = (name) => `${name}${serial += 1}`;
 
@@ -36,7 +43,7 @@ test("a forgotten password: sign in with a code, then set a new one", async () =
   const name = fresh("Mia");
   const address = `${name.toLowerCase()}@example.com`;
   const home = browser(env);
-  await post(home, "/api/account/register", { username: name, password: "old-password", email: address });
+  await registerWithEmail(env, home, name, "old-password", address);
 
   // Another browser, the password forgotten.
   const phone = browser(env);
@@ -57,18 +64,15 @@ test("a forgotten password: sign in with a code, then set a new one", async () =
   assert.equal(signedIn.json.account.name, name);
   assert.equal((await post(phone, "/api/account/email-sign-in", { email: address, code: sent.code })).json.code, "WRONG_CODE", "a code works once");
 
-  // The email was never confirmed, so the code proved it and the account
-  // starts clean: the old password no longer works (Better Auth guards
-  // against someone who registered with another person's address).
   const me = (await phone.call("/api/account")).json.account;
-  assert.deepEqual([me.emailVerified, me.hasPassword], [true, false]);
+  assert.deepEqual([me.emailVerified, me.hasPassword], [true, true]);
   assert.ok(me.freshUntil > Date.now());
-  assert.equal((await post(browser(env), "/api/account/sign-in", { login: name, password: "old-password" })).status, 401);
 
-  // Just signed in: a new password needs no current one.
+  // Just signed in: a new password needs no current one; the old one stops.
   const set = await post(phone, "/api/account/password", { password: "new-password" });
   assert.equal(set.status, 200);
   assert.equal(set.json.account.hasPassword, true);
+  assert.equal((await post(browser(env), "/api/account/sign-in", { login: name, password: "old-password" })).status, 401);
   assert.equal((await post(browser(env), "/api/account/sign-in", { login: name, password: "new-password" })).status, 200);
 });
 
@@ -141,26 +145,18 @@ test("adding, confirming and changing an email", async (t) => {
 
   // Someone else's address is refused up front.
   const taken = fresh("Taken");
-  await post(browser(env), "/api/account/register", { username: taken, password: "taken-password", email: `${taken.toLowerCase()}@example.com` });
+  await registerWithEmail(env, browser(env), taken, "taken-password", `${taken.toLowerCase()}@example.com`);
   assert.equal((await post(zoe, "/api/account/email", { email: `${taken.toLowerCase()}@example.com` })).json.code, "EMAIL_TAKEN");
 
-  // An email given at registration is confirmed in place, password kept.
-  const kai = fresh("Kai");
-  const kaiAddress = `${kai.toLowerCase()}@example.com`;
-  const kaiBrowser = browser(env);
-  await post(kaiBrowser, "/api/account/register", { username: kai, password: "kai-password", email: kaiAddress });
-  await post(kaiBrowser, "/api/account/email", { email: kaiAddress });
-  assert.equal(devOutboxFor(env, kaiAddress).type, "email-verification");
-  const verified = await post(kaiBrowser, "/api/account/email/confirm", { email: kaiAddress, code: codeFor(env, kaiAddress) });
-  assert.deepEqual([verified.json.account.emailVerified, verified.json.account.hasPassword], [true, true]);
-  assert.equal((await post(browser(env), "/api/account/email", { email: kaiAddress })).json.code, "NOT_SIGNED_IN");
+  // (Unconfirmed emails from before are gone: migration 0004, test/signInMethods.test.js.)
+  assert.equal((await post(browser(env), "/api/account/email", { email: "someone@example.com" })).json.code, "NOT_SIGNED_IN");
 });
 
 test("a guest signing in with a code keeps its games", async () => {
   const env = withCodes();
   const name = fresh("Ann");
   const address = `${name.toLowerCase()}@example.com`;
-  await post(browser(env), "/api/account/register", { username: name, password: "ann-password", email: address });
+  await registerWithEmail(env, browser(env), name, "ann-password", address);
   const cafe = browser(env);
   await cafe.call("/api/records", { method: "POST", body: upload() });
   await post(cafe, "/api/account/email-code", { email: address });
@@ -199,7 +195,7 @@ test("caps: a minute between codes, five an hour per address, a daily total", as
   const routeEnv = withCodes();
   const name = fresh("Cap");
   const address = `${name.toLowerCase()}@example.com`;
-  await post(browser(routeEnv), "/api/account/register", { username: name, password: "cap-password", email: address });
+  await registerWithEmail(routeEnv, browser(routeEnv), name, "cap-password", address);
   const first = await post(browser(routeEnv), "/api/account/email-code", { email: address });
   assert.equal(first.status, 200);
   const second = await post(browser(routeEnv), "/api/account/email-code", { email: address });
