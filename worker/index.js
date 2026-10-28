@@ -12,6 +12,7 @@ import { SIGN_IN_PATHS, accountRoute, accountSummary, isAccountPath } from "./ac
 import { authFor, formerUserIds, sessionUser, userOrNewGuest, withCookies } from "./auth.js";
 import { devOutboxFor } from "./email.js";
 import { jsonResponse, readJsonBody } from "./http.js";
+import { httpsRedirect, secureResponse } from "./transportSecurity.js";
 import {
   MAX_RECORD_DATA_BYTES,
   RecordError,
@@ -406,6 +407,14 @@ async function listLobbyRooms(env) {
 
 const worker = {
   async fetch(request, env) {
+    // Plain http goes to the same address over https (workers.dev has no
+    // edge redirect); every answer then gets HSTS, and pages their headers.
+    const redirect = httpsRedirect(request);
+    if (redirect) return redirect;
+    return secureResponse(request, await worker.route(request, env));
+  },
+
+  async route(request, env) {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/rooms/health") {

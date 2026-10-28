@@ -17,8 +17,9 @@ import { appSource } from "./helpers/appSource.js";
 
 const CJK = /[\u3400-\u9fff\uff01-\uff60\u3000-\u303f]/u;
 const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
-// Web Crypto algorithm names (worker/passwords.js), not error codes.
-const NOT_ERROR_CODES = new Set(["HMAC", "PBKDF2"]);
+// Web Crypto algorithm names (worker/passwords.js) and the X-Frame-Options
+// value (worker/transportSecurity.js), not error codes.
+const NOT_ERROR_CODES = new Set(["HMAC", "PBKDF2", "DENY"]);
 
 function errorCodesIn(path) {
   const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8")

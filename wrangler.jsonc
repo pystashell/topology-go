@@ -11,7 +11,21 @@
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    // Every path but the static asset folders and files reaches the Worker
+    // first, so page loads over plain http can be sent to https (see
+    // worker/transportSecurity.js); assets are still served directly.
+    "run_worker_first": [
+      "/*",
+      "!/assets/*",
+      "!/engines/*",
+      "!/models/*",
+      "!/icons/*",
+      "!/favicon.svg",
+      "!/og-image.png",
+      "!/manifest.webmanifest",
+      "!/version.json",
+      "!/KATAGO_NETWORK_LICENSE.txt"
+    ]
   },
   "durable_objects": {
     "bindings": [
