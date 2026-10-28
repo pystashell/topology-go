@@ -59,6 +59,14 @@ export const ENGLISH_STATIC = Object.freeze({
   "输入账号的邮箱，我们发一个 6 位数验证码，10 分钟内有效。登录后可以在账号里设新密码。":
     "Enter your account's email and we send a 6-digit code, valid for 10 minutes. Once signed in you can set a new password.",
   "用密码登录": "Sign in with a password",
+  // The account menu and account settings (/settings).
+  "账号设置": "Account settings",
+  "或者用用户名和密码": "or with a username and password",
+  "管理你的邮箱和密码。下完的棋都在“我的棋谱”里。": "Manage your email and password. Your finished games are in My games.",
+  "登录后才能管理账号。": "Sign in to manage your account.",
+  "暂时不能用邮箱验证码，所以现在不能添加或更换邮箱。":
+    "Email codes are not available right now, so the email cannot be added or changed.",
+  "新邮箱": "New email",
   "奇异棋盘在线大厅": "Unusual Board Online Lobby",
   "创建竹筒、甜甜圈或莫比乌斯棋局；好友、人机、AI 自对弈和同机双人都可实时同步并开放观战。":
     "Create Cylinder, Torus, or Möbius games. Friend matches, human vs AI, AI vs AI, and same-device games can all sync live and allow spectators.",

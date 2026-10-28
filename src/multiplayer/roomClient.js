@@ -124,6 +124,10 @@ export function parseAppRoute(value, baseUrl = "http://localhost/") {
   if (pathname.toLowerCase() === "/records") {
     return { mode: "records", roomCode: "", role: "" };
   }
+  // Account settings (email, password).
+  if (pathname.toLowerCase() === "/settings") {
+    return { mode: "settings", roomCode: "", role: "" };
+  }
   const recordMatch = pathname.match(/^\/game\/([a-km-z2-9]{16})$/u);
   if (recordMatch) {
     return { mode: "record", roomCode: "", role: "", recordId: recordMatch[1] };

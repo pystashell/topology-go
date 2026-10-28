@@ -194,7 +194,7 @@ import {
   showRecordsScreen,
   wireRecordsScreen,
 } from "./app/myGames.js";
-import { handleAccountReturn, wireAccount } from "./app/account.js";
+import { handleAccountReturn, showSettingsScreen, wireAccount } from "./app/account.js";
 import {
   buildChatPickers,
   chatChannelView,
@@ -233,17 +233,18 @@ const elements = {
   recordsGuestNote: $("#records-guest-note"),
   recordsRegister: $("#records-register"),
   accountButton: $("#account-button"),
+  accountButtonLabel: $("#account-button-label"),
+  accountCaret: $("#account-caret"),
+  accountMenu: $("#account-menu"),
+  accountMenuName: $("#account-menu-name"),
+  accountMenuEmail: $("#account-menu-email"),
+  accountMenuSignOut: $("#account-menu-sign-out"),
   accountDialog: $("#account-dialog"),
   accountForm: $("#account-form"),
   accountTitle: $("#account-title"),
-  accountSignedIn: $("#account-signed-in"),
-  accountName: $("#account-name"),
-  accountEmail: $("#account-email"),
-  accountSignOut: $("#account-sign-out"),
-  accountDone: $("#account-done"),
-  accountForms: $("#account-forms"),
   accountTabButtons: [...document.querySelectorAll("[data-account-tab]")],
   accountPanels: [...document.querySelectorAll("[data-account-panel]")],
+  accountGoButtons: [...document.querySelectorAll("[data-account-go]")],
   accountGuestNote: $("#account-guest-note"),
   signInLogin: $("#sign-in-login"),
   signInPassword: $("#sign-in-password"),
@@ -251,34 +252,46 @@ const elements = {
   registerPassword: $("#register-password"),
   registerPasswordAgain: $("#register-password-again"),
   registerEmail: $("#register-email"),
+  accountRegisterNote: $("#account-register-note"),
   accountGoogle: $("#account-google"),
   accountGoogleButton: $("#account-google-button"),
+  accountUseCode: $("#account-use-code"),
   accountError: $("#account-error"),
+  accountInfo: $("#account-info"),
   accountCancelRow: $("#account-cancel-row"),
   accountCancel: $("#account-cancel"),
-  accountInfo: $("#account-info"),
-  accountPasswordState: $("#account-password-state"),
-  accountEmailEdit: $("#account-email-edit"),
-  accountPasswordEdit: $("#account-password-edit"),
-  accountEmailForm: $("#account-email-form"),
-  accountEmailInput: $("#account-email-input"),
-  accountEmailSend: $("#account-email-send"),
-  accountEmailCode: $("#account-email-code"),
-  accountEmailConfirm: $("#account-email-confirm"),
-  accountPasswordForm: $("#account-password-form"),
-  accountPasswordNote: $("#account-password-note"),
-  accountCurrentPasswordField: $("#account-current-password-field"),
-  accountCurrentPassword: $("#account-current-password"),
-  accountNewPassword: $("#account-new-password"),
-  accountNewPasswordAgain: $("#account-new-password-again"),
-  accountPasswordSave: $("#account-password-save"),
-  accountUseCode: $("#account-use-code"),
-  accountGoButtons: [...document.querySelectorAll("[data-account-go]")],
-  accountRegisterNote: $("#account-register-note"),
   codeEmail: $("#code-email"),
   codeSend: $("#code-send"),
   codeInput: $("#code-input"),
   codeSignIn: $("#code-sign-in"),
+  settingsScreen: $("#settings-screen"),
+  settingsTitle: $("#settings-title"),
+  settingsSignedOut: $("#settings-signed-out"),
+  settingsSignIn: $("#settings-sign-in"),
+  settingsBody: $("#settings-body"),
+  settingsSectionButtons: [...document.querySelectorAll("[data-settings-section]")],
+  settingsPanels: [...document.querySelectorAll("[data-settings-panel]")],
+  settingsUsername: $("#settings-username"),
+  settingsEmailFact: $("#settings-email-fact"),
+  settingsPasswordFact: $("#settings-password-fact"),
+  settingsSignOut: $("#settings-sign-out"),
+  settingsEmailState: $("#settings-email-state"),
+  settingsEmailOff: $("#settings-email-off"),
+  settingsEmailForm: $("#settings-email-form"),
+  settingsEmailLabel: $("#settings-email-label"),
+  settingsEmailInput: $("#settings-email-input"),
+  settingsEmailSend: $("#settings-email-send"),
+  settingsEmailCode: $("#settings-email-code"),
+  settingsEmailConfirm: $("#settings-email-confirm"),
+  settingsPasswordNote: $("#settings-password-note"),
+  settingsPasswordForm: $("#settings-password-form"),
+  settingsCurrentPasswordField: $("#settings-current-password-field"),
+  settingsCurrentPassword: $("#settings-current-password"),
+  settingsNewPassword: $("#settings-new-password"),
+  settingsNewPasswordAgain: $("#settings-new-password-again"),
+  settingsPasswordSave: $("#settings-password-save"),
+  settingsError: $("#settings-error"),
+  settingsInfo: $("#settings-info"),
   headerTopologySwitch: $(".topology-switch"),
   lobbyCreateRoom: $("#lobby-create-room"),
   lobbyQuickJoin: $("#lobby-quick-join"),
@@ -3331,14 +3344,21 @@ function appendLobbyMetadata(container, text) {
 }
 
 function showAppScreen(mode) {
-  appRouteMode = ["lobby", "online", "records"].includes(mode) ? mode : "single";
+  appRouteMode = ["lobby", "online", "records", "settings"].includes(mode) ? mode : "single";
   const lobbyVisible = appRouteMode === "lobby";
   const recordsVisible = appRouteMode === "records";
+  const settingsVisible = appRouteMode === "settings";
   elements.lobbyScreen.hidden = !lobbyVisible;
   elements.recordsScreen.hidden = !recordsVisible;
-  elements.gameScreen.hidden = lobbyVisible || recordsVisible;
-  elements.headerTopologySwitch.hidden = lobbyVisible || recordsVisible;
+  elements.settingsScreen.hidden = !settingsVisible;
+  elements.gameScreen.hidden = lobbyVisible || recordsVisible || settingsVisible;
+  elements.headerTopologySwitch.hidden = lobbyVisible || recordsVisible || settingsVisible;
   elements.recordsLink.setAttribute("aria-current", recordsVisible ? "page" : "false");
+  if (settingsVisible) {
+    cancelLobbyRequest();
+    showSettingsScreen();
+    return;
+  }
   if (lobbyVisible) {
     loadLobbyOnce();
     return;
