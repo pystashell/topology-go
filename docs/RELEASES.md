@@ -27,6 +27,13 @@ GitHub Release 正文会记录 commit、来源分支和两个 Cloudflare ID。�
 
 `public/version.json` 是候选版本清单（版本号随发布分支更新）；正式发布后，tag、Worker Version、Deployment 与 GitHub prerelease 会共同组成可审计记录。已发布：`0.3.0-rc.1`（2026-10-24，多棋种首次上线）。
 
+### 0.3.0-rc.19 的兼容边界
+
+- **http 一律跳到 https**（负责人 2026-10-28 决定）：自定义域名早已由 Cloudflare 的 Always Use HTTPS 在边缘跳转；workers.dev 没有这个开关，现在由 Worker 自己回 301（GET、HEAD）或 308（其他方法，保留请求体）到同一地址的 https。本机地址（localhost、127.0.0.1）不跳，`wrangler dev` 照旧。
+- **HSTS**：所有 https 回应带 `Strict-Transport-Security: max-age=31536000`（不带 includeSubDomains，不申请 preload）。浏览器访问过一次后，一年内对这个主机名只用 https。
+- **页面先进 Worker**：`run_worker_first` 从只有 `/api/*` 改成除静态资源目录和文件以外的所有路径，所以打开页面（`/`、`/records`、`/game/<id>` 等）会算一次 Worker 请求；静态资源（`/assets/*`、引擎、模型、图标）仍直接由资源层回应，不计数。
+- **回滚**：回到 rc.18 后 workers.dev 又能用 http 打开；已经收到 HSTS 的浏览器仍会自己改用 https，因为 https 一直可用，所以没有影响。没有数据变化。
+
 ### 0.3.0-rc.18 的兼容边界
 
 - **用 Google 新建的账号自动得到不重名的用户名**（负责人 2026-10-28 决定）：从 Google 名字生成（去掉空格等不允许的字符，被占了加数字），以后可以在账号设置里改；新账号从 Google 回来时提示一次用户名。以前用 Google 建的、没有用户名的账号，下次打开网站时（`GET /api/account`）自动补上。没有数据迁移；回滚后新建的 Google 账号又没有用户名，已经补上的保留。
