@@ -3488,6 +3488,57 @@ select:disabled {
   font-size: 18px;
 }
 
+.settings-panel h3 {
+  margin: 8px 0 0;
+  font-size: 14px;
+}
+
+/* The ways to sign in: one row each, its action on the right. */
+.settings-methods {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.settings-method {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+.settings-method + .settings-method {
+  border-top: 1px solid var(--line);
+}
+
+.settings-method > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-method strong {
+  font-size: 13px;
+}
+
+.settings-method span {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.settings-method button {
+  flex: 0 0 auto;
+}
+
+.settings-actions[hidden] {
+  display: none;
+}
+
 .settings-facts {
   display: grid;
   gap: 0;

@@ -135,10 +135,11 @@ function authOptions(env, origin) {
           },
         }
       : {},
-    // A Google account is never joined to a password account by email
-    // alone: nothing verifies the emails people register with (Better
-    // Auth's default; spelled out so it stays).
-    account: { accountLinking: { requireLocalEmailVerified: true } },
+    // A Google account joins an account by email only when that email was
+    // confirmed with a code (Better Auth's default; spelled out so it
+    // stays). Signed in, someone binds any Google account they choose
+    // (account settings), whatever its address.
+    account: { accountLinking: { requireLocalEmailVerified: true, allowDifferentEmails: true } },
     plugins: [
       anonymous({
         emailDomainName: "guest.invalid",
