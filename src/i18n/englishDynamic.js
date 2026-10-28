@@ -1023,6 +1023,10 @@ export const ENGLISH_PATTERNS = Object.freeze([
   { pattern: /^验证码已发到 (.+)，10 分钟内有效。$/u, replace: "A code was sent to $1; it is valid for 10 minutes." },
   { pattern: /^注册成功，已登录：(.+)。$/u, replace: "Registered and signed in as $1." },
   { pattern: /^已用 Google 登录：(.+)。$/u, replace: "Signed in with Google as $1." },
+  {
+    pattern: /^已用 Google 登录。你的用户名是 (.+)，可以在账号设置里修改。$/u,
+    replace: "Signed in with Google. Your username is $1; you can change it in account settings.",
+  },
   { pattern: /^已登录：(.+)。$/u, replace: "Signed in as $1." },
   {
     // Opening a saved game: "<black> 对 <white> · <result> · <n> 手".

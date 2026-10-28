@@ -72,7 +72,7 @@ test("an account made with Google confirms with the name Google gave it", async 
   const env = accounts();
   const kai = browser(env);
   await post(kai, "/api/account/register", { username: "Kai", password: "kai-password" });
-  // As Google sign-in makes it: no username, the name from Google.
+  // As Google sign-in made it before 0.3.0-rc.18: no username, the name from Google.
   env.DB.database.prepare(`UPDATE "user" SET username = NULL, "displayUsername" = NULL, name = 'Kai Lin'`).run();
   assert.equal((await post(kai, "/api/account/delete", { username: "Kai" })).json.code, "USERNAME_MISMATCH");
   assert.equal((await post(kai, "/api/account/delete", { username: " kai lin " })).status, 200);

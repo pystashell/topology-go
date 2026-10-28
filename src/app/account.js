@@ -860,7 +860,10 @@ function handleAccountReturn(url) {
   }
   void refreshAccount().then((known) => {
     if (known && account && !account.guest) {
-      setMessage(`已用 Google 登录：${account.name}。`);
+      // A new account: say what username it was given (and that it can change).
+      setMessage(url.searchParams.get("signed-in") === "google-new"
+        ? `已用 Google 登录。你的用户名是 ${account.name}，可以在账号设置里修改。`
+        : `已用 Google 登录：${account.name}。`);
       accountHooks.changed();
     } else {
       setMessage("Google 登录没有完成，请再试一次。", true);
