@@ -54,7 +54,6 @@ export const ENGLISH_DYNAMIC = Object.freeze({
     "You just signed in, so you can set a new password directly. Other devices are then signed out.",
   "建议填邮箱：忘了密码时可以用它收验证码登录，登录后再设新密码。":
     "An email is recommended: if you forget your password you can sign in with a code sent to it and then set a new one.",
-  "邮箱验证码登录": "Sign in with an email code",
   "第一次用 Google 登录，会自动注册一个账号。": "The first time you sign in with Google, an account is made for you.",
   "第一次用邮箱验证码登录，会自动注册一个账号。": "The first time you sign in with an email code, an account is made for you.",
   "填账号的邮箱，我们发一个 6 位数验证码，10 分钟内有效。登录后可以直接设新密码。":
