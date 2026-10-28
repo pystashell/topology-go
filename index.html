@@ -1317,8 +1317,9 @@
         <h2 id="account-title">登录或注册</h2>
         <p id="account-guest-note" class="account-note" hidden>你现在是游客。登录或注册后，这个浏览器里的棋谱会转到账号下。</p>
 
-        <div id="account-google" class="account-google" hidden>
-          <button id="account-google-button" class="secondary-button dialog-wide-button google-button" type="button">
+        <!-- Three ways in, side by side; the first two also make an account. -->
+        <div class="account-panel account-methods" data-account-panel="methods">
+          <button id="account-google-button" class="secondary-button dialog-wide-button google-button" type="button" hidden>
             <svg class="google-mark" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
               <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.91c1.7-1.57 2.69-3.87 2.69-6.62z"/>
               <path fill="#34A853" d="M9 18c2.43 0 4.47-.81 5.96-2.18l-2.91-2.26c-.81.54-1.84.86-3.05.86-2.34 0-4.33-1.58-5.04-3.71H.96v2.33A9 9 0 0 0 9 18z"/>
@@ -1327,14 +1328,24 @@
             </svg>
             <span>用 Google 登录</span>
           </button>
-          <div class="dialog-divider"><span>或者用用户名和密码</span></div>
+          <button id="account-method-code" class="secondary-button dialog-wide-button google-button" type="button" data-account-go="code" hidden>
+            <svg class="google-mark method-mark" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+              <rect x="1.5" y="3.5" width="15" height="11" rx="2"/>
+              <path d="m2.5 5 6.5 5 6.5-5"/>
+            </svg>
+            <span>用邮箱验证码登录</span>
+          </button>
+          <button id="account-method-password" class="secondary-button dialog-wide-button google-button" type="button" data-account-go="sign-in">
+            <svg class="google-mark method-mark" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+              <circle cx="9" cy="5.5" r="3.5"/>
+              <path d="M2 16.5c.6-3.4 3.4-5.5 7-5.5s6.4 2.1 7 5.5"/>
+            </svg>
+            <span>用用户名和密码登录</span>
+          </button>
+          <p id="account-methods-note" class="account-note" hidden>第一次用 Google 或邮箱验证码登录，会自动注册一个账号。</p>
         </div>
 
-        <div class="size-buttons account-tabs" role="group" aria-label="登录或注册">
-          <button type="button" data-account-tab="sign-in" class="active" aria-pressed="true">登录</button>
-          <button type="button" data-account-tab="register" aria-pressed="false">注册</button>
-        </div>
-        <div class="account-panel" data-account-panel="sign-in">
+        <div class="account-panel" data-account-panel="sign-in" hidden>
           <label class="dialog-field" for="sign-in-login">
             <span>用户名或邮箱</span>
             <input id="sign-in-login" type="text" maxlength="254" autocomplete="username" autocapitalize="off" spellcheck="false" />
@@ -1344,11 +1355,14 @@
             <input id="sign-in-password" type="password" maxlength="128" autocomplete="current-password" />
           </label>
           <button id="sign-in-submit" class="primary-button dialog-wide-button" type="submit">登录</button>
-          <button id="account-use-code" class="text-button account-switch" type="button" hidden>忘了密码？用邮箱验证码登录</button>
+          <div class="account-switches">
+            <button id="account-use-code" class="text-button account-switch" type="button" hidden>忘了密码？用邮箱验证码登录</button>
+            <button class="text-button account-switch" type="button" data-account-go="register">还没有账号？注册一个</button>
+          </div>
         </div>
 
         <div class="account-panel" data-account-panel="code" data-account-enter="code" hidden>
-          <p class="account-note">输入账号的邮箱，我们发一个 6 位数验证码，10 分钟内有效。登录后可以在账号里设新密码。</p>
+          <p id="account-code-note" class="account-note">填你的邮箱，我们发一个 6 位数验证码，10 分钟内有效。这个邮箱还没有账号的话，会自动注册一个。</p>
           <label class="dialog-field" for="code-email">
             <span>邮箱</span>
             <input id="code-email" type="email" maxlength="254" autocomplete="email" />
@@ -1359,7 +1373,6 @@
             <input id="code-input" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" />
           </label>
           <button id="code-sign-in" class="primary-button dialog-wide-button" type="button">登录</button>
-          <button class="text-button account-switch" type="button" data-account-go="sign-in">用密码登录</button>
         </div>
 
         <div class="account-panel" data-account-panel="register" hidden>
@@ -1377,12 +1390,16 @@
           </label>
           <p id="account-register-note" class="account-note">暂时还不能找回密码，请记好它。</p>
           <button id="register-submit" class="primary-button dialog-wide-button" type="submit">注册并登录</button>
+          <div class="account-switches">
+            <button class="text-button account-switch" type="button" data-account-go="sign-in">已有账号？去登录</button>
+          </div>
         </div>
 
 
         <p id="account-error" class="dialog-error" role="alert" hidden></p>
         <p id="account-info" class="account-note account-info" role="status" hidden></p>
         <div id="account-cancel-row" class="dialog-actions">
+          <button id="account-back" class="text-button account-switch" type="button" data-account-go="methods" hidden>← 其他登录方式</button>
           <button id="account-cancel" class="text-button" type="button">取消</button>
         </div>
       </form>

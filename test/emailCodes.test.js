@@ -6,9 +6,10 @@ import { FakeD1 } from "./helpers/d1.js";
 import { PEPPER, browser, environment, upload } from "./helpers/site.js";
 
 /*
- * Codes by email (worker/email.js): signing in without a password, which is
- * also how a forgotten password is replaced (sign in with a code, then set
- * a new one), and confirming an email added to an account. The owner pays
+ * Codes by email (worker/email.js): signing in without a password (a new
+ * address makes an account), which is also how a forgotten password is
+ * replaced (sign in with a code, then set a new one), and confirming an
+ * email added to an account. The owner pays
  * for no email, so the site caps what it sends.
  */
 
@@ -76,12 +77,48 @@ test("a forgotten password: sign in with a code, then set a new one", async () =
   assert.equal((await post(browser(env), "/api/account/sign-in", { login: name, password: "new-password" })).status, 200);
 });
 
-test("an unknown address gets the same answer and no mail", async () => {
+test("a new address: signing in with its code makes the account", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const env = withCodes();
-  const answer = await post(browser(env), "/api/account/email-code", { email: "nobody-here@example.com" });
+  const name = fresh("newcomer");
+  const address = `${name}@example.com`;
+  // A guest with a game, so the game should come along.
+  const cafe = browser(env);
+  await cafe.call("/api/records", { method: "POST", body: upload() });
+  const asked = await post(cafe, "/api/account/email-code", { email: address });
+  assert.deepEqual([asked.status, asked.json], [200, { ok: true, resendAfter: 60 }]);
+  assert.equal(devOutboxFor(env, address).type, "sign-in");
+  const signedIn = await post(cafe, "/api/account/email-sign-in", { email: address, code: codeFor(env, address) });
+  assert.equal(signedIn.status, 200);
+  // Named from the address (worker/auth.js databaseHooks), changeable later.
+  assert.deepEqual([signedIn.json.created, signedIn.json.account.name], [true, name]);
+  const me = (await cafe.call("/api/account")).json.account;
+  assert.deepEqual([me.email, me.emailVerified, me.hasPassword], [address, true, false]);
+  const list = (await cafe.call("/api/records")).json;
+  assert.deepEqual([list.account.name, list.records.length], [name, 1]);
+
+  // The next code for that address signs in to the same account.
+  t.mock.timers.tick(61_000);
+  const phone = browser(env);
+  await post(phone, "/api/account/email-code", { email: address });
+  const again = await post(phone, "/api/account/email-sign-in", { email: address, code: codeFor(env, address) });
+  assert.deepEqual([again.json.created, again.json.account.name], [false, name]);
+  assert.equal(env.DB.rows("user").filter((row) => row.email === address).length, 1);
+});
+
+test("an address an account never confirmed gets the same answer and no mail", async () => {
+  const env = withCodes();
+  const name = fresh("Una");
+  const address = `${name.toLowerCase()}@example.com`;
+  await post(browser(env), "/api/account/register", { username: name, password: "una-password" });
+  env.DB.database.prepare(`UPDATE "user" SET email = ?, "emailVerified" = 0 WHERE username = ?`)
+    .run(address, name.toLowerCase());
+  const answer = await post(browser(env), "/api/account/email-code", { email: address });
   assert.deepEqual([answer.status, answer.json], [200, { ok: true, resendAfter: 60 }]);
-  assert.equal(devOutboxFor(env, "nobody-here@example.com"), null);
+  assert.equal(devOutboxFor(env, address), null);
   assert.equal(env.DB.rows("email_send").length, 0, "nothing counted against the caps");
+  const guessed = await post(browser(env), "/api/account/email-sign-in", { email: address, code: "123456" });
+  assert.equal(guessed.json.code, "WRONG_CODE");
   for (const email of ["", "not-an-email", "x@account.invalid"]) {
     assert.equal((await post(browser(env), "/api/account/email-code", { email })).json.code, "BAD_EMAIL", email);
   }

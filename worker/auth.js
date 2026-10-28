@@ -110,8 +110,9 @@ export async function deleteAccount(db, userId) {
 
 /**
  * A username nobody has for an account made without one (by signing in
- * with Google, owner's decision 2026-10-28): the first free one of
- * usernameCandidates, else the first with a random number after it.
+ * with Google or an email code, owner's decisions 2026-10-28): the first
+ * free one of usernameCandidates, else the first with a random number
+ * after it.
  */
 async function freeUsername(db, user) {
   const candidates = usernameCandidates({ name: user.name, email: user.email });
@@ -192,9 +193,10 @@ function authOptions(env, origin) {
     // stays). Signed in, someone binds any Google account they choose
     // (account settings), whatever its address.
     account: { accountLinking: { requireLocalEmailVerified: true, allowDifferentEmails: true } },
-    // An account made by signing in with Google gets a username nobody has,
-    // made from its Google name ("Fu Rong" becomes FuRong, or FuRong2...);
-    // it can be changed in account settings. Guests have none.
+    // An account made by signing in with Google or an email code gets a
+    // username nobody has, made from its Google name ("Fu Rong" becomes
+    // FuRong, or FuRong2...) or its address before the @; it can be
+    // changed in account settings. Guests have none.
     databaseHooks: {
       user: {
         create: {
@@ -215,15 +217,14 @@ function authOptions(env, origin) {
         onLinkAccount: ({ anonymousUser, newUser }) =>
           adoptGuest(env.DB, anonymousUser?.user?.id, newUser?.user?.id),
       }),
-      // Codes by email: signing in without a password (existing accounts
-      // only; registering needs a username) and checking an address added
-      // to an account. worker/email.js caps what is sent.
+      // Codes by email: signing in without a password (a new address makes
+      // an account, named by databaseHooks below) and checking an address
+      // added to an account. worker/email.js caps what is sent.
       emailOTP({
         otpLength: 6,
         expiresIn: EMAIL_CODE_SECONDS,
         allowedAttempts: 5,
         storeOTP: "hashed",
-        disableSignUp: true,
         changeEmail: { enabled: true },
         sendVerificationOTP: ({ email, otp, type }) => queueCodeEmail(env, { email, otp, type }),
       }),

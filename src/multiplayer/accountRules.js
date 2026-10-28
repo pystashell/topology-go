@@ -4,7 +4,8 @@
  * Owner's decision (2026-10-26): a username of 2-20 characters in Chinese,
  * English or digits and a password are required; an email is added later,
  * confirmed with a code (2026-10-28). An account made by signing in with
- * Google is given a username made from its Google name (usernameCandidates).
+ * Google or an email code is given a username made from its Google name or
+ * its address (usernameCandidates).
  */
 
 export const USERNAME_MIN_LENGTH = 2;
@@ -24,7 +25,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/u;
 // The site makes up addresses under .invalid for guests and for accounts
 // registered without an email; nobody types one.
 const MADE_UP_EMAIL = /\.invalid$/iu;
-// The username of last resort for an account made with Google.
+// The username of last resort for an account made with Google or a code.
 const FALLBACK_USERNAME = "棋手";
 
 /** What makes two usernames the same one: "Mia", "mia" and "ｍｉａ" are. */
@@ -50,7 +51,7 @@ export function usernameFrom(value, maxLength = USERNAME_MAX_LENGTH) {
 }
 
 /**
- * Usernames for an account made without one (by signing in with Google),
+ * Usernames for an account made without one (by Google or an email code),
  * best first: its name with what usernames cannot have dropped ("Fu Rong"
  * gives "FuRong"), else its address before the @, else 棋手; then the same
  * with 2, 3, ... after it, cut to fit. The first one nobody has is taken.

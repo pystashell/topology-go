@@ -236,8 +236,10 @@ async function signedInAccount(request, env) {
 }
 
 /**
- * A sign-in code for a registered email. The answer is the same whether
- * or not the address belongs to an account (nothing is sent if not).
+ * A sign-in code for an email: an account's, or a new address (signing in
+ * with the code then makes the account). An address an account has but
+ * never confirmed gets nothing, since whoever reads it may not own that
+ * account; the answer is the same.
  */
 async function sendSignInCode(request, env) {
   const auth = authFor(env, request);
@@ -247,7 +249,8 @@ async function sendSignInCode(request, env) {
   if (!email) return failure("badEmail");
   try {
     const context = await auth.$context;
-    if ((await context.internalAdapter.findUserByEmail(email))?.user?.emailVerified) {
+    const found = await context.internalAdapter.findUserByEmail(email);
+    if (!found || found.user.emailVerified) {
       await mailCodes(env, () =>
         auth.api.sendVerificationOTP({ headers: request.headers, body: { email, type: "sign-in" } }), email);
     }
@@ -275,10 +278,12 @@ async function signInWithCode(request, env) {
   const code = typeof body?.code === "string" ? body.code.trim() : "";
   if (!email || !/^\d{6}$/u.test(code)) return failure("wrongCode");
   try {
+    const context = await auth.$context;
+    const created = !(await context.internalAdapter.findUserByEmail(email));
     const { headers, response } = await auth.api.signInEmailOTP({
       headers: request.headers, returnHeaders: true, body: { email, otp: code },
     });
-    return withCookies(jsonResponse({ account: accountSummary(response?.user) }), cookiesOf(headers));
+    return withCookies(jsonResponse({ account: accountSummary(response?.user), created }), cookiesOf(headers));
   } catch (error) {
     return authFailure(error);
   }

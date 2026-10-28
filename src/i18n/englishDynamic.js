@@ -54,7 +54,11 @@ export const ENGLISH_DYNAMIC = Object.freeze({
     "You just signed in, so you can set a new password directly. Other devices are then signed out.",
   "建议填邮箱：忘了密码时可以用它收验证码登录，登录后再设新密码。":
     "An email is recommended: if you forget your password you can sign in with a code sent to it and then set a new one.",
-  "请填写账号的邮箱。": "Enter your account's email.",
+  "邮箱验证码登录": "Sign in with an email code",
+  "第一次用 Google 登录，会自动注册一个账号。": "The first time you sign in with Google, an account is made for you.",
+  "第一次用邮箱验证码登录，会自动注册一个账号。": "The first time you sign in with an email code, an account is made for you.",
+  "填账号的邮箱，我们发一个 6 位数验证码，10 分钟内有效。登录后可以直接设新密码。":
+    "Enter your account's email and we send a 6-digit code, valid for 10 minutes. Once signed in you can set a new password directly.",
   "请填写邮箱和收到的 6 位数验证码。": "Enter the email and the 6-digit code you received.",
   "已登录。忘了密码的话，现在就可以直接设一个新密码。": "Signed in. If you forgot your password, you can set a new one right now.",
   "请填写邮箱。": "Enter an email.",
@@ -1016,16 +1020,16 @@ export const ENGLISH_PATTERNS = Object.freeze([
   // An address and its state (after the patterns above that also end so).
   { pattern: /^(.+)（已验证）$/u, replace: "$1 (confirmed)" },
   { pattern: /^(.+)（未验证）$/u, replace: "$1 (not confirmed)" },
-  {
-    pattern: /^如果 (.+) 是这个网站上某个账号的邮箱，验证码已经发过去了，10 分钟内有效。$/u,
-    replace: "If $1 belongs to an account here, a code is on its way; it is valid for 10 minutes.",
-  },
   { pattern: /^验证码已发到 (.+)，10 分钟内有效。$/u, replace: "A code was sent to $1; it is valid for 10 minutes." },
   { pattern: /^注册成功，已登录：(.+)。$/u, replace: "Registered and signed in as $1." },
   { pattern: /^已用 Google 登录：(.+)。$/u, replace: "Signed in with Google as $1." },
   {
     pattern: /^已用 Google 登录。你的用户名是 (.+)，可以在账号设置里修改。$/u,
     replace: "Signed in with Google. Your username is $1; you can change it in account settings.",
+  },
+  {
+    pattern: /^已用邮箱登录。你的用户名是 (.+)，可以在账号设置里修改。$/u,
+    replace: "Signed in with your email. Your username is $1; you can change it in account settings.",
   },
   { pattern: /^已登录：(.+)。$/u, replace: "Signed in as $1." },
   {

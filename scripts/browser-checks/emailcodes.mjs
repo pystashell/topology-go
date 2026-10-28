@@ -1,12 +1,15 @@
 // Codes by email against wrangler dev (npm run dev sets EMAIL_DEV_OUTBOX=1,
-// so nothing is mailed: the codes are read back from /api/dev/outbox). An
-// account registers with a username and a password, adds its email in
+// so nothing is mailed: the codes are read back from /api/dev/outbox). The
+// dialog offers its three ways in side by side; an account registers with
+// a username and a password, adds its email in
 // account settings with a code, and forgets its password: on another
 // browser it signs in with a code, the dialog stays on the new password
 // (no current one asked), the old password stops working and the new one
 // works; then it changes its email with a code, sees its ways to sign in
-// and changes its username. The send button waits a minute between codes
-// (the check waits one too), and it all reads in English. About 1.5 minutes.
+// and changes its username. Last, a new address signs in with a code and
+// so gets an account named after it. The send button waits a minute
+// between codes (the check waits one too), and it all reads in English.
+// About 1.5 minutes.
 import { randomBytes } from "node:crypto";
 
 import { BASE, cjkLeftovers, launch, openPage, problems, shot, text } from "./lib.mjs";
@@ -17,6 +20,7 @@ const record = {};
 const username = `码${Date.now() % 1_000_000}`;
 const address = `code-check-${Date.now()}@example.com`;
 const changedAddress = `code-check-${Date.now()}-new@example.com`;
+const newcomer = `newcomer_${Date.now() % 1_000_000}`;
 const oldPassword = randomBytes(12).toString("base64url");
 const newPassword = randomBytes(12).toString("base64url");
 
@@ -37,10 +41,17 @@ async function codeFor(pageValue, to) {
   }, to);
 }
 
-async function signInWithPassword(pageValue, password) {
-  await pageValue.goto(`${BASE}/single`);
+/** Open the dialog and pick a way in, once the dialog offers all three. */
+async function chooseMethod(pageValue, method) {
   await pageValue.click("#account-button");
   await pageValue.waitForSelector("#account-dialog[open]");
+  await pageValue.waitForSelector("#account-method-code:not([hidden])", { timeout: 10_000 });
+  await pageValue.click(method);
+}
+
+async function signInWithPassword(pageValue, password) {
+  await pageValue.goto(`${BASE}/single`);
+  await chooseMethod(pageValue, "#account-method-password");
   await pageValue.fill("#sign-in-login", username);
   await pageValue.fill("#sign-in-password", password);
   await pageValue.click("#sign-in-submit");
@@ -60,7 +71,17 @@ try {
   await home.goto(`${BASE}/single`);
   await home.click("#account-button");
   await home.waitForSelector("#account-dialog[open]");
-  await home.click('[data-account-tab="register"]');
+  await home.waitForSelector("#account-method-code:not([hidden])", { timeout: 10_000 });
+  record.methodsOffered = {
+    title: await text(home, "#account-title"),
+    buttons: await home.$$eval('[data-account-panel="methods"] button:not([hidden])', (buttons) => buttons.map((button) => button.textContent.trim())),
+    note: await text(home, "#account-methods-note"),
+  };
+  record.methodsShot = await shot(home, "emailcodes-methods");
+  await home.click("#account-method-password");
+  record.passwordShot = await shot(home, "emailcodes-password");
+  record.forgotLink = await home.$eval("#account-use-code", (link) => getComputedStyle(link).textDecorationLine);
+  await home.click('[data-account-panel="sign-in"] [data-account-go="register"]');
   // The note changes once the dialog knows codes are on.
   await home.waitForFunction(() => /注册后可以在账号设置里绑定邮箱/u.test(document.querySelector("#account-register-note")?.textContent ?? ""), null, { timeout: 10_000 });
   record.registerNote = await text(home, "#account-register-note");
@@ -83,9 +104,7 @@ try {
 
   // 2. Another browser, the password forgotten: a code instead.
   await phone.goto(`${BASE}/single`);
-  await phone.click("#account-button");
-  await phone.waitForSelector("#account-dialog[open]");
-  await phone.waitForSelector("#account-use-code:not([hidden])", { timeout: 10_000 });
+  await chooseMethod(phone, "#account-method-password");
   await phone.click("#account-use-code");
   await phone.fill("#code-email", address);
   await phone.click("#code-send");
@@ -148,6 +167,20 @@ try {
     leftovers: (await cjkLeftovers(phone)).filter((value) => !value.includes(username) && !value.includes(record.renamed.expected)),
   };
   record.englishShot = await shot(phone, "emailcodes-english");
+
+  // 7. A new address: its code makes an account named after it.
+  // (A fresh page: the one above was switched to English.)
+  const fourth = await page("fourth");
+  await fourth.goto(`${BASE}/single`);
+  await chooseMethod(fourth, "#account-method-code");
+  record.codeTitle = await text(fourth, "#account-title");
+  await fourth.fill("#code-email", `${newcomer}@example.com`);
+  await fourth.click("#code-send");
+  await fourth.waitForFunction(() => !document.querySelector("#account-info")?.hidden, null, { timeout: 10_000 });
+  await fourth.fill("#code-input", await codeFor(fourth, `${newcomer}@example.com`));
+  await fourth.click("#code-sign-in");
+  await fourth.waitForFunction((name) => document.querySelector("#account-button-label")?.textContent === name, newcomer, { timeout: 15_000 });
+  record.newcomer = { message: await text(fourth, "#message"), dialogOpen: await fourth.locator("#account-dialog[open]").count() };
 } catch (error) {
   record.error = error.stack;
   record.failShots = [await shot(home, "emailcodes-fail-home"), await shot(phone, "emailcodes-fail-phone")];
@@ -155,8 +188,12 @@ try {
 await browser.close();
 
 const ok = !record.error &&
+  record.methodsOffered?.title === "登录或注册" &&
+  // Google too where it is set up (npm run dev does not).
+  record.methodsOffered.buttons.filter((label) => label !== "用 Google 登录").join("|") === "用邮箱验证码登录|用用户名和密码登录" &&
+  /会自动注册一个账号/u.test(record.methodsOffered.note) && record.forgotLink === "underline" &&
   /注册后可以在账号设置里绑定邮箱/u.test(record.registerNote ?? "") && record.registerHasEmail === 0 &&
-  new RegExp(`如果 ${address.replace(/[.]/gu, "\\.")} 是这个网站上某个账号的邮箱`, "u").test(record.sent?.info ?? "") &&
+  record.sent?.info === `验证码已发到 ${address}，10 分钟内有效。` &&
   /^重新发送（\d+）$/u.test(record.sent?.button ?? "") && record.codeShape &&
   record.afterCode?.button === username && /现在就可以直接设一个新密码/u.test(record.afterCode.info) &&
   record.afterCode.currentPasswordAsked === 0 && /（已验证）/u.test(record.afterCode.email) &&
@@ -167,7 +204,10 @@ const ok = !record.error &&
   record.methods?.length === 2 && /用户名和密码 已设置/u.test(record.methods[0]) &&
   record.methods[1].includes(changedAddress) &&
   record.renamed?.username === record.renamed.expected && /用户名已改成/u.test(record.renamed.info) &&
-  record.english?.email === `${changedAddress} (confirmed)` && record.english.leftovers.length === 0;
+  record.english?.email === `${changedAddress} (confirmed)` && record.english.leftovers.length === 0 &&
+  record.codeTitle === "邮箱验证码登录" &&
+  record.newcomer?.message === `已用邮箱登录。你的用户名是 ${newcomer}，可以在账号设置里修改。` &&
+  record.newcomer.dialogOpen === 0;
 // The refused old password (step 3) is the point of that step.
 const unexpected = problems.filter((problem) => !/^\[third\] console\.error: Failed to load resource: .*401/u.test(problem));
 console.log(JSON.stringify({ ok, record, problems: unexpected }, null, 2));
