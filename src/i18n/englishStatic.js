@@ -41,7 +41,7 @@ export const ENGLISH_STATIC = Object.freeze({
   "暂时还不能找回密码，请记好它。": "Passwords cannot be recovered yet, so keep yours safe.",
   "注册并登录": "Register and sign in",
   "或者": "or",
-  "用 Google 登录": "Sign in with Google",
+  "Google 登录": "Sign in with Google",
   // Codes by email, a new password, an added email.
   "你的账号还没有密码，现在只能用邮箱验证码或 Google 登录。":
     "Your account has no password yet; for now you sign in with an email code or Google.",
@@ -58,8 +58,8 @@ export const ENGLISH_STATIC = Object.freeze({
   "忘了密码？用邮箱验证码登录": "Forgot your password? Sign in with an email code",
   "填你的邮箱，我们发一个 6 位数验证码，10 分钟内有效。这个邮箱还没有账号的话，会自动注册一个。":
     "Enter your email and we send a 6-digit code, valid for 10 minutes. If the email has no account yet, one is made for it.",
-  "用邮箱验证码登录": "Sign in with an email code",
-  "用用户名和密码登录": "Sign in with a username and password",
+  "邮箱验证码登录": "Sign in with an email code",
+  "用户名和密码登录": "Sign in with a username and password",
   "第一次用 Google 或邮箱验证码登录，会自动注册一个账号。":
     "The first time you sign in with Google or an email code, an account is made for you.",
   "还没有账号？注册一个": "No account yet? Register",

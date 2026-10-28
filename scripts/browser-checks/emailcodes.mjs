@@ -190,7 +190,7 @@ await browser.close();
 const ok = !record.error &&
   record.methodsOffered?.title === "登录或注册" &&
   // Google too where it is set up (npm run dev does not).
-  record.methodsOffered.buttons.filter((label) => label !== "用 Google 登录").join("|") === "用邮箱验证码登录|用用户名和密码登录" &&
+  record.methodsOffered.buttons.filter((label) => label !== "Google 登录").join("|") === "邮箱验证码登录|用户名和密码登录" &&
   /会自动注册一个账号/u.test(record.methodsOffered.note) && record.forgotLink === "underline" &&
   /注册后可以在账号设置里绑定邮箱/u.test(record.registerNote ?? "") && record.registerHasEmail === 0 &&
   record.sent?.info === `验证码已发到 ${address}，10 分钟内有效。` &&

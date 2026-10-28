@@ -1,6 +1,6 @@
-# 开启“用 Google 登录”（负责人操作，约 10 分钟）
+# 开启“Google 登录”（负责人操作，约 10 分钟）
 
-代码已经写好：Worker 里有了 Google 的客户端 ID 和密钥，登录对话框就会出现“用 Google 登录”按钮；没有就不显示，别的登录方式不受影响。Google 不收费。
+代码已经写好：Worker 里有了 Google 的客户端 ID 和密钥，登录对话框就会出现“Google 登录”按钮；没有就不显示，别的登录方式不受影响。Google 不收费。
 
 需要负责人自己在 Google Cloud Console 建一个 OAuth 客户端，因为它属于你的 Google 账号。
 
@@ -41,7 +41,7 @@ npx wrangler secret put GOOGLE_CLIENT_ID
 npx wrangler secret put GOOGLE_CLIENT_SECRET
 ```
 
-设置密钥会让线上 Worker 立即生效，不用重新发布。之后打开网站 → 右上角“登录”，对话框底部应该出现“用 Google 登录”。
+设置密钥会让线上 Worker 立即生效，不用重新发布。之后打开网站 → 右上角“登录”，对话框里应该出现“Google 登录”。
 
 ## 说明
 
