@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { usernameCandidates, usernameFrom } from "../src/multiplayer/accountRules.js";
+import { authFor } from "../worker/auth.js";
 import { FakeD1 } from "./helpers/d1.js";
-import { PEPPER, browser, environment, upload } from "./helpers/site.js";
+import { ORIGIN, PEPPER, browser, environment, upload } from "./helpers/site.js";
 
 /*
  * Account settings beyond email and password: a new username, the ways to
  * sign in (each bound Google account can be unbound, another one bound),
- * and the rule that an email belongs to an account only once confirmed.
+ * the rule that an email belongs to an account only once confirmed, and
+ * the username an account made with Google is given.
  */
 
 const accounts = (overrides = {}) => environment({ PASSWORD_PEPPER: PEPPER, ...overrides });
@@ -131,4 +134,65 @@ test("only confirmed emails belong to an account", async () => {
   assert.match(emails.typed, /^[0-9a-f]{32}@account\.invalid$/u);
   assert.deepEqual([emails.confirmed, emails.guest, emails.none],
     ["confirmed@example.com", "temp-1@guest.invalid", "abc@account.invalid"]);
+});
+
+test("a username made from a Google name: what usernames cannot have dropped, a number when taken", () => {
+  assert.deepEqual(usernameCandidates({ name: "Fu Rong", email: "fu@gmail.com" }, 3), ["FuRong", "FuRong2", "FuRong3"]);
+  assert.deepEqual([usernameFrom("Jean-Luc Picard"), usernameFrom("付 蓉"), usernameFrom("😀 小明 😀"), usernameFrom("Zoë")],
+    ["JeanLucPicard", "付蓉", "小明", "Zoë"]);
+  // Nothing usable in the name: the address before the @, else 棋手.
+  assert.equal(usernameCandidates({ name: "☆", email: "li.ming@gmail.com" })[0], "liming");
+  assert.equal(usernameCandidates({ name: "Guest", email: "a@gmail.com" })[0], "棋手", "reserved, and one letter is too short");
+  assert.equal(usernameCandidates({ name: "", email: "lee@account.invalid" })[0], "棋手", "never a made-up address");
+  // Cut to fit 20 characters, the number included.
+  const long = usernameCandidates({ name: "Christopher Alexander Montgomery" }, 11);
+  assert.deepEqual([long[0], long[1], long[10]], ["ChristopherAlexander", "ChristopherAlexande2", "ChristopherAlexand11"]);
+  assert.equal(new Set(long).size, 11);
+});
+
+test("an account made by signing in with Google gets a username nobody has", async () => {
+  const env = accounts();
+  await post(browser(env), "/api/account/register", { username: "FuRong", password: "fu-password" });
+  const context = await authFor(env, new Request(`${ORIGIN}/`)).$context;
+  // As Google sign-in makes an account (the same database hooks).
+  const made = (name, email) => context.internalAdapter.createUser({ name, email, emailVerified: true });
+  const first = await made("Fu Rong", "fu.rong@gmail.com");
+  assert.deepEqual([first.username, first.displayUsername, first.name], ["furong2", "FuRong2", "Fu Rong"]);
+  assert.equal((await made("fu rong", "rong.fu@gmail.com")).displayUsername, "furong3");
+  assert.equal((await made("☆", "li.ming@gmail.com")).displayUsername, "liming");
+  // Stored the way every username is: its key, for looking it up.
+  assert.equal(env.DB.rows("user").find(({ email }) => email === "li.ming@gmail.com").username, "liming");
+
+  // Guests and registered accounts are as before.
+  const guest = browser(env);
+  await guest.call("/api/records", { method: "POST", body: upload() });
+  assert.equal(env.DB.rows("user").find((user) => user.isAnonymous === 1).username, null);
+  assert.equal((await post(browser(env), "/api/account/register", { username: "Mia", password: "mia-password" })).json.account.name, "Mia");
+});
+
+test("an account made with Google before usernames were given gets one on its next visit", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const env = accounts();
+  const kai = browser(env);
+  await post(kai, "/api/account/register", { username: "Kai", password: "kai-password" });
+  await post(browser(env), "/api/account/register", { username: "KaiLin", password: "lin-password" });
+  // As Google sign-in made it before: no username, the name from Google.
+  env.DB.database.prepare(`UPDATE "user" SET username = NULL, "displayUsername" = NULL, name = 'Kai Lin' WHERE username = 'kai'`).run();
+  t.mock.timers.tick(6 * 60 * 1_000);
+
+  assert.equal((await kai.call("/api/account")).json.account.name, "KaiLin2");
+  const stored = env.DB.rows("user").find(({ name }) => name === "Kai Lin");
+  assert.deepEqual([stored.username, stored.displayUsername], ["kailin2", "KaiLin2"]);
+  // Again, while the session's copy still has none: the same name, not another.
+  assert.equal((await kai.call("/api/account")).json.account.name, "KaiLin2");
+  assert.equal(env.DB.rows("user").filter(({ username }) => username?.startsWith("kailin")).length, 2);
+  assert.equal((await post(browser(env), "/api/account/sign-in", { login: "KaiLin2", password: "kai-password" })).status, 200);
+});
+
+test("Google sign-in returns to a page that knows whether the account is new", async () => {
+  const env = accounts({ GOOGLE_CLIENT_ID: "client-id.apps.googleusercontent.com", GOOGLE_CLIENT_SECRET: "client-secret" });
+  await post(browser(env), "/api/account/google", { returnTo: "/records" });
+  const state = JSON.parse(env.DB.rows("verification").at(-1).value);
+  assert.deepEqual([state.callbackURL, state.newUserURL, state.errorURL],
+    ["/records?signed-in=google", "/records?signed-in=google-new", "/records?sign-in-failed=google"]);
 });

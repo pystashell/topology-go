@@ -20,7 +20,10 @@ import { anonymous, emailOTP, username } from "better-auth/plugins";
 import {
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
+  USERNAME_MAX_LENGTH,
   cleanUsername,
+  usernameCandidates,
+  usernameFrom,
   usernameKey,
 } from "../src/multiplayer/accountRules.js";
 import { EMAIL_CODE_SECONDS, queueCodeEmail } from "./email.js";
@@ -105,6 +108,38 @@ export async function deleteAccount(db, userId) {
   return deleted.meta.changes > 0;
 }
 
+/**
+ * A username nobody has for an account made without one (by signing in
+ * with Google, owner's decision 2026-10-28): the first free one of
+ * usernameCandidates, else the first with a random number after it.
+ */
+async function freeUsername(db, user) {
+  const candidates = usernameCandidates({ name: user.name, email: user.email });
+  const keys = candidates.map(usernameKey);
+  const { results } = await db.prepare(
+    `SELECT username FROM "user" WHERE username IN (${keys.map(() => "?").join(", ")})`,
+  ).bind(...keys).all();
+  const taken = new Set(results.map((row) => row.username));
+  const free = candidates.find((candidate) => !taken.has(usernameKey(candidate)));
+  if (free) return free;
+  const number = String(Math.floor(Math.random() * 900_000) + 100_000);
+  return `${usernameFrom(candidates[0], USERNAME_MAX_LENGTH - number.length) ?? candidates[0]}${number}`;
+}
+
+/**
+ * An account made by signing in with Google before usernames were given
+ * (0.3.0-rc.18) gets one now. Returns the user with it, or as it was when
+ * someone else gave it one first.
+ */
+export async function giveUsername(db, user) {
+  const name = await freeUsername(db, user);
+  const { meta } = await db.prepare(
+    `UPDATE "user" SET username = ?, "displayUsername" = ?
+     WHERE id = ? AND username IS NULL AND ("isAnonymous" IS NULL OR "isAnonymous" = 0)`,
+  ).bind(usernameKey(name), name, user.id).run();
+  return meta.changes > 0 ? { ...user, username: usernameKey(name), displayUsername: name } : user;
+}
+
 /** The guests an account was before (none for a guest), newest first. */
 export async function formerUserIds(db, user) {
   if (!db || !user?.id || user.isAnonymous) return [];
@@ -157,6 +192,20 @@ function authOptions(env, origin) {
     // stays). Signed in, someone binds any Google account they choose
     // (account settings), whatever its address.
     account: { accountLinking: { requireLocalEmailVerified: true, allowDifferentEmails: true } },
+    // An account made by signing in with Google gets a username nobody has,
+    // made from its Google name ("Fu Rong" becomes FuRong, or FuRong2...);
+    // it can be changed in account settings. Guests have none.
+    databaseHooks: {
+      user: {
+        create: {
+          before: async (user) => {
+            if (user.isAnonymous || user.username) return undefined;
+            const name = await freeUsername(env.DB, user);
+            return { data: { username: usernameKey(name), displayUsername: name } };
+          },
+        },
+      },
+    },
     plugins: [
       anonymous({
         emailDomainName: "guest.invalid",

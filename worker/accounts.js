@@ -32,6 +32,7 @@ import {
   authFor,
   currentSession,
   deleteAccount,
+  giveUsername,
   googleConfigured,
   passwordsConfigured,
   withCookies,
@@ -175,12 +176,25 @@ function googleAddress(account) {
   }
 }
 
+/**
+ * The stored user, with a username: an account made by signing in with
+ * Google before 0.3.0-rc.18 had none and gets one now (giveUsername).
+ */
+async function withUsername(auth, env, user) {
+  const context = await auth.$context;
+  // The stored user, not the session's copy (cached for minutes).
+  const stored = await context.internalAdapter.findUserById(user.id);
+  if (!stored) return user;
+  return stored.username ? stored : giveUsername(env.DB, stored);
+}
+
 async function whoAmI(request, env) {
   const auth = authFor(env, request);
-  const found = auth ? await currentSession(env, request) : null;
+  let found = auth ? await currentSession(env, request) : null;
   let account = accountSummary(found?.user);
   if (account && !account.guest) {
     try {
+      if (!found.user.username) found = { ...found, user: await withUsername(auth, env, found.user) };
       account = await accountDetails(auth, found);
     } catch (error) {
       console.error("Reading account details failed", error);
@@ -425,7 +439,10 @@ async function signOut(request, env) {
   }
 }
 
-/** The Google page to send the browser to; it returns to the page it left. */
+/**
+ * The Google page to send the browser to; it returns to the page it left
+ * (saying so, and whether the account is new: the page names its username).
+ */
 async function startGoogle(request, env) {
   const auth = authFor(env, request);
   if (!auth || !googleConfigured(env)) return failure("googleUnavailable");
@@ -438,6 +455,7 @@ async function startGoogle(request, env) {
       body: {
         provider: "google",
         callbackURL: `${back}?signed-in=google`,
+        newUserCallbackURL: `${back}?signed-in=google-new`,
         errorCallbackURL: `${back}?sign-in-failed=google`,
         disableRedirect: true,
       },
