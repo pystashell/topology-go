@@ -4,8 +4,9 @@
 // link takes it back to the seat it took on the first one; signing out
 // forgets the account and the room identities there, a wrong password is
 // refused, signing in again brings the games back, and the dialog reads in
-// English. The account and its password are made up for each run. About a
-// minute.
+// English; last, the account is deleted (its username typed to confirm) and
+// no longer signs in. The account and its password are made up for each
+// run. About a minute.
 import { randomBytes } from "node:crypto";
 
 import { BASE, cjkLeftovers, clickPoint, configureBoard, launch, openPage, problems, scanBoard, setView, shot, startLocalGame, text } from "./lib.mjs";
@@ -153,6 +154,27 @@ try {
     leftovers: (await cjkLeftovers(phone)).filter((value) => !value.includes(username)),
   };
   record.englishShot = await shot(phone, "accounts-english");
+
+  // 9. Deleting the account: just signed in, so the username is enough.
+  await phone.goto(`${BASE}/settings`);
+  await phone.waitForSelector("#settings-body:not([hidden])", { timeout: 10_000 });
+  record.deleteForm = {
+    passwordAsked: await phone.locator("#settings-delete-password-field:not([hidden])").count(),
+    signInNote: await phone.locator("#settings-delete-note:not([hidden])").count(),
+  };
+  record.deleteShot = await shot(phone, "accounts-delete");
+  await phone.fill("#settings-delete-username", `${username}x`);
+  await phone.click("#settings-delete-submit");
+  await phone.waitForFunction(() => !document.querySelector("#settings-error")?.hidden, null, { timeout: 10_000 });
+  record.wrongUsername = await text(phone, "#settings-error");
+  await phone.fill("#settings-delete-username", username);
+  await phone.click("#settings-delete-submit");
+  await phone.waitForURL(/\/single$/u, { timeout: 15_000 });
+  await phone.waitForFunction(() => /账号已删除/u.test(document.querySelector("#message")?.textContent ?? ""), null, { timeout: 10_000 });
+  record.deleted = { message: await text(phone, "#message"), button: await text(phone, "#account-button-label") };
+  await signIn(phone, username, password);
+  await phone.waitForFunction(() => !document.querySelector("#account-error")?.hidden, null, { timeout: 10_000 });
+  record.afterDelete = await text(phone, "#account-error");
 } catch (error) {
   record.error = error.stack;
   record.failShots = [await shot(home, "accounts-fail-home"), await shot(phone, "accounts-fail-phone")];
@@ -173,9 +195,14 @@ const ok = !record.error &&
   record.wrongPassword === "用户名（或邮箱）或密码不对。" &&
   record.signedInAgain?.games[0] === record.guestList.games[0] &&
   record.menu?.join("|") === "我的棋谱|账号设置|退出登录" &&
-  record.english?.title === "Account" && record.english.leftovers.length === 0;
-// The refused sign-in in step 7 is the point of that step.
+  record.english?.title === "Account" && record.english.leftovers.length === 0 &&
+  record.deleteForm?.passwordAsked === 0 && record.deleteForm.signInNote === 0 &&
+  record.wrongUsername === "输入的用户名和这个账号的不一样。" &&
+  record.deleted?.message === "账号已删除。" && record.deleted.button === "登录" &&
+  record.afterDelete === "用户名（或邮箱）或密码不对。";
+// The refused sign-ins (steps 7 and 9) and the mistyped username (step 9)
+// are the point of those steps.
 const unexpected = problems.filter((problem) =>
-  !/^\[phone\] console\.error: Failed to load resource: .*401/u.test(problem));
+  !/^\[phone\] console\.error: Failed to load resource: .*40[01]/u.test(problem));
 console.log(JSON.stringify({ ok, record, problems: unexpected }, null, 2));
 process.exitCode = ok && unexpected.length === 0 ? 0 : 1;

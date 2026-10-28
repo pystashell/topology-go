@@ -88,6 +88,23 @@ export async function adoptGuest(db, guestId, userId, now = Date.now()) {
   }
 }
 
+/**
+ * Delete an account (never a guest) for good. Its sessions, sign-ins,
+ * former guest ids and places on game lists go with it (foreign keys
+ * cascade); a game nobody else keeps goes too, while the other player of
+ * a game keeps theirs. One D1 batch. Returns whether an account was deleted.
+ */
+export async function deleteAccount(db, userId) {
+  const [, deleted] = await db.batch([
+    db.prepare(
+      `DELETE FROM game_record WHERE id IN (SELECT record_id FROM game_record_owner WHERE user_id = ?)
+       AND NOT EXISTS (SELECT 1 FROM game_record_owner o WHERE o.record_id = game_record.id AND o.user_id <> ?)`,
+    ).bind(userId, userId),
+    db.prepare(`DELETE FROM "user" WHERE id = ? AND ("isAnonymous" IS NULL OR "isAnonymous" = 0)`).bind(userId),
+  ]);
+  return deleted.meta.changes > 0;
+}
+
 /** The guests an account was before (none for a guest), newest first. */
 export async function formerUserIds(db, user) {
   if (!db || !user?.id || user.isAnonymous) return [];

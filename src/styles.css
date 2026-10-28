@@ -3603,6 +3603,20 @@ select:disabled {
   gap: 10px;
 }
 
+/* Deleting the account: set apart at the bottom of the account section. */
+.settings-danger {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.settings-danger h3 {
+  margin: 0;
+  color: #ffb0a5;
+}
+
 .settings-info {
   margin: 0;
   color: var(--accent-strong);
