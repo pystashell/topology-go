@@ -3272,9 +3272,26 @@ select:disabled {
   margin-bottom: 0;
 }
 
-.account-tabs {
+.account-methods {
+  gap: 10px;
+}
+
+.method-mark {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.account-switches {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  justify-items: start;
+  gap: 2px;
+}
+
+.account-dialog .dialog-actions > :last-child {
+  margin-inline-start: auto;
 }
 
 .account-dialog .account-note {
@@ -3296,6 +3313,19 @@ select:disabled {
 .account-switch {
   justify-self: start;
   padding-inline: 0;
+}
+
+/* Text that can be clicked reads as a link. */
+.account-switch {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-decoration-color: rgba(240, 196, 119, 0.45);
+  text-underline-offset: 3px;
+}
+
+.account-switch:hover {
+  color: #ffd99a;
+  text-decoration-color: currentColor;
 }
 
 /* Adding an email or a new password, inside the signed-in view. */

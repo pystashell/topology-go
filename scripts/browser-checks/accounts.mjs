@@ -43,7 +43,7 @@ async function openAccount(pageValue) {
 
 async function signIn(pageValue, login, secret) {
   await openAccount(pageValue);
-  await pageValue.click('[data-account-tab="sign-in"]');
+  await pageValue.click("#account-method-password");
   await pageValue.fill("#sign-in-login", login);
   await pageValue.fill("#sign-in-password", secret);
   await pageValue.click("#sign-in-submit");
@@ -76,6 +76,8 @@ try {
   // 2. The guest registers from the note on My games and keeps the game.
   await home.click("#records-register");
   await home.waitForSelector("#account-dialog[open]");
+  await home.click("#account-method-password");
+  await home.click('[data-account-panel="sign-in"] [data-account-go="register"]');
   await home.fill("#register-username", username);
   await home.fill("#register-password", password);
   await home.fill("#register-password-again", `${password}x`);

@@ -35,7 +35,8 @@ const HINT_STORAGE_KEY = "topology-go-account-v1";
 // Set before the page reloads after signing out ("1") or deleting the
 // account ("deleted"), to say so afterwards.
 const SIGNED_OUT_KEY = "topology-go-signed-out";
-// Set before going to the settings page after signing in with a code.
+// Set before going to the settings page after signing in with a code
+// because the password was forgotten.
 const CODE_SIGNED_IN_KEY = "topology-go-code-signed-in";
 const SEND_CODE_LABEL = "发送验证码";
 const CODE_PATTERN = /^\d{6}$/u;
@@ -46,8 +47,11 @@ const SETTINGS_SECTIONS = ["account", "sign-in", "email", "password"];
 let account = null;
 let accountKnown = false;
 let signInOptions = { passwords: true, google: false, emailCodes: false };
-// "sign-in", "register" or "code" (signing in with an email code).
-let accountTab = "sign-in";
+// "methods" (the ways to sign in, side by side), "sign-in" (a password),
+// "register" or "code" (an email code).
+let accountTab = "methods";
+// The code was asked for under "forgot your password?": a new one next.
+let codeForPassword = false;
 let settingsSection = "account";
 // A message for the settings page once it knows the account (after Google).
 let settingsNotice = null;
@@ -197,7 +201,7 @@ function closeAccountMenu({ focusButton = false } = {}) {
 function wireAccountMenu() {
   elements.accountButton.addEventListener("click", () => {
     if (!signedInName()) {
-      openAccountDialog("sign-in");
+      openAccountDialog();
       return;
     }
     if (elements.accountMenu.hidden) openAccountMenu();
@@ -268,33 +272,61 @@ function startResendCountdown(button, seconds = 60) {
   countdowns.set(button, window.setInterval(tick, 1_000));
 }
 
+const ACCOUNT_TITLES = { methods: "登录或注册", "sign-in": "登录", register: "注册账号", code: "邮箱验证码登录" };
+
+/** Ways in besides a password (each also makes an account the first time). */
+function otherSignInMethods() {
+  return signInOptions.google || signInOptions.emailCodes;
+}
+
+/** The part of the dialog shown: with only passwords, straight to them. */
+function shownAccountTab() {
+  return accountTab === "methods" && !otherSignInMethods() ? "sign-in" : accountTab;
+}
+
 function renderAccountDialog() {
-  const tab = accountTab === "code" ? "sign-in" : accountTab;
-  for (const button of elements.accountTabButtons) {
-    const active = button.dataset.accountTab === tab;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", String(active));
-  }
-  for (const panel of elements.accountPanels) panel.hidden = panel.dataset.accountPanel !== accountTab;
+  const tab = shownAccountTab();
+  for (const panel of elements.accountPanels) panel.hidden = panel.dataset.accountPanel !== tab;
+  elements.accountTitle.textContent = ACCOUNT_TITLES[tab];
+  elements.accountBack.hidden = tab === "methods" || !otherSignInMethods();
   elements.accountGuestNote.hidden = account?.guest !== true;
-  elements.accountGoogle.hidden = !signInOptions.google;
+  elements.accountGoogleButton.hidden = !signInOptions.google;
+  elements.accountMethodCode.hidden = !signInOptions.emailCodes;
   elements.accountUseCode.hidden = !signInOptions.emailCodes;
+  elements.accountMethodsNote.hidden = !otherSignInMethods();
+  if (signInOptions.google && signInOptions.emailCodes) {
+    elements.accountMethodsNote.textContent = "第一次用 Google 或邮箱验证码登录，会自动注册一个账号。";
+  } else if (otherSignInMethods()) {
+    elements.accountMethodsNote.textContent = signInOptions.google
+      ? "第一次用 Google 登录，会自动注册一个账号。"
+      : "第一次用邮箱验证码登录，会自动注册一个账号。";
+  }
+  elements.accountCodeNote.textContent = codeForPassword
+    ? "填账号的邮箱，我们发一个 6 位数验证码，10 分钟内有效。登录后可以直接设新密码。"
+    : "填你的邮箱，我们发一个 6 位数验证码，10 分钟内有效。这个邮箱还没有账号的话，会自动注册一个。";
   elements.accountRegisterNote.textContent = signInOptions.emailCodes
     ? "注册后可以在账号设置里绑定邮箱：忘了密码时可以用它收验证码登录。"
     : "暂时还不能找回密码，请记好它。";
 }
 
-function showTab(tab) {
-  accountTab = ["register", "code"].includes(tab) ? tab : "sign-in";
+function showTab(tab, { forPassword = false } = {}) {
+  accountTab = Object.hasOwn(ACCOUNT_TITLES, tab) ? tab : "methods";
+  codeForPassword = accountTab === "code" && forPassword;
   showAccountError();
   showAccountInfo();
   renderAccountDialog();
 }
 
-function openAccountDialog(tab = "sign-in") {
+/** Focus where the shown part of the dialog starts. */
+function focusAccountTab() {
+  const field = { "sign-in": elements.signInLogin, register: elements.registerUsername, code: elements.codeEmail }[shownAccountTab()];
+  (field ?? elements.accountPanels.find((panel) => !panel.hidden)?.querySelector("button:not([hidden])"))?.focus();
+}
+
+function openAccountDialog(tab = "methods") {
   showTab(tab);
   if (!elements.accountDialog.open) elements.accountDialog.showModal();
-  (accountTab === "register" ? elements.registerUsername : elements.signInLogin).focus();
+  focusAccountTab();
   void refreshAccount().then(() => {
     if (!elements.accountDialog.open) return;
     // Signed in after all (this browser had forgotten the name): the menu.
@@ -389,19 +421,19 @@ async function requestCode(path, email, button) {
 async function sendSignInCode() {
   const email = cleanEmail(elements.codeEmail.value);
   if (!email) {
-    showAccountError("请填写账号的邮箱。");
+    showAccountError("请填写邮箱。");
     elements.codeEmail.focus();
     return;
   }
   await requestCode("/api/account/email-code", email, elements.codeSend);
-  // The same answer whether or not the address has an account.
-  showAccountInfo(`如果 ${email} 是这个网站上某个账号的邮箱，验证码已经发过去了，10 分钟内有效。`);
+  showAccountInfo(`验证码已发到 ${email}，10 分钟内有效。`);
   elements.codeInput.focus();
 }
 
 /**
- * Signed in with a code: on to the new password in account settings, since
- * that is usually why (a forgotten password).
+ * Signed in with a code, which makes the account for a new address. Under
+ * "forgot your password?" it goes on to the new password in account
+ * settings.
  */
 async function signInWithCode() {
   const email = cleanEmail(elements.codeEmail.value);
@@ -412,6 +444,15 @@ async function signInWithCode() {
     return;
   }
   const payload = await postAccount("/api/account/email-sign-in", { email, code });
+  const name = payload.account?.name ?? email;
+  if (payload.created) {
+    welcome(payload.account, `已用邮箱登录。你的用户名是 ${name}，可以在账号设置里修改。`);
+    return;
+  }
+  if (!codeForPassword) {
+    welcome(payload.account, `已登录：${name}。`);
+    return;
+  }
   clearSecrets();
   accountSeen(payload.account);
   useAccountName(payload.account);
@@ -444,7 +485,9 @@ function submitAccountForm() {
     const typingCode = document.activeElement === elements.codeInput || elements.codeInput.value;
     return runAction(typingCode ? signInWithCode : sendSignInCode);
   }
-  return runAction(accountTab === "register" ? register : signIn);
+  const tab = shownAccountTab();
+  if (tab === "methods") return undefined;
+  return runAction(tab === "register" ? register : signIn);
 }
 
 /**
@@ -769,7 +812,7 @@ function wireSettings() {
     const section = window.location.hash.slice(1) || "account";
     if (section !== settingsSection) showSettingsSection(section);
   });
-  elements.settingsSignIn.addEventListener("click", () => openAccountDialog("sign-in"));
+  elements.settingsSignIn.addEventListener("click", () => openAccountDialog());
   elements.settingsSignOut.addEventListener("click", () => void signOut());
   elements.settingsEmailSend.addEventListener("click", () =>
     void settingsAction(sendEmailCode, "暂时无法验证邮箱，请稍后再试。"));
@@ -878,18 +921,18 @@ function wireAccount(hooks = {}) {
   renderGuestNote();
   wireAccountMenu();
   wireSettings();
-  elements.recordsRegister.addEventListener("click", () => openAccountDialog("register"));
-  for (const button of elements.accountTabButtons) {
-    button.addEventListener("click", () => showTab(button.dataset.accountTab));
-  }
+  elements.recordsRegister.addEventListener("click", () => openAccountDialog());
   for (const button of elements.accountGoButtons) {
-    button.addEventListener("click", () => showTab(button.dataset.accountGo));
+    button.addEventListener("click", () => {
+      showTab(button.dataset.accountGo);
+      focusAccountTab();
+    });
   }
   elements.accountUseCode.addEventListener("click", () => {
     const login = elements.signInLogin.value.trim();
     if (login.includes("@") && !elements.codeEmail.value) elements.codeEmail.value = login;
-    showTab("code");
-    elements.codeEmail.focus();
+    showTab("code", { forPassword: true });
+    focusAccountTab();
   });
   elements.accountForm.addEventListener("submit", (event) => {
     event.preventDefault();

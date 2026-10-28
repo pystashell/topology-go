@@ -56,12 +56,17 @@ export const ENGLISH_STATIC = Object.freeze({
   "再输一次新密码": "New password again",
   "保存新密码": "Save new password",
   "忘了密码？用邮箱验证码登录": "Forgot your password? Sign in with an email code",
-  "输入账号的邮箱，我们发一个 6 位数验证码，10 分钟内有效。登录后可以在账号里设新密码。":
-    "Enter your account's email and we send a 6-digit code, valid for 10 minutes. Once signed in you can set a new password.",
-  "用密码登录": "Sign in with a password",
+  "填你的邮箱，我们发一个 6 位数验证码，10 分钟内有效。这个邮箱还没有账号的话，会自动注册一个。":
+    "Enter your email and we send a 6-digit code, valid for 10 minutes. If the email has no account yet, one is made for it.",
+  "用邮箱验证码登录": "Sign in with an email code",
+  "用用户名和密码登录": "Sign in with a username and password",
+  "第一次用 Google 或邮箱验证码登录，会自动注册一个账号。":
+    "The first time you sign in with Google or an email code, an account is made for you.",
+  "还没有账号？注册一个": "No account yet? Register",
+  "已有账号？去登录": "Have an account? Sign in",
+  "← 其他登录方式": "← Other ways to sign in",
   // The account menu and account settings (/settings).
   "账号设置": "Account settings",
-  "或者用用户名和密码": "or with a username and password",
   "管理你的邮箱和密码。下完的棋都在“我的棋谱”里。": "Manage your email and password. Your finished games are in My games.",
   "登录后才能管理账号。": "Sign in to manage your account.",
   "暂时不能用邮箱验证码，所以现在不能添加或更换邮箱。":
