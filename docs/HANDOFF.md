@@ -79,7 +79,9 @@ src/ui/gameUi.js         各棋种的文案、结果、控件可见性（纯函�
 src/main.js              页面主文件（约 7300 行），拥有页面状态
 src/app/                 从 main.js 拆出的页面部分：lobbyScreen（大厅）、chatPanel（聊天）、recordFiles（SGF 文件）、
                          roomManagement（公开开关、成员列表、判弃局）、myGames（我的棋谱：本机对局上传、列表页、打开棋谱）、
-                         account（顶栏的登录按钮、登录/注册/退出对话框、Google 登录、我的棋谱上的游客提示）。
+                         account（顶栏：没登录是“登录”按钮，打开登录框（Google 在最上面，然后是用户名密码、邮箱验证码）；
+                         登录后是“名字 ▾”下拉菜单（我的棋谱、账号设置、退出登录，参考 OGS）；账号设置页 /settings
+                         左侧分类、右侧内容：账号、邮箱（添加/验证/更换）、密码；我的棋谱上的游客提示）。
                          各自持有自己的状态，通过 main.js 末尾的导出列表读页面状态
 src/ai/                  围棋：KataGo；其他棋：gameAiRegistry.js + gameAiClient.js
   gomoku/                Rapfi：flatView.js（拓扑 → ≤22 路平面视窗）、tactics.js（跨接缝必胜/必挡/VCF）、worker
@@ -118,7 +120,7 @@ public/_headers          CSP 等安全头；只有 katagoWorker-* 和 gomokuAiWo
 - **接口**：`GET /api/records?game=&before=`（分页，游标是“结束时间.编号”，应答带 `account`：游客还是账号、名字），`POST /api/records`，`GET|DELETE /api/records/编号`（只有归属者；别人 403）。各有限流绑定（`AUTH_RATE_LIMITER`、`RECORD_RATE_LIMITER`）。
 - **账号**（第 2 阶段）：`GET /api/account`（当前用户和可用的登录方式），`POST /api/account/register`（用户名 2–20 字、密码 8–128 字符、邮箱选填；不填邮箱时存一个 `.invalid` 的假地址，从不显示）、`/sign-in`（用户名或邮箱）、`/sign-out`、`/google`（返回 Google 登录页地址）。注册和登录另有 `SIGN_IN_RATE_LIMITER`（每 IP 每分钟 10 次）。Better Auth 自己的路由只放行 `/api/auth/get-session` 和 Google 的回调 `/api/auth/callback/google`，其余 404。游客注册或登录时 `adoptGuest` 把棋谱转到账号、写 `user_alias`、删游客（一次批量写入）。Google 账号不会按邮箱自动并进用密码注册的账号（注册时的邮箱没验证过）。
 - **邮箱验证码**（`worker/email.js`，负责人 2026-10-27 决定：发邮件不花钱，只用 Resend 免费套餐）：`POST /api/account/email-code`、`/email-sign-in`（验证码登录，只限已注册的邮箱）、`/password`（登录后设新密码：刚登录 10 分钟内不要旧密码，之后要；改完退出其他设备）、`/email`、`/email/confirm`（添加、验证、更换邮箱）。用 Better Auth 的 email-OTP 插件（6 位、10 分钟、5 次、只存哈希）。Better Auth 发信时会吞掉错误，所以路由先查上限（`checkCodeAllowed`：同一邮箱每分钟 1 封、每小时 5 封，全站每天 `EMAIL_DAILY_LIMIT`，默认 80；记录在 D1 表 `email_send`），再用 `collectingCodes` 拿到 Better Auth 生成的验证码，自己发（`sendCodeEmail`，Resend API）；超限返回 429 和 `retryAfter`。没有 `RESEND_API_KEY` 和 `EMAIL_FROM` 时整个功能关闭；本地开发（`EMAIL_DEV_OUTBOX=1`）不发信，验证码留在内存里，`GET /api/dev/outbox?to=` 可读（浏览器检查用）。
-- **页面**（`src/app/account.js`）：顶栏按钮显示“登录”或账号名（名字存在 localStorage 只为先显示，真实状态问服务器）；对话框有登录、注册两页，登录后显示账号和“退出登录”。退出时先把没传完的本机棋谱传掉，再清掉这个浏览器的房间身份，回到 `/single`。从 Google 回来时地址带 `?signed-in=google` 或 `?sign-in-failed=google`，页面读完就去掉。
+- **页面**（`src/app/account.js`）：顶栏按钮显示“登录”或“账号名 ▾”（名字存在 localStorage 只为先显示，真实状态问服务器）；没登录时打开登录框（Google 按钮在最上面，下面是登录、注册两页和“用邮箱验证码登录”），登录后打开下拉菜单（我的棋谱、账号设置、退出登录）；账号设置是单独的页面 `/settings`（`#email`、`#password` 直接打开对应栏目），用验证码登录后直接跳到 `/settings#password`。退出时先把没传完的本机棋谱传掉，再清掉这个浏览器的房间身份，回到 `/single`。从 Google 回来时地址带 `?signed-in=google` 或 `?sign-in-failed=google`，页面读完就去掉。
 - **本地开发**：`npm run dev` 会先 `npm run db:migrate:local`，并给 `wrangler dev` 一个仅供本地的密钥。单元测试用 `test/helpers/d1.js`（node:sqlite 上的 D1 替身，自动套用 `migrations/`）。
 
 设计文档在 `docs/design/`，其中的行号是当时的快照，以现有代码为准。产品规格见 `docs/PRODUCT_REQUIREMENTS.md`（正文以围棋为主）。

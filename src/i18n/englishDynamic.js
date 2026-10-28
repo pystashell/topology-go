@@ -14,6 +14,13 @@ export const ENGLISH_DYNAMIC = Object.freeze({
     "The room is ready. Confirm the setup under Board settings and start a game; stay on this page until your opponent arrives, as the room closes 2 minutes after you leave.",
   // Accounts (src/app/account.js).
   "你的账号": "Your account",
+  "没有填邮箱": "No email",
+  "已设置": "Set",
+  "还没有密码（只能用邮箱验证码或 Google 登录）": "None yet (sign in with an email code or Google)",
+  "还没有填邮箱。填一个并收验证码确认后，忘了密码时可以用它登录。":
+    "No email yet. Add one and confirm it with a code; then you can sign in with it if you forget your password.",
+  "你的账号还没有密码。设好以后也可以用用户名和密码登录；其他设备上的登录会退出。":
+    "Your account has no password yet. Once set you can also sign in with your username and password; other devices are signed out.",
   "更换邮箱": "Change email",
   "验证邮箱": "Confirm email",
   "设置密码": "Set a password",
@@ -975,6 +982,17 @@ export const ENGLISH_PATTERNS = Object.freeze([
   { pattern: /^邮箱：(.+)（已验证）$/u, replace: "Email: $1 (confirmed)" },
   { pattern: /^邮箱：(.+)（未验证）$/u, replace: "Email: $1 (not confirmed)" },
   { pattern: /^重新发送（(\d+)）$/u, replace: "Resend ($1)" },
+  {
+    pattern: /^现在的邮箱：(.+)（已验证）。要更换的话，填新邮箱并收验证码确认。$/u,
+    replace: "Your email: $1 (confirmed). To change it, enter a new one and confirm it with a code.",
+  },
+  {
+    pattern: /^现在的邮箱：(.+)（未验证）。给它发一个验证码确认，或者换一个邮箱。$/u,
+    replace: "Your email: $1 (not confirmed). Send it a code to confirm it, or use another one.",
+  },
+  // An address and its state (after the patterns above that also end so).
+  { pattern: /^(.+)（已验证）$/u, replace: "$1 (confirmed)" },
+  { pattern: /^(.+)（未验证）$/u, replace: "$1 (not confirmed)" },
   {
     pattern: /^如果 (.+) 是这个网站上某个账号的邮箱，验证码已经发过去了，10 分钟内有效。$/u,
     replace: "If $1 belongs to an account here, a code is on its way; it is valid for 10 minutes.",

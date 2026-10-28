@@ -82,8 +82,8 @@ try {
   record.mismatch = await text(home, "#account-error");
   await home.fill("#register-password-again", password);
   await home.click("#register-submit");
-  await home.waitForFunction((name) => document.querySelector("#account-button")?.textContent === name, username, { timeout: 15_000 });
-  record.registered = { button: await text(home, "#account-button"), dialogOpen: await home.locator("#account-dialog[open]").count() };
+  await home.waitForFunction((name) => document.querySelector("#account-button-label")?.textContent === name, username, { timeout: 15_000 });
+  record.registered = { button: await text(home, "#account-button-label"), dialogOpen: await home.locator("#account-dialog[open]").count() };
   record.accountList = await recordsOn(home);
   record.registeredShot = await shot(home, "accounts-registered");
 
@@ -104,7 +104,7 @@ try {
   // 4. Another browser: nothing yet; signing in finds the game.
   record.phoneBefore = await recordsOn(phone);
   await signIn(phone, username, password);
-  await phone.waitForFunction((name) => document.querySelector("#account-button")?.textContent === name, username, { timeout: 15_000 });
+  await phone.waitForFunction((name) => document.querySelector("#account-button-label")?.textContent === name, username, { timeout: 15_000 });
   record.phoneList = await recordsOn(phone);
 
   // 5. The room link on that browser: asking only to watch returns to the
@@ -118,13 +118,16 @@ try {
   record.rejoin = { message: await text(phone, "#message"), blackSeat: await text(phone, "#black-seat") };
   record.rejoinShot = await shot(phone, "accounts-rejoin");
 
-  // 6. Signing out on that browser forgets the account and its room identities.
-  await openAccount(phone);
-  await phone.click("#account-sign-out");
+  // 6. Signing out (the menu under the name) forgets the account and its
+  // room identities on that browser.
+  await phone.click("#account-button");
+  await phone.waitForSelector("#account-menu:not([hidden])");
+  record.menu = await phone.$$eval("#account-menu .account-menu-item", (items) => items.map((item) => item.textContent.trim()));
+  await phone.click("#account-menu-sign-out");
   await phone.waitForURL(/\/single$/u, { timeout: 15_000 });
   await phone.waitForFunction(() => /已退出登录/u.test(document.querySelector("#message")?.textContent ?? ""), null, { timeout: 10_000 });
   record.signedOut = {
-    button: await text(phone, "#account-button"),
+    button: await text(phone, "#account-button-label"),
     roomStored: await phone.evaluate((roomCode) => Object.keys(localStorage)
       .some((key) => key.includes(roomCode) || (localStorage.getItem(key) ?? "").includes(roomCode)), code),
     list: await recordsOn(phone),
@@ -136,15 +139,17 @@ try {
   record.wrongPassword = await text(phone, "#account-error");
   await phone.fill("#sign-in-password", password);
   await phone.click("#sign-in-submit");
-  await phone.waitForFunction((name) => document.querySelector("#account-button")?.textContent === name, username, { timeout: 15_000 });
+  await phone.waitForFunction((name) => document.querySelector("#account-button-label")?.textContent === name, username, { timeout: 15_000 });
   record.signedInAgain = await recordsOn(phone);
 
-  // 8. The dialog in English, the name aside.
+  // 8. Account settings in English, the name aside.
+  // (Each page load starts in Chinese here: the context sets it.)
+  await phone.goto(`${BASE}/settings`);
+  await phone.waitForSelector("#settings-body:not([hidden])", { timeout: 10_000 });
   await phone.click('[data-language="en"]');
-  await openAccount(phone);
   await phone.waitForTimeout(400);
   record.english = {
-    title: await text(phone, "#account-title"),
+    title: await text(phone, "#settings-account-title"),
     leftovers: (await cjkLeftovers(phone)).filter((value) => !value.includes(username)),
   };
   record.englishShot = await shot(phone, "accounts-english");
@@ -167,7 +172,8 @@ const ok = !record.error &&
   record.signedOut.list.games.length === 0 &&
   record.wrongPassword === "用户名（或邮箱）或密码不对。" &&
   record.signedInAgain?.games[0] === record.guestList.games[0] &&
-  record.english?.title === "Your account" && record.english.leftovers.length === 0;
+  record.menu?.join("|") === "我的棋谱|账号设置|退出登录" &&
+  record.english?.title === "Account" && record.english.leftovers.length === 0;
 // The refused sign-in in step 7 is the point of that step.
 const unexpected = problems.filter((problem) =>
   !/^\[phone\] console\.error: Failed to load resource: .*401/u.test(problem));
