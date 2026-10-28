@@ -11,10 +11,11 @@
  * database binding or a secret (unit tests, plain local tools), or while
  * the database is unavailable, rooms keep working and games are simply
  * not saved. Passwords also need PASSWORD_PEPPER, Google sign-in its
- * client id and secret; each is off until its secrets are set.
+ * client id and secret, codes by email the mail service (worker/email.js);
+ * each is off until its secrets are set.
  */
 import { betterAuth } from "better-auth";
-import { anonymous, username } from "better-auth/plugins";
+import { anonymous, emailOTP, username } from "better-auth/plugins";
 
 import {
   PASSWORD_MAX_LENGTH,
@@ -22,6 +23,7 @@ import {
   cleanUsername,
   usernameKey,
 } from "../src/multiplayer/accountRules.js";
+import { EMAIL_CODE_SECONDS, queueCodeEmail } from "./email.js";
 import { MIN_PEPPER_LENGTH, hashPassword, verifyPassword } from "./passwords.js";
 
 // Browsers keep a cookie at most 400 days; each day of use renews it, so a
@@ -146,6 +148,18 @@ function authOptions(env, origin) {
         onLinkAccount: ({ anonymousUser, newUser }) =>
           adoptGuest(env.DB, anonymousUser?.user?.id, newUser?.user?.id),
       }),
+      // Codes by email: signing in without a password (existing accounts
+      // only; registering needs a username) and checking an address added
+      // to an account. worker/email.js caps what is sent.
+      emailOTP({
+        otpLength: 6,
+        expiresIn: EMAIL_CODE_SECONDS,
+        allowedAttempts: 5,
+        storeOTP: "hashed",
+        disableSignUp: true,
+        changeEmail: { enabled: true },
+        sendVerificationOTP: ({ email, otp, type }) => queueCodeEmail(env, { email, otp, type }),
+      }),
       username({
         // worker/accounts.js checks names first (accountRules.js); these
         // limits only keep the plugin from refusing what that allows.
@@ -179,17 +193,22 @@ export function authFor(env, request) {
   return auth;
 }
 
-/** The signed-in user (a guest or an account), or null. Never throws. */
-export async function sessionUser(env, request) {
+/** The session and its user (a guest or an account), or null. Never throws. */
+export async function currentSession(env, request) {
   const auth = authFor(env, request);
   if (!auth) return null;
   try {
     const result = await auth.api.getSession({ headers: request.headers });
-    return result?.user ?? null;
+    return result?.user ? result : null;
   } catch (error) {
     console.error("Session lookup failed", error);
     return null;
   }
+}
+
+/** The signed-in user (a guest or an account), or null. Never throws. */
+export async function sessionUser(env, request) {
+  return (await currentSession(env, request))?.user ?? null;
 }
 
 /**

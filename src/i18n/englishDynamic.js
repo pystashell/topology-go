@@ -14,6 +14,25 @@ export const ENGLISH_DYNAMIC = Object.freeze({
     "The room is ready. Confirm the setup under Board settings and start a game; stay on this page until your opponent arrives, as the room closes 2 minutes after you leave.",
   // Accounts (src/app/account.js).
   "你的账号": "Your account",
+  "更换邮箱": "Change email",
+  "验证邮箱": "Confirm email",
+  "设置密码": "Set a password",
+  "设好以后也可以用用户名和密码登录。改好后，其他设备上的登录会退出。":
+    "Once set you can also sign in with your username and password. Other devices are then signed out.",
+  "需要当前密码。忘了的话，先退出，再用邮箱验证码登录：登录后 10 分钟内可以直接设新密码。":
+    "Your current password is needed. Forgot it? Sign out and sign in with an email code: for 10 minutes after that you can set a new one directly.",
+  "你刚登录，可以直接设新密码。改好后，其他设备上的登录会退出。":
+    "You just signed in, so you can set a new password directly. Other devices are then signed out.",
+  "建议填邮箱：忘了密码时可以用它收验证码登录，登录后再设新密码。":
+    "An email is recommended: if you forget your password you can sign in with a code sent to it and then set a new one.",
+  "请填写账号的邮箱。": "Enter your account's email.",
+  "请填写邮箱和收到的 6 位数验证码。": "Enter the email and the 6-digit code you received.",
+  "已登录。忘了密码的话，现在就可以直接设一个新密码。": "Signed in. If you forgot your password, you can set a new one right now.",
+  "请填写邮箱。": "Enter an email.",
+  "邮箱已验证。": "Email confirmed.",
+  "新密码已保存，其他设备上的登录已经退出。": "New password saved; other devices are signed out.",
+  "暂时无法验证邮箱，请稍后再试。": "Your email cannot be confirmed right now. Try again shortly.",
+  "暂时无法保存密码，请稍后再试。": "The password cannot be saved right now. Try again shortly.",
   "没有填邮箱。": "No email.",
   "两次输入的密码不一样。": "The two passwords differ.",
   "请填写用户名（或邮箱）和密码。": "Enter your username (or email) and password.",
@@ -953,7 +972,14 @@ export const ENGLISH_PATTERNS = Object.freeze([
   { pattern: /^房间 ([A-Z0-9]{6})$/u, replace: "Room $1" },
   { pattern: /^房间 ([A-Z0-9]{6}) 已经关闭；这是你在里面下的最后一盘。$/u, replace: "Room $1 has closed; this is the last game you played there." },
   // Accounts (src/app/account.js): names and addresses are kept as typed.
-  { pattern: /^邮箱：(.+)$/u, replace: "Email: $1" },
+  { pattern: /^邮箱：(.+)（已验证）$/u, replace: "Email: $1 (confirmed)" },
+  { pattern: /^邮箱：(.+)（未验证）$/u, replace: "Email: $1 (not confirmed)" },
+  { pattern: /^重新发送（(\d+)）$/u, replace: "Resend ($1)" },
+  {
+    pattern: /^如果 (.+) 是这个网站上某个账号的邮箱，验证码已经发过去了，10 分钟内有效。$/u,
+    replace: "If $1 belongs to an account here, a code is on its way; it is valid for 10 minutes.",
+  },
+  { pattern: /^验证码已发到 (.+)，10 分钟内有效。$/u, replace: "A code was sent to $1; it is valid for 10 minutes." },
   { pattern: /^注册成功，已登录：(.+)。$/u, replace: "Registered and signed in as $1." },
   { pattern: /^已用 Google 登录：(.+)。$/u, replace: "Signed in with Google as $1." },
   { pattern: /^已登录：(.+)。$/u, replace: "Signed in as $1." },

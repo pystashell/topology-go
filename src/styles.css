@@ -3283,6 +3283,37 @@ select:disabled {
   overflow-wrap: anywhere;
 }
 
+.account-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.account-links .text-button,
+.account-switch {
+  justify-self: start;
+  padding-inline: 0;
+}
+
+/* Adding an email or a new password, inside the signed-in view. */
+.account-subform {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+}
+
+.account-subform[hidden],
+.account-panel[hidden] {
+  display: none;
+}
+
+.account-dialog .account-info {
+  margin: 0;
+  color: var(--accent-strong);
+}
+
 .account-button {
   max-width: 11em;
   overflow: hidden;
