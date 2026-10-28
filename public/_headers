@@ -1,5 +1,10 @@
 # Static asset response headers (Workers static assets; Vite copies this file
-# into dist/). /api/* responses come from the Worker and set their own.
+# into dist/). /api/* responses come from the Worker and set their own; pages
+# pass through the Worker, which adds this "/*" rule when a page lacks it
+# (worker/transportSecurity.js keeps an identical copy).
+#
+# HSTS: after one visit over https a browser uses only https here (browsers
+# ignore it on plain http, and wrangler dev stays on http).
 #
 # The app loads only same-origin bundles, styles, models (fetch), its KataGo
 # module worker and same-origin WebSockets; it uses no inline scripts/styles,
@@ -10,6 +15,7 @@
   X-Frame-Options: DENY
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
   Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+  Strict-Transport-Security: max-age=31536000
 
 # The KataGo worker runs under its own response's policy. TensorFlow.js
 # bundles long.js, which compiles a tiny WebAssembly module for 64-bit integer

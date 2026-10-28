@@ -88,6 +88,7 @@ src/ai/                  围棋：KataGo；其他棋：gameAiRegistry.js + gameA
   othello/               自研：射线表、PVS + 置换表、按拓扑拟合的评估、终局精确求解、worker
 public/engines/rapfi/    Rapfi wasm + 权重 + COPYING + 源码包 + SOURCE.md（GPL 合规材料，勿删）
 public/_headers          CSP 等安全头；只有 katagoWorker-* 和 gomokuAiWorker-* 允许 'wasm-unsafe-eval'
+worker/transportSecurity.js  http 跳 https（301/308，本机地址除外）和 HSTS；页面缺的安全头由它补上
 ```
 
 对局新功能的要点：
@@ -148,6 +149,7 @@ npm audit --audit-level=moderate
 - **继续拆 main.js 的规则**：把一个变量和所有给它赋值的函数一起搬走；`main.js` 里需要改它的地方换成调用新模块的小函数（例如 `clearChatReference()`）。新模块的顶层初始化不能读 `main.js` 的绑定，因为循环导入时 `main.js` 还没执行。
 - **i18n**：中文原文就是查找键。`test/i18nCoverage.test.js`（扫描 main.js 和 src/app）和 `test/serverErrors.test.js` 会拦截未翻译的文案和未登记的服务端错误码。
 - **CSP**：不要写内联脚本或内联样式。新的需要 wasm 的 worker 必须在 `public/_headers` 里单独授权。
+- **HTTPS**：自定义域名由负责人在 Cloudflare 开的 Always Use HTTPS 在边缘跳转；workers.dev 不在负责人的 zone 里，没有这个开关，所以 Worker 自己把 http 跳到 https，并给所有 https 回应加 HSTS（`max-age=31536000`，不带 includeSubDomains 和 preload）。为此 `wrangler.jsonc` 的 `run_worker_first` 让除静态资源以外的路径都先进 Worker；`public/` 下新增顶层文件或目录时要在那里加一条 `!` 排除，`test/transportSecurity.test.js` 会检查。
 - **Windows**：仓库按 `core.autocrlf=true` 检出为 CRLF。读源码做多行匹配的测试要先把 `\r\n` 换成 `\n`（`appSource()` 已经这样处理）。
 - **测试开关**：重测试用环境变量打开：`GOMOKU_AI_HEAVY=1`、`OTHELLO_AI_FULL=1`、`OTHELLO_AI_PERF=1`。
 - **本地联机**：`npm run dev`（先构建，再起 wrangler dev，端口 8787）。冒烟测试：`node scripts/live-room-smoke.mjs http://127.0.0.1:8787/`、`node scripts/live-scoring-smoke.mjs http://127.0.0.1:8787/`。
