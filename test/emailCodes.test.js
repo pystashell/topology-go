@@ -67,9 +67,8 @@ test("a forgotten password: sign in with a code, then set a new one", async () =
 
   const me = (await phone.call("/api/account")).json.account;
   assert.deepEqual([me.emailVerified, me.hasPassword], [true, true]);
-  assert.ok(me.freshUntil > Date.now());
 
-  // Just signed in: a new password needs no current one; the old one stops.
+  // A new password needs no current one; the old one stops.
   const set = await post(phone, "/api/account/password", { password: "new-password" });
   assert.equal(set.status, 200);
   assert.equal(set.json.account.hasPassword, true);
@@ -124,7 +123,7 @@ test("an address an account never confirmed gets the same answer and no mail", a
   }
 });
 
-test("later, a new password needs the current one, and signs out everywhere else", async (t) => {
+test("long after signing in, a new password still needs no current one, and signs out everywhere else", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const env = withCodes();
   const name = fresh("Lee");
@@ -132,14 +131,10 @@ test("later, a new password needs the current one, and signs out everywhere else
   await post(laptop, "/api/account/register", { username: name, password: "first-password" });
   const tablet = browser(env);
   await post(tablet, "/api/account/sign-in", { login: name, password: "first-password" });
-  t.mock.timers.tick(11 * 60 * 1_000);
+  t.mock.timers.tick(30 * 24 * 60 * 60 * 1_000);
 
-  const missing = await post(laptop, "/api/account/password", { password: "second-password" });
-  assert.deepEqual([missing.status, missing.json.code], [400, "NEED_CURRENT_PASSWORD"]);
-  const wrong = await post(laptop, "/api/account/password", { password: "second-password", currentPassword: "nope-nope" });
-  assert.deepEqual([wrong.status, wrong.json.code], [401, "WRONG_PASSWORD"]);
-  assert.equal((await post(laptop, "/api/account/password", { password: "short", currentPassword: "first-password" })).json.code, "BAD_PASSWORD");
-  const changed = await post(laptop, "/api/account/password", { password: "second-password", currentPassword: "first-password" });
+  assert.equal((await post(laptop, "/api/account/password", { password: "short" })).json.code, "BAD_PASSWORD");
+  const changed = await post(laptop, "/api/account/password", { password: "second-password" });
   assert.equal(changed.status, 200);
   assert.equal(env.DB.rows("session").length, 1, "the tablet's sign-in ended");
   assert.equal((await tablet.call("/api/account")).json.account, null);

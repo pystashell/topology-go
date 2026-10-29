@@ -48,10 +48,8 @@ export const ENGLISH_DYNAMIC = Object.freeze({
   "设置密码": "Set a password",
   "设好以后也可以用用户名和密码登录。改好后，其他设备上的登录会退出。":
     "Once set you can also sign in with your username and password. Other devices are then signed out.",
-  "需要当前密码。忘了的话，先退出，再用邮箱验证码登录：登录后 10 分钟内可以直接设新密码。":
-    "Your current password is needed. Forgot it? Sign out and sign in with an email code: for 10 minutes after that you can set a new one directly.",
-  "你刚登录，可以直接设新密码。改好后，其他设备上的登录会退出。":
-    "You just signed in, so you can set a new password directly. Other devices are then signed out.",
+  "直接设新密码就行，不用输旧密码。改好后，其他设备上的登录会退出。":
+    "Just set a new one; the old password is not needed. Other devices are then signed out.",
   "建议填邮箱：忘了密码时可以用它收验证码登录，登录后再设新密码。":
     "An email is recommended: if you forget your password you can sign in with a code sent to it and then set a new one.",
   "第一次用 Google 登录，会自动注册一个账号。": "The first time you sign in with Google, an account is made for you.",

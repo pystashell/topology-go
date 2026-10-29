@@ -7,18 +7,17 @@
  * address and the session lookup pass through (worker/index.js).
  *
  * A guest that registers or signs in brings its games along (adoptGuest).
- * Someone who forgot their password signs in with a code sent to their
- * email (worker/email.js) and sets a new one: within FRESH_SIGN_IN_MS of
- * signing in no current password is asked for.
+ * Signed in is enough to set a new password or delete the account; no
+ * current password is asked (owner's decision, 2026-10-28). Someone who
+ * forgot their password signs in with a code sent to their email
+ * (worker/email.js) and sets a new one.
  *
  * An email belongs to an account only once confirmed with a code (owner's
  * decision, 2026-10-28): registering takes a username and a password, the
  * email is added in account settings, and Google's addresses come
  * confirmed. Only confirmed emails sign in or receive sign-in codes.
  *
- * Someone may delete their own account (its username typed to confirm),
- * with the same guard as a new password: just signed in, or the current
- * password.
+ * Someone may delete their own account, its username typed to confirm.
  */
 import {
   PASSWORD_MAX_LENGTH,
@@ -46,9 +45,6 @@ import {
 } from "./email.js";
 import { jsonResponse, readJsonBody } from "./http.js";
 
-// Just after signing in (a code from one's email, Google or the password),
-// a new password needs no current one: how a forgotten password is replaced.
-const FRESH_SIGN_IN_MS = 10 * 60 * 1_000;
 // How soon a page may ask for another code (the same as worker/email.js).
 const CODE_RESEND_SECONDS = 60;
 
@@ -66,13 +62,10 @@ const FAILURES = {
   codeExpired: [400, "CODE_EXPIRED", "验证码已经过期，请重新获取。"],
   tooManyTries: [429, "TOO_MANY_TRIES", "验证码试错太多次，请重新获取。"],
   notSignedIn: [401, "NOT_SIGNED_IN", "请先登录账号。"],
-  needCurrentPassword: [400, "NEED_CURRENT_PASSWORD", "请输入当前密码（刚登录的 10 分钟内可以不填）。"],
-  wrongPassword: [401, "WRONG_PASSWORD", "当前密码不对。"],
   emailVerified: [409, "EMAIL_ALREADY_VERIFIED", "这个邮箱已经验证过了。"],
   googleNotLinked: [404, "GOOGLE_NOT_LINKED", "没有找到这个 Google 账号。"],
   lastSignInMethod: [409, "LAST_SIGN_IN_METHOD", "这是你现在唯一的登录方式。先设置密码或绑定邮箱，再解绑它。"],
   usernameMismatch: [400, "USERNAME_MISMATCH", "输入的用户名和这个账号的不一样。"],
-  signInAgain: [403, "SIGN_IN_AGAIN", "为了安全，请先退出再重新登录，登录后 10 分钟内可以删除账号。"],
 };
 
 // Codes that were not sent, as worker/email.js names them.
@@ -160,7 +153,6 @@ async function accountDetails(auth, found) {
     ...summary,
     emailVerified: Boolean(summary.email && found.user.emailVerified),
     hasPassword: accounts.some((account) => account.providerId === "credential" && account.password),
-    freshUntil: new Date(found.session.createdAt).getTime() + FRESH_SIGN_IN_MS,
     google: accounts.filter((account) => account.providerId === "google")
       .map((account) => ({ id: account.id, email: googleAddress(account) })),
   };
@@ -208,22 +200,6 @@ async function whoAmI(request, env) {
       emailCodes: passwordsConfigured(env) && emailCodesConfigured(env),
     },
   });
-}
-
-/** Whether this session began within FRESH_SIGN_IN_MS (no current password asked). */
-function freshlySignedIn(found) {
-  return Date.now() <= new Date(found.session.createdAt).getTime() + FRESH_SIGN_IN_MS;
-}
-
-/** The current password, when it is asked for: null when right, else the failure. */
-async function currentPasswordFailure(context, credential, given) {
-  const current = typeof given === "string" ? given : "";
-  if (!current) return "needCurrentPassword";
-  if (current.length > PASSWORD_MAX_LENGTH ||
-      !(await context.password.verify({ hash: credential.password, password: current }))) {
-    return "wrongPassword";
-  }
-  return null;
 }
 
 /** Signed in to an account (not a guest): { auth, found }, or a failure Response. */
@@ -290,10 +266,9 @@ async function signInWithCode(request, env) {
 }
 
 /**
- * Set a new password while signed in. Just after signing in none of the
- * current one is asked for (how a forgotten password is replaced: sign in
- * with a code first); later it is, so a session left open on a shared
- * computer cannot take the account. Every other sign-in is then ended.
+ * Set a new password while signed in, no current one asked (a forgotten
+ * password is replaced by signing in with a code first). Every other
+ * sign-in is then ended.
  */
 async function setNewPassword(request, env) {
   const signedIn = await signedInAccount(request, env);
@@ -305,10 +280,6 @@ async function setNewPassword(request, env) {
     const context = await auth.$context;
     const userId = found.user.id;
     const credential = await context.internalAdapter.findCredentialAccount(userId);
-    if (credential?.password && !freshlySignedIn(found)) {
-      const wrong = await currentPasswordFailure(context, credential, body?.currentPassword);
-      if (wrong) return failure(wrong);
-    }
     const hash = await context.password.hash(body.password);
     if (credential) {
       await context.internalAdapter.updatePassword(userId, hash);
@@ -557,9 +528,7 @@ function namesAccount(user, typed) {
 
 /**
  * Delete the signed-in account for good, its username typed to confirm.
- * Unless just signed in, the current password is asked for, or (an account
- * without one) signing in again: a session left open on a shared computer
- * cannot delete the account. This browser is signed out.
+ * This browser is signed out.
  */
 async function deleteOwnAccount(request, env) {
   const signedIn = await signedInAccount(request, env);
@@ -571,12 +540,6 @@ async function deleteOwnAccount(request, env) {
     // The stored user, not the session's copy (cached for minutes).
     const user = await context.internalAdapter.findUserById(found.user.id);
     if (!user || !namesAccount(user, body?.username)) return failure("usernameMismatch");
-    if (!freshlySignedIn(found)) {
-      const credential = await context.internalAdapter.findCredentialAccount(user.id);
-      if (!credential?.password) return failure("signInAgain");
-      const wrong = await currentPasswordFailure(context, credential, body?.currentPassword);
-      if (wrong) return failure(wrong);
-    }
     await deleteAccount(env.DB, user.id);
     // Its session is gone already; this clears the cookies.
     const { headers } = await auth.api.signOut({ headers: request.headers, returnHeaders: true });

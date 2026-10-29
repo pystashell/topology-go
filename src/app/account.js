@@ -43,7 +43,7 @@ const CODE_PATTERN = /^\d{6}$/u;
 const SETTINGS_SECTIONS = ["account", "sign-in", "email", "password"];
 
 // What the server last said: { guest, name, email, emailVerified,
-// hasPassword, freshUntil }, or null for nobody.
+// hasPassword, google }, or null for nobody.
 let account = null;
 let accountKnown = false;
 let signInOptions = { passwords: true, google: false, emailCodes: false };
@@ -129,7 +129,6 @@ function accountSeen(summary) {
       email: summary.email ?? null,
       emailVerified: summary.emailVerified ?? known.emailVerified ?? false,
       hasPassword: summary.hasPassword ?? known.hasPassword ?? true,
-      freshUntil: summary.freshUntil ?? known.freshUntil ?? 0,
       google: Array.isArray(summary.google) ? summary.google : known.google ?? [],
     };
   }
@@ -342,8 +341,8 @@ function openAccountDialog(tab = "methods") {
 function clearSecrets() {
   for (const input of [
     elements.signInPassword, elements.registerPassword, elements.registerPasswordAgain,
-    elements.codeInput, elements.settingsEmailCode, elements.settingsCurrentPassword,
-    elements.settingsNewPassword, elements.settingsNewPasswordAgain, elements.settingsDeletePassword,
+    elements.codeInput, elements.settingsEmailCode,
+    elements.settingsNewPassword, elements.settingsNewPasswordAgain,
   ]) {
     input.value = "";
   }
@@ -555,11 +554,6 @@ function showSettingsInfo(message = "") {
   elements.settingsInfo.hidden = !message;
 }
 
-/** Whether a new password needs the current one (not just after signing in). */
-function needsCurrentPassword() {
-  return Boolean(account?.hasPassword) && Date.now() > (account?.freshUntil ?? 0);
-}
-
 function emailFact() {
   if (!account?.email) return "没有填邮箱";
   return account.emailVerified ? `${account.email}（已验证）` : `${account.email}（未验证）`;
@@ -646,22 +640,10 @@ function renderSettings() {
   elements.settingsEmailForm.hidden = !signInOptions.emailCodes;
   elements.settingsEmailLabel.textContent = account.email && !account.emailVerified ? "邮箱" : "新邮箱";
 
-  const needCurrent = needsCurrentPassword();
-  elements.settingsCurrentPasswordField.hidden = !needCurrent;
-  elements.settingsPasswordNote.textContent = !account.hasPassword
-    ? "你的账号还没有密码。设好以后也可以用用户名和密码登录；其他设备上的登录会退出。"
-    : needCurrent
-      ? "需要当前密码。忘了的话，先退出，再用邮箱验证码登录：登录后 10 分钟内可以直接设新密码。"
-      : "你刚登录，可以直接设新密码。改好后，其他设备上的登录会退出。";
-  renderDeleteForm();
-}
-
-/** Deleting the account: just signed in, or the current password, or sign in again. */
-function renderDeleteForm() {
-  const fresh = Date.now() <= (account?.freshUntil ?? 0);
-  elements.settingsDeletePasswordField.hidden = fresh || !account?.hasPassword;
-  elements.settingsDeleteNote.hidden = fresh || Boolean(account?.hasPassword);
-  elements.settingsDeleteNote.textContent = "为了安全，请先退出再重新登录，登录后 10 分钟内可以删除账号。";
+  // Signed in is enough: no current password (owner's decision, 2026-10-28).
+  elements.settingsPasswordNote.textContent = account.hasPassword
+    ? "直接设新密码就行，不用输旧密码。改好后，其他设备上的登录会退出。"
+    : "你的账号还没有密码。设好以后也可以用用户名和密码登录；其他设备上的登录会退出。";
 }
 
 function showSettingsSection(section, { focus = true } = {}) {
@@ -680,7 +662,7 @@ function showSettingsSection(section, { focus = true } = {}) {
     }
     elements.settingsEmailInput.focus();
   } else if (settingsSection === "password") {
-    (needsCurrentPassword() ? elements.settingsCurrentPassword : elements.settingsNewPassword).focus();
+    elements.settingsNewPassword.focus();
   }
 }
 
@@ -727,17 +709,13 @@ async function saveUsername() {
 }
 
 async function deleteOwnAccount() {
-  // The ten minutes after signing in may have run out since the page showed it.
-  renderDeleteForm();
   const username = elements.settingsDeleteUsername.value.trim();
   if (!username) {
     showSettingsError("请输入你的用户名，确认要删除这个账号。");
     elements.settingsDeleteUsername.focus();
     return;
   }
-  const body = { username };
-  if (!elements.settingsDeletePasswordField.hidden) body.currentPassword = elements.settingsDeletePassword.value;
-  await postAccount("/api/account/delete", body);
+  await postAccount("/api/account/delete", { username });
   forgetThisBrowser("deleted");
 }
 
@@ -792,9 +770,7 @@ async function saveNewPassword() {
     elements.settingsNewPasswordAgain.focus();
     return;
   }
-  const body = { password };
-  if (needsCurrentPassword()) body.currentPassword = elements.settingsCurrentPassword.value;
-  const payload = await postAccount("/api/account/password", body);
+  const payload = await postAccount("/api/account/password", { password });
   clearSecrets();
   accountSeen(payload.account);
   showSettingsInfo("新密码已保存，其他设备上的登录已经退出。");

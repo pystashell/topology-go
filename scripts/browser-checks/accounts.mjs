@@ -157,13 +157,10 @@ try {
   };
   record.englishShot = await shot(phone, "accounts-english");
 
-  // 9. Deleting the account: just signed in, so the username is enough.
+  // 9. Deleting the account: the username is enough (no password asked).
   await phone.goto(`${BASE}/settings`);
   await phone.waitForSelector("#settings-body:not([hidden])", { timeout: 10_000 });
-  record.deleteForm = {
-    passwordAsked: await phone.locator("#settings-delete-password-field:not([hidden])").count(),
-    signInNote: await phone.locator("#settings-delete-note:not([hidden])").count(),
-  };
+  record.deletePasswordFields = await phone.locator('#settings-delete-form input[type="password"]').count();
   record.deleteShot = await shot(phone, "accounts-delete");
   await phone.fill("#settings-delete-username", `${username}x`);
   await phone.click("#settings-delete-submit");
@@ -198,7 +195,7 @@ const ok = !record.error &&
   record.signedInAgain?.games[0] === record.guestList.games[0] &&
   record.menu?.join("|") === "我的棋谱|账号设置|退出登录" &&
   record.english?.title === "Account" && record.english.leftovers.length === 0 &&
-  record.deleteForm?.passwordAsked === 0 && record.deleteForm.signInNote === 0 &&
+  record.deletePasswordFields === 0 &&
   record.wrongUsername === "输入的用户名和这个账号的不一样。" &&
   record.deleted?.message === "账号已删除。" && record.deleted.button === "登录" &&
   record.afterDelete === "用户名（或邮箱）或密码不对。";

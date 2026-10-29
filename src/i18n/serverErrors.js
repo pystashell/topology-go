@@ -43,8 +43,6 @@ export const SERVER_ERROR_COPY = Object.freeze({
   CODE_EXPIRED: "验证码已经过期，请重新获取。",
   TOO_MANY_TRIES: "验证码试错太多次，请重新获取。",
   NOT_SIGNED_IN: "请先登录账号。",
-  NEED_CURRENT_PASSWORD: "请输入当前密码（刚登录的 10 分钟内可以不填）。",
-  WRONG_PASSWORD: "当前密码不对。",
   EMAIL_ALREADY_VERIFIED: "这个邮箱已经验证过了。",
   EMAIL_COOLDOWN: "请等一分钟再获取验证码。",
   EMAIL_ADDRESS_LIMIT: "这个邮箱这一小时收到的验证码太多了，请稍后再试。",
@@ -53,7 +51,6 @@ export const SERVER_ERROR_COPY = Object.freeze({
   GOOGLE_NOT_LINKED: "没有找到这个 Google 账号。",
   LAST_SIGN_IN_METHOD: "这是你现在唯一的登录方式。先设置密码或绑定邮箱，再解绑它。",
   USERNAME_MISMATCH: "输入的用户名和这个账号的不一样。",
-  SIGN_IN_AGAIN: "为了安全，请先退出再重新登录，登录后 10 分钟内可以删除账号。",
   // Room durable object (worker/BadukRoom.js)
   ROOM_NOT_FOUND: "没有找到这个房间。",
   ROOM_EXPIRED: "房间已经关闭。",
@@ -158,8 +155,6 @@ export const ENGLISH_SERVER_ERRORS = Object.freeze({
   "验证码已经过期，请重新获取。": "That code has expired; ask for a new one.",
   "验证码试错太多次，请重新获取。": "Too many wrong tries; ask for a new code.",
   "请先登录账号。": "Sign in to your account first.",
-  "请输入当前密码（刚登录的 10 分钟内可以不填）。": "Enter your current password (not needed within 10 minutes of signing in).",
-  "当前密码不对。": "The current password is wrong.",
   "这个邮箱已经验证过了。": "That email is already confirmed.",
   "请等一分钟再获取验证码。": "Wait a minute before asking for another code.",
   "这个邮箱这一小时收到的验证码太多了，请稍后再试。": "That address got too many codes this hour; try again later.",
@@ -169,8 +164,6 @@ export const ENGLISH_SERVER_ERRORS = Object.freeze({
   "这是你现在唯一的登录方式。先设置密码或绑定邮箱，再解绑它。":
     "This is your only way to sign in. Set a password or add an email before unbinding it.",
   "输入的用户名和这个账号的不一样。": "That is not this account's username.",
-  "为了安全，请先退出再重新登录，登录后 10 分钟内可以删除账号。":
-    "To be safe, sign out and sign in again first; within 10 minutes of signing in you can delete the account.",
   "没有这封邮件。": "No such email.",
   "请求无效，请刷新页面后重试。": "The request was invalid. Refresh the page and try again.",
   "你没有权限执行这个操作。": "You are not allowed to do that.",
