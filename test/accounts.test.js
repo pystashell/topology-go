@@ -77,9 +77,8 @@ test("registering: a username and a password; an email comes later, confirmed", 
   assert.deepEqual(made.json, { account: { guest: false, name: "棋手Mia", email: null } });
   assert.ok(made.setCookie.some((cookie) => /session_token=/u.test(cookie) && /HttpOnly/iu.test(cookie)));
   const me = (await mia.call("/api/account")).json.account;
-  assert.deepEqual({ ...me, freshUntil: undefined },
-    { guest: false, name: "棋手Mia", email: null, emailVerified: false, hasPassword: true, freshUntil: undefined, google: [] });
-  assert.ok(me.freshUntil > Date.now(), "just signed in: a new password needs no current one");
+  assert.deepEqual(me,
+    { guest: false, name: "棋手Mia", email: null, emailVerified: false, hasPassword: true, google: [] });
   const [user] = env.DB.rows("user");
   assert.equal(user.username, "棋手mia", "names compare without case");
   assert.match(user.email, /@account\.invalid$/u, "a made-up address that is never shown");

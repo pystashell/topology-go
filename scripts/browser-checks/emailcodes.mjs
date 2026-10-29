@@ -121,7 +121,8 @@ try {
   record.afterCode = {
     button: await text(phone, "#account-button-label"),
     info: await text(phone, "#settings-info"),
-    currentPasswordAsked: await phone.locator("#settings-current-password-field:not([hidden])").count(),
+    passwordFields: await phone.locator('#settings-password-form input[type="password"]').count(),
+    note: await text(phone, "#settings-password-note"),
     email: await text(phone, "#settings-email-fact"),
     password: await text(phone, "#settings-password-fact"),
   };
@@ -196,7 +197,8 @@ const ok = !record.error &&
   record.sent?.info === `验证码已发到 ${address}，10 分钟内有效。` &&
   /^重新发送（\d+）$/u.test(record.sent?.button ?? "") && record.codeShape &&
   record.afterCode?.button === username && /现在就可以直接设一个新密码/u.test(record.afterCode.info) &&
-  record.afterCode.currentPasswordAsked === 0 && /（已验证）/u.test(record.afterCode.email) &&
+  record.afterCode.passwordFields === 2 && /不用输旧密码/u.test(record.afterCode.note) &&
+  /（已验证）/u.test(record.afterCode.email) &&
   record.afterCode.password === "已设置" &&
   /新密码已保存/u.test(record.saved ?? "") &&
   record.oldPassword?.error === "用户名（或邮箱）或密码不对。" && record.newPassword?.button === username &&

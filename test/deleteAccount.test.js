@@ -6,9 +6,8 @@ import { PEPPER, browser, environment, upload } from "./helpers/site.js";
 
 /*
  * Deleting one's own account (account settings): the username typed to
- * confirm, and, unless just signed in, the current password or a new
- * sign-in. The account's sign-ins, sessions and games go; the other player
- * of a game keeps theirs.
+ * confirm, no password asked. The account's sign-ins, sessions and games
+ * go; the other player of a game keeps theirs.
  */
 
 const accounts = () => environment({ PASSWORD_PEPPER: PEPPER });
@@ -79,27 +78,22 @@ test("an account made with Google confirms with the name Google gave it", async 
   assert.equal(env.DB.rows("user").length, 0);
 });
 
-test("later, deleting needs the current password, or a new sign-in without one", async (t) => {
+test("long after signing in, the typed username is enough, with a password or without", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const env = accounts();
   const mia = browser(env);
   await post(mia, "/api/account/register", { username: "Mia", password: "mia-password" });
   const lee = browser(env);
   await post(lee, "/api/account/register", { username: "Lee", password: "lee-password" });
-  t.mock.timers.tick(11 * 60 * 1_000);
+  t.mock.timers.tick(30 * 24 * 60 * 60 * 1_000);
 
-  const missing = await post(mia, "/api/account/delete", { username: "Mia" });
-  assert.deepEqual([missing.status, missing.json.code], [400, "NEED_CURRENT_PASSWORD"]);
-  const wrong = await post(mia, "/api/account/delete", { username: "Mia", currentPassword: "nope-nope" });
-  assert.deepEqual([wrong.status, wrong.json.code], [401, "WRONG_PASSWORD"]);
-  assert.equal((await post(mia, "/api/account/delete", { username: "Mia", currentPassword: "mia-password" })).status, 200);
+  assert.equal((await post(mia, "/api/account/delete", { username: "Mia" })).status, 200);
   assert.equal(userId(env, "Mia"), undefined);
 
-  // Without a password (Google or email codes only), sign in again first.
+  // Without a password (Google or email codes only) too.
   env.DB.database.prepare(`DELETE FROM account WHERE providerId = 'credential' AND userId = ?`).run(userId(env, "Lee"));
-  const again = await post(lee, "/api/account/delete", { username: "Lee", currentPassword: "lee-password" });
-  assert.deepEqual([again.status, again.json.code], [403, "SIGN_IN_AGAIN"]);
-  assert.ok(userId(env, "Lee"));
+  assert.equal((await post(lee, "/api/account/delete", { username: "Lee" })).status, 200);
+  assert.equal(userId(env, "Lee"), undefined);
 
   // Guests and nobody cannot.
   assert.equal((await post(browser(env), "/api/account/delete", { username: "Lee" })).json.code, "NOT_SIGNED_IN");

@@ -51,7 +51,6 @@ export const ENGLISH_STATIC = Object.freeze({
   "发送验证码": "Send code",
   "验证码": "Code",
   "确认邮箱": "Confirm email",
-  "当前密码": "Current password",
   "新密码": "New password",
   "再输一次新密码": "New password again",
   "保存新密码": "Save new password",
